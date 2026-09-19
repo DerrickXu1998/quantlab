@@ -1,0 +1,98 @@
+# quantlab pipeline. Run with:  quantlab run config.example.yaml --out features.parquet
+#
+# Everything here is a plugin name. `quantlab list` shows what is available,
+# including anything you or a third party has added.
+
+universe:
+  # Full NYSE listing (~2,000 common stocks). Swap for `static` while developing.
+  nasdaqtrader:
+    exchanges: ["N"]          # N = NYSE, A = NYSE American, P = NYSE Arca
+    common_stock_only: true   # drops warrants, preferreds, units, ETFs
+    include_nasdaq: false
+
+  # For LSE, download the instrument list from
+  # https://www.londonstockexchange.com/reports?tab=instruments and use:
+  #
+  # universe:
+  #   lse:
+  #     path: ~/data/lse_instruments.xlsx
+  #     include_aim: true
+
+# Tried in order. A symbol that fails on one is retried against the next.
+providers: [stooq, yahoo]
+
+provider_options:
+  yahoo:
+    chunk_size: 200
+
+start: "2015-01-01"
+end: ""                       # empty = today
+frequency: 1d
+price_column: adj_close
+normalise_currency: true      # GBX -> GBP. Leave this on.
+max_workers: 8
+
+features:
+  # --- trend -------------------------------------------------------------
+  - trend_slope: {period: 60}
+  - trend_r2: {period: 60}            # slope is size, R2 is conviction
+  - adx: {period: 14}                 # gate: below 20, ignore trend signals
+  - ma_cross_state: {fast: 50, slow: 200}
+  - supertrend: {period: 10, multiplier: 3.0}
+
+  # --- momentum ----------------------------------------------------------
+  - rsi: {period: 14}
+  - momentum_12_1: {}                 # the academic momentum factor
+  - connors_rsi: {}                   # short-horizon mean reversion
+  - tsi: {}
+
+  # --- volatility (scale-free: safe across markets) ----------------------
+  - yang_zhang_vol: {period: 20}      # best free-data daily estimator
+  - rogers_satchell_vol: {period: 20} # drift-independent cross-check
+  - natr: {period: 14}                # use this, never raw atr, cross-sectionally
+  - bollinger: {period: 20, num_std: 2.0}
+  - squeeze: {}                       # compression precedes expansion
+  - choppiness: {period: 14}
+  - ulcer_index: {period: 14}
+
+  # --- liquidity & microstructure ----------------------------------------
+  - amihud_illiquidity: {period: 21}  # price impact per unit traded
+  - corwin_schultz_spread: {period: 21}
+  - volume_zscore: {period: 60}       # best free "something happened" proxy
+  - dollar_volume: {period: 20}
+
+  # --- statistical regime -------------------------------------------------
+  - hurst: {period: 150}              # which family of signals to trust here
+  - half_life: {period: 60}           # 3-15 bars = tradeable mean reversion
+  - efficiency_ratio: {period: 20}
+  - return_moments: {period: 60}
+  - price_percentile: {period: 252}   # scale-free 52w-high proxy
+
+  # --- calendar -----------------------------------------------------------
+  - turn_of_month: {window: 4}
+
+  # --- cross-sectional (needs the universe) -------------------------------
+  - market_beta: {period: 252}        # also emits idio_vol, market_alpha, r2
+  - residual_momentum: {}             # momentum with the beta stripped out
+  - liquidity_tier: {tiers: 5}        # screen the bottom tier out. always.
+  - relative_strength: {period: 63}
+  - breadth: {ma_period: 200}
+  - market_regime: {}
+  - dispersion: {period: 20}
+  - cs_zscore: {column: momentum_12_1, as: mom_z}
+  - sector_neutral: {column: mom_z, group: sector, as: mom_sector_neutral}
+
+  # --- externally sourced (free official data) ----------------------------
+  # These need credentials or network access; they NaN out with a warning if
+  # unavailable rather than failing the run.
+  - finra_short_volume: {}            # US short volume       (no key)
+  - fca_short_interest: {}            # UK short interest     (no key, needs ISINs)
+  - insider_activity: {window: 90}    # SEC Form 4            (needs SEC_USER_AGENT)
+  - valuation: {}                     # P/E, P/B, EV/EBIT     (needs SEC_USER_AGENT)
+  - quality: {}                       # ROE, accruals, margins
+  - piotroski_f: {}
+  - altman_z: {}                      # a filter, not a signal
+  - macro_us: {}                      # FRED   (needs FRED_API_KEY)
+  - macro_uk: {}                      # BoE    (no key)
+
+output: features.parquet

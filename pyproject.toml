@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quantlab"
+version = "0.1.0"
+description = "Pluggable quantitative equity analytics for the NYSE and LSE universes, built on free data sources."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "pyarrow>=12.0",
+    "requests>=2.31",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+yahoo   = ["yfinance>=1.7.0", "curl_cffi>=0.7"]
+duckdb  = ["duckdb>=0.10"]
+polars  = ["polars>=1.0"]
+excel   = ["openpyxl>=3.1"]
+plots   = ["matplotlib>=3.8"]
+dev     = ["pytest>=8.0", "pytest-cov", "ruff", "mypy"]
+all     = ["quantlab[yahoo,duckdb,polars,excel,plots]"]
+
+[project.scripts]
+quantlab = "quantlab.cli:main"
+
+# ---------------------------------------------------------------------------
+# Plugin discovery. Third-party packages advertise themselves under these
+# groups and quantlab picks them up with zero configuration.
+# ---------------------------------------------------------------------------
+[project.entry-points."quantlab.providers"]
+stooq           = "quantlab.providers.stooq:StooqProvider"
+yahoo           = "quantlab.providers.yahoo:YahooProvider"
+csv             = "quantlab.providers.csvfile:CsvProvider"
+sec_edgar       = "quantlab.providers.sec_edgar:SecEdgarProvider"
+companies_house = "quantlab.providers.companies_house:CompaniesHouseProvider"
+boe             = "quantlab.providers.boe:BoeProvider"
+fred            = "quantlab.providers.fred:FredProvider"
+openfigi        = "quantlab.providers.openfigi:OpenFigiProvider"
+
+[project.entry-points."quantlab.universes"]
+nasdaqtrader = "quantlab.universe.nasdaqtrader:NasdaqTraderUniverse"
+lse          = "quantlab.universe.lse:LseUniverse"
+static       = "quantlab.universe.static:StaticUniverse"
+
+[project.entry-points."quantlab.indicators"]
+builtin = "quantlab.indicators:register_all"
+
+[project.entry-points."quantlab.derived"]
+builtin = "quantlab.derived:register_all"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error::FutureWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

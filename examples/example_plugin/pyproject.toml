@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quantlab-myfactors"
+version = "0.1.0"
+description = "Example third-party quantlab plugin: custom indicators, a derived feature and a data provider."
+requires-python = ">=3.10"
+dependencies = ["quantlab"]
+
+# This block is the entire install story. `pip install .` and quantlab picks
+# everything up -- no config file, no registration call, no import in your code.
+[project.entry-points."quantlab.indicators"]
+myfactors = "quantlab_myfactors:register_all"
+
+[project.entry-points."quantlab.derived"]
+myfactors = "quantlab_myfactors:register_all"
+
+[project.entry-points."quantlab.providers"]
+mybroker = "quantlab_myfactors.provider:MyBrokerProvider"
+
+[tool.setuptools.packages.find]
+where = ["src"]
