@@ -84,6 +84,13 @@ CREATE TABLE IF NOT EXISTS experiment_runs (
     instruments_requested    INTEGER NOT NULL CHECK (instruments_requested >= 1),
     instruments_with_data    INTEGER NOT NULL CHECK (instruments_with_data >= 0),
     instruments_full_warmup  INTEGER NOT NULL CHECK (instruments_full_warmup >= 0),
+    -- Provenance (feature 006): which store produced this run, the surrogate
+    -- identities it ran against, and the ingest runs behind the bars it read.
+    -- The latter two are warehouse-only and null on the demo.
+    dataset                  TEXT NOT NULL DEFAULT 'sqlite'
+                                  CHECK (dataset IN ('sqlite', 'warehouse')),
+    instrument_ids           TEXT,
+    ingest_run_ids           TEXT,
     CHECK (start_date <= end_date),
     CHECK ((status = 'failed') = (error IS NOT NULL))
 );

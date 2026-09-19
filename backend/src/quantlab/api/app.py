@@ -18,7 +18,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from quantlab.api import routes
 from quantlab.logging import get_logger
-from quantlab.storage import backends
+from quantlab.storage import backends, experiments
 
 DEFAULT_DB_PATH = "/data/quantlab.db"
 
@@ -39,6 +39,8 @@ def create_app(db_path: str | Path | None = None, backend=None) -> FastAPI:
     app = FastAPI(title="QuantLab Signal Viewer API", version="0.1.0")
     app.state.db_path = str(db_path) if db_path is not None else resolve_db_path()
     app.state.backend = backend or backends.select_backend(app.state.db_path)
+    # Mirrors select_backend: the warehouse when configured, else the demo.
+    app.state.experiments = experiments.select_experiment_store(app.state.db_path)
     app.include_router(routes.router, prefix="/api/v1")
 
     @app.exception_handler(StarletteHTTPException)

@@ -73,49 +73,49 @@ the highest regression risk in the feature, because it rewires a working SQLite 
 
 ### Tests (write first, watch fail)
 
-- [ ] T007 [P] Write `backend/tests/test_experiment_store.py`: one suite exercising the
+- [X] T007 [P] Write `backend/tests/test_experiment_store.py`: one suite exercising the
       `ExperimentStore` contract — `save_run`, `get_run`, `list_runs(saved_only)`, `set_run_name`,
       `delete_run` — parameterised so it runs against **both** adapters. Deleting a run must remove
       **"a run and its signals together"**. A run must remain readable regardless of which dataset is
       active.
-- [ ] T008 [P] Write `backend/tests/test_backend_bar_reads.py`: the three new `StorageBackend`
+- [X] T008 [P] Write `backend/tests/test_backend_bar_reads.py`: the three new `StorageBackend`
       methods against the SQLite adapter — `load_bars_for(symbols, start, end)` returns bars for
       several instruments across one window, `earliest_bar_dates(symbols)` returns the first
       available bar per instrument, and `corporate_actions(symbols, start, end)` **returns empty on
       the demo, which has none**.
-- [ ] T009 [P] Write `backend/tests/test_runner_seams.py`: `run_experiment` takes the two seams
+- [X] T009 [P] Write `backend/tests/test_runner_seams.py`: `run_experiment` takes the two seams
       rather than a database connection, and every existing guarantee from feature 005 still holds —
       warm-up window, in-window-only reporting, short-window rejection, determinism, coverage counts,
       and zero signals completing successfully.
 
 ### Implementation
 
-- [ ] T010 [P] Create `src/quantlab/store/migrations/003_experiments.sql` adding `experiment_runs`
+- [X] T010 [P] Create `src/quantlab/store/migrations/003_experiments.sql` adding `experiment_runs`
       and `experiment_signals` to the Postgres catalog per `data-model.md`, keyed by `instrument_id`
       referencing `instruments`, with `ON DELETE CASCADE` from run to signals and the point-in-time
       constraint **"`data_window_end` ... Must be `<= date`"** — the same guard the catalog's own
       `signals` table carries (Constitution VII).
-- [ ] T011 Create `backend/src/quantlab/storage/experiments.py` defining the `ExperimentStore`
+- [X] T011 Create `backend/src/quantlab/storage/experiments.py` defining the `ExperimentStore`
       protocol and `SqliteExperimentStore`, moving the run-persistence functions added in feature 005
       out of `backend/src/quantlab/storage/repository.py` and behind the seam without changing their
       behaviour (depends on: T007 failing first).
-- [ ] T012 Add `PostgresExperimentStore` to `backend/src/quantlab/storage/experiments.py`, satisfying
+- [X] T012 Add `PostgresExperimentStore` to `backend/src/quantlab/storage/experiments.py`, satisfying
       the same contract against the new tables. Keep the driver import inside the adapter, never at
       module scope — the demo path must not acquire a database dependency (depends on: T010, T011).
-- [ ] T013 Extend the `StorageBackend` protocol in `backend/src/quantlab/storage/backends.py` with
+- [X] T013 Extend the `StorageBackend` protocol in `backend/src/quantlab/storage/backends.py` with
       `load_bars_for`, `earliest_bar_dates` and `corporate_actions`, and implement all three on
       `SqliteBackend` using the existing repository functions (depends on: T008 failing first).
-- [ ] T014 Change `run_experiment` in `backend/src/quantlab/research/runner.py` to take a
+- [X] T014 Change `run_experiment` in `backend/src/quantlab/research/runner.py` to take a
       `StorageBackend` and an `ExperimentStore` instead of a `sqlite3` connection, preserving the
       warm-up window, in-window filtering and coverage logic exactly (depends on: T009 failing first,
       T011, T013).
-- [ ] T015 Port the workbench handlers in `backend/src/quantlab/api/routes.py` onto the seams,
+- [X] T015 Port the workbench handlers in `backend/src/quantlab/api/routes.py` onto the seams,
       removing every direct `db.connect(...)` and `repository.*` call left by T001's union merge, so
       no handler knows which store is behind it (depends on: T014).
-- [ ] T016 Select and bind the `ExperimentStore` alongside the `StorageBackend` at startup in
+- [X] T016 Select and bind the `ExperimentStore` alongside the `StorageBackend` at startup in
       `backend/src/quantlab/api/app.py`, mirroring `select_backend()`'s "warehouse when configured,
       else the demo" rule (depends on: T012, T015).
-- [ ] T017 Run the full backend and frontend suites and confirm the demo path still behaves exactly
+- [X] T017 Run the full backend and frontend suites and confirm the demo path still behaves exactly
       as before this feature — this is the regression checkpoint for the riskiest phase (depends on:
       T010–T016).
 

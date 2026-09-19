@@ -31,6 +31,12 @@ class StorageBackend(Protocol):
     def get_prices(self, symbol: str, start: str | None, end: str | None) -> dict: ...
     def list_signals(self, **kwargs) -> dict: ...
 
+    # What the experiment runner needs beyond serving the API (feature 006).
+    # Callers pass the *warm-up* start, not the researcher's start.
+    def load_bars_for(self, symbols: list[str], start: str, end: str) -> dict: ...
+    def earliest_bar_dates(self, symbols: list[str]) -> dict: ...
+    def corporate_actions(self, symbols: list[str], start: str, end: str) -> list[dict]: ...
+
 
 class SqliteBackend:
     """Synthetic demo dataset in a local SQLite file."""
@@ -78,6 +84,19 @@ class SqliteBackend:
         with db.connect(self.db_path) as conn:
             return repository.list_signals(conn, **kwargs)
 
+    def load_bars_for(self, symbols: list[str], start: str, end: str) -> dict:
+        with db.connect(self.db_path) as conn:
+            return repository.load_bars_for(conn, symbols, start, end)
+
+    def earliest_bar_dates(self, symbols: list[str]) -> dict:
+        with db.connect(self.db_path) as conn:
+            return repository.earliest_bar_dates(conn, symbols)
+
+    def corporate_actions(self, symbols: list[str], start: str, end: str) -> list[dict]:
+        # The synthetic dataset has none. Answering rather than raising is what
+        # keeps the runner free of branching on which store it is talking to.
+        return []
+
 
 class WarehouseBackend:
     """Real ingested history: ClickHouse bars over a Postgres catalog."""
@@ -101,6 +120,15 @@ class WarehouseBackend:
 
     def list_signals(self, **kwargs) -> dict:
         return warehouse.list_signals(self.wh, **kwargs)
+
+    def load_bars_for(self, symbols: list[str], start: str, end: str) -> dict:
+        return warehouse.load_bars_for(self.wh, symbols, start, end)
+
+    def earliest_bar_dates(self, symbols: list[str]) -> dict:
+        return warehouse.earliest_bar_dates(self.wh, symbols)
+
+    def corporate_actions(self, symbols: list[str], start: str, end: str) -> list[dict]:
+        return warehouse.corporate_actions(self.wh, symbols, start, end)
 
 
 def select_backend(db_path: str | Path | None = None) -> StorageBackend:

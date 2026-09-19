@@ -18,7 +18,6 @@ from quantlab.research import errors as research_errors
 from quantlab.research import runner
 from quantlab.signals import builtins as _builtins  # noqa: F401  (registers builtin rules)
 from quantlab.signals import registry as signal_registry
-from quantlab.storage import db, repository
 
 router = APIRouter()
 
@@ -30,6 +29,12 @@ SYMBOL_PATTERN = r"^[A-Z0-9][A-Z0-9._\-]{0,19}$"
 
 def backend(request: Request):
     return request.app.state.backend
+
+
+def experiments(request: Request):
+    """Where runs are kept. A separate seam from the dataset: on the
+    warehouse these are different database systems."""
+    return request.app.state.experiments
 
 
 def require_seeded(request: Request) -> None:
@@ -190,34 +195,34 @@ def _run_response(run: dict, dataset: str = "sqlite") -> dict:
     dependencies=[Depends(require_seeded)],
 )
 def create_run(request: Request, body: schemas.RunRequest) -> dict:
-    with db.connect(request.app.state.db_path) as conn:
-        try:
-            result = runner.run_experiment(
-                conn,
-                model_name=body.model_name,
-                model_version=body.model_version,
-                overrides=body.parameters,
-                symbols=body.symbols,
-                start_date=body.start_date,
-                end_date=body.end_date,
-            )
-        except research_errors.UnknownModelError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except research_errors.UnknownSymbolError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except research_errors.ParameterValidationError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except (
-            research_errors.InvalidWindowError,
-            research_errors.WindowTooShortError,
-            research_errors.SelectionTooLargeError,
-        ) as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    active = backend(request)
+    store = experiments(request)
+    try:
+        result = runner.run_experiment(
+            active,
+            model_name=body.model_name,
+            model_version=body.model_version,
+            overrides=body.parameters,
+            symbols=body.symbols,
+            start_date=body.start_date,
+            end_date=body.end_date,
+        )
+    except research_errors.UnknownModelError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except research_errors.UnknownSymbolError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except research_errors.ParameterValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (
+        research_errors.InvalidWindowError,
+        research_errors.WindowTooShortError,
+        research_errors.SelectionTooLargeError,
+    ) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-        repository.save_run(conn, result)
-        conn.commit()
-        stored = repository.get_run(conn, result.id)
-    return _run_response(stored, backend(request).name)
+    store.save_run(result)
+    stored = store.get_run(result.id)
+    return _run_response(stored, active.name)
 
 
 @router.get(
@@ -228,8 +233,7 @@ def create_run(request: Request, body: schemas.RunRequest) -> dict:
     dependencies=[Depends(require_seeded)],
 )
 def list_runs(request: Request, saved_only: bool = False) -> dict:
-    with db.connect(request.app.state.db_path) as conn:
-        result = repository.list_runs(conn, saved_only=saved_only)
+    result = experiments(request).list_runs(saved_only=saved_only)
     active = backend(request).name
     return {"total": result["total"], "items": [_run_response(r, active) for r in result["items"]]}
 
@@ -242,11 +246,11 @@ def list_runs(request: Request, saved_only: bool = False) -> dict:
     dependencies=[Depends(require_seeded)],
 )
 def get_run(request: Request, run_id: str) -> dict:
-    with db.connect(request.app.state.db_path) as conn:
-        run = repository.get_run(conn, run_id)
-        if run is None:
-            raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
-        signals = repository.get_run_signals(conn, run_id)
+    store = experiments(request)
+    run = store.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
+    signals = store.get_run_signals(run_id)
     return {**_run_response(run, backend(request).name), "signals": signals}
 
 
@@ -258,11 +262,10 @@ def get_run(request: Request, run_id: str) -> dict:
     dependencies=[Depends(require_seeded)],
 )
 def save_run(request: Request, run_id: str, body: schemas.RunNameRequest) -> dict:
-    with db.connect(request.app.state.db_path) as conn:
-        if not repository.set_run_name(conn, run_id, body.name):
-            raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
-        conn.commit()
-        run = repository.get_run(conn, run_id)
+    store = experiments(request)
+    if not store.set_run_name(run_id, body.name):
+        raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
+    run = store.get_run(run_id)
     return _run_response(run, backend(request).name)
 
 
@@ -274,7 +277,5 @@ def save_run(request: Request, run_id: str, body: schemas.RunNameRequest) -> dic
     dependencies=[Depends(require_seeded)],
 )
 def delete_run(request: Request, run_id: str) -> None:
-    with db.connect(request.app.state.db_path) as conn:
-        if not repository.delete_run(conn, run_id):
-            raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
-        conn.commit()
+    if not experiments(request).delete_run(run_id):
+        raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")

@@ -1,4 +1,9 @@
-"""Experiment runner behaviour (feature 005).
+"""Experiment runner behaviour (features 005 and 006).
+
+Feature 006 changed what the runner is handed: a StorageBackend and an
+ExperimentStore rather than a sqlite3 connection. Every guarantee below is
+unchanged -- that is the point of the seam. If one of these breaks, the
+refactor changed behaviour, not just plumbing.
 
 The warm-up window is the highest-risk behaviour in this feature: get it wrong
 and results look entirely plausible while being quietly misleading, because the
@@ -11,24 +16,26 @@ import pytest
 
 from quantlab.research import errors
 from quantlab.research.runner import run_experiment
-from quantlab.storage import db, repository
+from quantlab.storage import backends, db, repository
 from quantlab.synthetic.generator import generate_universe
 
 
 @pytest.fixture()
 def conn(tmp_path):
-    connection = db.connect(tmp_path / "test.db")
+    """Named `conn` for continuity with the feature-005 suite; it is now the
+    storage seam the runner is handed."""
+    path = tmp_path / "test.db"
+    connection = db.connect(path)
     db.bootstrap(connection)
     repository.upsert_instruments(connection)
-    bars = generate_universe()
-    repository.insert_bars(connection, bars)
+    repository.insert_bars(connection, generate_universe())
     connection.commit()
-    yield connection
     connection.close()
+    return backends.SqliteBackend(str(path))
 
 
-def _symbols(conn):
-    return sorted(repository.list_instruments(conn)["items"][i]["symbol"] for i in range(2))
+def _symbols(backend):
+    return sorted(item["symbol"] for item in backend.list_instruments()["items"][:2])
 
 
 # --- (a) warm-up window -----------------------------------------------------

@@ -6,7 +6,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-
 Dataset = Literal["sqlite", "warehouse"]
 """Which store answered. Two runs from different datasets are never directly
 comparable, however identical their configuration."""

@@ -17,7 +17,6 @@ built from a later bar) is enforced by the CHECK constraint on
 
 from __future__ import annotations
 
-import sqlite3
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -28,7 +27,6 @@ from quantlab.logging import get_logger
 from quantlab.research import errors
 from quantlab.signals.engine import ComputedSignal, compute_signals
 from quantlab.signals.registry import SignalRule, get_rule
-from quantlab.storage import repository
 
 logger = get_logger(__name__)
 
@@ -64,6 +62,12 @@ class RunResult:
     signals: list[ComputedSignal] = field(default_factory=list)
     error: str | None = None
     name: str | None = None
+    # Provenance (feature 006). `dataset` says which store produced the run;
+    # the other two are warehouse-only and stay None on the demo.
+    dataset: str = "sqlite"
+    instrument_ids: list[int] | None = None
+    ingest_run_ids: list[int] | None = None
+    corporate_actions: list[dict] = field(default_factory=list)
 
 
 def _parse(value: str, field_name: str) -> _date:
@@ -92,7 +96,7 @@ def _validate_overrides(rule: SignalRule, overrides: dict[str, Any]) -> dict[str
 
 
 def run_experiment(
-    conn: sqlite3.Connection,
+    backend,
     *,
     model_name: str,
     overrides: dict[str, Any] | None = None,
@@ -101,7 +105,11 @@ def run_experiment(
     end_date: str,
     model_version: str | None = None,
 ) -> RunResult:
-    """Validate, execute, and summarise one run. Does not persist."""
+    """Validate, execute, and summarise one run. Does not persist.
+
+    Takes a StorageBackend rather than a connection, so the runner does not
+    know whether it is reading the synthetic demo or real ingested history.
+    """
     overrides = dict(overrides or {})
     rule = _resolve_model(model_name, model_version)
     effective = _validate_overrides(rule, overrides)
@@ -120,7 +128,7 @@ def run_experiment(
     if selection_size > MAX_SELECTION_INSTRUMENT_DAYS:
         raise errors.SelectionTooLargeError(selection_size, MAX_SELECTION_INSTRUMENT_DAYS)
 
-    known = {item["symbol"] for item in repository.list_instruments(conn)["items"]}
+    known = {item["symbol"] for item in backend.list_instruments()["items"]}
     unknown = [symbol for symbol in requested_symbols if symbol not in known]
     if unknown:
         raise errors.UnknownSymbolError(unknown)
@@ -131,13 +139,16 @@ def run_experiment(
         raise errors.WindowTooShortError(rule.lookback_days, window_days)
 
     warmup_start = (start - timedelta(days=rule.lookback_days * _CALENDAR_DAYS_PER_BAR)).isoformat()
-    bars_by_symbol = repository.load_bars_for(conn, requested_symbols, warmup_start, end_date)
+    bars_by_symbol = backend.load_bars_for(requested_symbols, warmup_start, end_date)
 
     computed = compute_signals(bars_by_symbol, rules=[rule], overrides=overrides)
     # Warm-up bars are inputs, not results: report only the requested window.
     in_window = [s for s in computed if start_date <= s.date <= end_date]
 
-    earliest = repository.earliest_bar_dates(conn, requested_symbols)
+    earliest = backend.earliest_bar_dates(requested_symbols)
+    # Reported, never applied: stored bars are unadjusted, so a split inside
+    # the window makes the series jump in a way that is an artefact.
+    actions = backend.corporate_actions(requested_symbols, start_date, end_date)
     instruments_with_data = sum(1 for symbol in requested_symbols if bars_by_symbol.get(symbol))
     instruments_full_warmup = sum(
         1
@@ -162,6 +173,8 @@ def run_experiment(
             instruments_full_warmup=instruments_full_warmup,
         ),
         signals=in_window,
+        dataset=getattr(backend, "name", "sqlite"),
+        corporate_actions=actions,
     )
 
     logger.info(
@@ -175,6 +188,8 @@ def run_experiment(
             "signal_count": result.signal_count,
             "instruments_with_data": instruments_with_data,
             "instruments_full_warmup": instruments_full_warmup,
+            "dataset": result.dataset,
+            "corporate_actions": len(actions),
         },
     )
     return result
