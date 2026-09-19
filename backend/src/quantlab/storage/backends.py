@@ -37,6 +37,7 @@ class StorageBackend(Protocol):
     def earliest_bar_dates(self, symbols: list[str]) -> dict: ...
     def corporate_actions(self, symbols: list[str], start: str, end: str) -> list[dict]: ...
     def instrument_ids(self, symbols: list[str]) -> dict: ...
+    def ingest_run_ids(self, symbols: list[str], start: str, end: str) -> list: ...
 
 
 class SqliteBackend:
@@ -102,6 +103,11 @@ class SqliteBackend:
         # The demo has no surrogate identities; symbols are its identity.
         return {}
 
+    def ingest_run_ids(self, symbols: list[str], start: str, end: str) -> list[int]:
+        # The demo's data is seeded deterministically, not ingested, so there
+        # is no ingest lineage to record.
+        return []
+
 
 class WarehouseBackend:
     """Real ingested history: ClickHouse bars over a Postgres catalog."""
@@ -137,6 +143,9 @@ class WarehouseBackend:
 
     def instrument_ids(self, symbols: list[str]) -> dict[str, int]:
         return warehouse._instrument_ids(self.wh, symbols)
+
+    def ingest_run_ids(self, symbols: list[str], start: str, end: str) -> list[int]:
+        return warehouse.ingest_run_ids(self.wh, symbols, start, end)
 
 
 def select_backend(db_path: str | Path | None = None) -> StorageBackend:

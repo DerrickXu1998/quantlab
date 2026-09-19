@@ -151,6 +151,10 @@ def run_experiment(
     ids = backend.instrument_ids(requested_symbols)
     instrument_ids = [ids[s] for s in requested_symbols if s in ids] or None
 
+    # Which ingest produced the bars we just read. Two runs with identical
+    # configuration either side of a re-ingest differ here and nowhere else.
+    ingest_runs = backend.ingest_run_ids(requested_symbols, warmup_start, end_date) or None
+
     earliest = backend.earliest_bar_dates(requested_symbols)
     # Reported, never applied: stored bars are unadjusted, so a split inside
     # the window makes the series jump in a way that is an artefact.
@@ -181,6 +185,7 @@ def run_experiment(
         signals=in_window,
         dataset=getattr(backend, "name", "sqlite"),
         instrument_ids=instrument_ids,
+        ingest_run_ids=ingest_runs,
         corporate_actions=actions,
     )
 
@@ -196,6 +201,7 @@ def run_experiment(
             "instruments_with_data": instruments_with_data,
             "instruments_full_warmup": instruments_full_warmup,
             "dataset": result.dataset,
+            "ingest_run_ids": ingest_runs,
             "corporate_actions": len(actions),
         },
     )

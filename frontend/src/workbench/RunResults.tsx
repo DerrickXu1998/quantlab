@@ -43,7 +43,13 @@ function Coverage({ run }: { run: Run }) {
 function Provenance({ run }: { run: RunDetail }) {
   return (
     <p className="mt-1 text-xs text-muted-foreground">
-      {run.model_name} v{run.model_version} · {run.start_date} → {run.end_date} ·{' '}
+      <span
+        data-testid="run-dataset"
+        className="mr-1 font-semibold uppercase tracking-wide text-foreground"
+      >
+        {run.dataset === 'warehouse' ? 'live history' : 'demo data'}
+      </span>
+      · {run.model_name} v{run.model_version} · {run.start_date} → {run.end_date} ·{' '}
       <span className="font-mono">
         {Object.entries(run.parameters)
           .map(([key, value]) => `${key}=${String(value)}`)
@@ -84,7 +90,34 @@ export function RunResults() {
       <header className="mb-3 rounded-lg border border-border bg-card p-3">
         <Coverage run={run} />
         <Provenance run={run} />
+        {!run.re_runnable && (
+          <p data-testid="run-not-rerunnable" className="mt-2 text-xs text-muted-foreground">
+            Recorded against a different dataset — readable, but not reproducible as recorded.
+          </p>
+        )}
       </header>
+
+      {/* A correctness warning, not a footnote: stored bars are unadjusted, so
+          any signal near an ex-date may be an artefact of the split rather
+          than a market move. */}
+      {(run.corporate_actions ?? []).length > 0 && (
+        <div
+          role="alert"
+          data-testid="run-corporate-actions"
+          className="mb-3 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive"
+        >
+          <strong>Unadjusted corporate actions in this window.</strong> Prices are stored
+          unadjusted, so signals near these dates may be artefacts rather than market moves:
+          <ul className="mt-1 list-inside list-disc">
+            {(run.corporate_actions ?? []).map((action) => (
+              <li key={`${action.symbol}-${action.ex_date}`}>
+                {action.symbol} — {action.action_type} on {action.ex_date}
+                {action.split_ratio ? ` (${action.split_ratio}:1)` : ''}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {run.signal_count === 0 ? (
         // A model finding nothing is a result, not a failure. This state is

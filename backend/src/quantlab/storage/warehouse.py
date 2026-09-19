@@ -447,6 +447,44 @@ def earliest_bar_dates(
     return {by_id[int(iid)]: ts.date().isoformat() for iid, ts in rows}
 
 
+def ingest_run_ids(
+    wh: Warehouse, symbols: list[str], start: str, end: str, frequency: str = "1d"
+) -> list[int]:
+    """The ingest runs behind the bars in this window.
+
+    Every bar carries run_id, which doubles as the ReplacingMergeTree version:
+    a re-ingest writes rows with a higher run_id that supersede the earlier
+    copies. Recording these is what makes a re-ingest distinguishable from the
+    original run, in the case where every input the researcher chose is
+    identical but the underlying data changed.
+    """
+    ids = _instrument_ids(wh, symbols)
+    if not ids:
+        return []
+
+    client = wh.bars()
+    try:
+        rows = client.query(
+            f"""
+            SELECT DISTINCT run_id
+              FROM {BARS_VIEW}
+             WHERE instrument_id IN %(ids)s
+               AND frequency = %(frequency)s
+               AND ts >= %(start)s AND ts <= %(end)s
+             ORDER BY run_id
+            """,
+            parameters={
+                "ids": tuple(ids.values()),
+                "frequency": frequency,
+                "start": f"{start} 00:00:00",
+                "end": f"{end} 23:59:59",
+            },
+        ).result_rows
+    finally:
+        client.close()
+    return [int(run_id) for (run_id,) in rows]
+
+
 def corporate_actions(wh: Warehouse, symbols: list[str], start: str, end: str) -> list[dict]:
     """Splits and dividends inside the window, for the selected instruments.
 

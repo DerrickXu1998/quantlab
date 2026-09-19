@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { SignalsPage } from './pages/SignalsPage';
 import { SplashScreen } from './splash/SplashScreen';
 import { ThemeToggle } from './theme/ThemeToggle';
+import { DatasetBadge } from './workbench/DatasetBadge';
 import { Button } from './components/ui/button';
 import type { WorkspaceHandle } from './workspace/Workspace';
 
@@ -19,7 +20,10 @@ export default function App() {
 
       <header className="shrink-0 border-b border-border bg-card">
         <div className="flex items-center justify-between gap-4 px-6 py-3">
-          <span className="text-sm font-semibold tracking-tight">QuantLab Signal Viewer</span>
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-semibold tracking-tight">QuantLab Signal Viewer</span>
+            <DatasetBadge />
+          </div>
           <div className="flex items-center gap-2">
             <Button
               type="button"

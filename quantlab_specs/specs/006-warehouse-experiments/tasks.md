@@ -182,12 +182,12 @@ confirm the application starts and serves without any database being reachable �
 
 ### Tests for User Story 2 ⚠️
 
-- [ ] T027 [P] [US2] Write `backend/tests/test_demo_fallback.py`: the application starts and serves
+- [X] T027 [P] [US2] Write `backend/tests/test_demo_fallback.py`: the application starts and serves
       the synthetic dataset **with `psycopg` and `clickhouse_connect` unimportable**, proving no
       driver is imported at module scope. This is the cheapest guard on the zero-setup promise.
 - [ ] T028 [P] [US2] Extend the contract tests so the health response reports the active dataset,
       with `dataset` in the required set and valued `sqlite` when the warehouse is not configured.
-- [ ] T029 [P] [US2] Write `frontend/tests/DatasetBadge.test.tsx`: the active dataset is rendered
+- [X] T029 [P] [US2] Write `frontend/tests/DatasetBadge.test.tsx`: the active dataset is rendered
       from the health response and never inferred from the shape of the data.
 
 ### Implementation for User Story 2
@@ -195,10 +195,10 @@ confirm the application starts and serves without any database being reachable �
 - [X] T030 [US2] Add the active dataset to the health response in
       `backend/src/quantlab/api/routes.py` and `schemas.py`, sourced from the bound backend's `name`
       (depends on: T028 failing first).
-- [ ] T031 [US2] Report a configured-but-unreachable warehouse distinctly at startup and in health in
+- [X] T031 [US2] Report a configured-but-unreachable warehouse distinctly at startup and in health in
       `backend/src/quantlab/api/app.py` — **"cannot reach the data" must not look like "no data"**
       (depends on: T030).
-- [ ] T032 [US2] Show the active dataset in the workbench in `frontend/src/App.tsx` and
+- [X] T032 [US2] Show the active dataset in the workbench in `frontend/src/App.tsx` and
       `frontend/src/workbench/`, per `contracts/ui-contracts.md` §1 — visible without opening a menu
       (depends on: T029 failing first, T030).
 - [ ] T033 [US2] Run the full suite with the warehouse unconfigured, then walk `quickstart.md` §1
@@ -218,27 +218,27 @@ results intact, clearly marked not re-runnable — per `quickstart.md` §5.
 
 ### Tests for User Story 3 ⚠️
 
-- [ ] T034 [P] [US3] Write `backend/tests/test_dataset_provenance.py`: every run records `dataset`;
+- [X] T034 [P] [US3] Write `backend/tests/test_dataset_provenance.py`: every run records `dataset`;
       warehouse runs that read bars record `ingest_run_ids`; and **two runs with identical
       configuration either side of a re-ingest record different `ingest_run_ids`** — the case where
       every input the researcher chose is the same but the data changed.
 - [ ] T035 [P] [US3] Extend the contract tests: `re_runnable` is false when a run's recorded dataset
       is not the active one, and the run remains fully readable.
-- [ ] T036 [P] [US3] Write `frontend/tests/RunProvenance.test.tsx`: dataset appears with the run's
+- [X] T036 [P] [US3] Write `frontend/tests/RunProvenance.test.tsx`: dataset appears with the run's
       results; a non-empty `corporate_actions` list is surfaced as a correctness warning, not hidden;
       a run with `re_runnable: false` renders read-only and marked.
 
 ### Implementation for User Story 3
 
-- [ ] T037 [US3] Record `dataset` on every run and `ingest_run_ids` on warehouse runs in
+- [X] T037 [US3] Record `dataset` on every run and `ingest_run_ids` on warehouse runs in
       `backend/src/quantlab/research/runner.py`, taking the ingest provenance from the `run_id` column
       carried on every bar read — **"a re-ingest writes rows with a higher `run_id` that supersede
       the earlier copies"**, so this is what distinguishes them (depends on: T034 failing first,
       T024).
-- [ ] T038 [US3] Compute `re_runnable` on run responses in `backend/src/quantlab/api/routes.py` by
+- [X] T038 [US3] Compute `re_runnable` on run responses in `backend/src/quantlab/api/routes.py` by
       comparing the run's recorded dataset against the active one (depends on: T035 failing first,
       T030).
-- [ ] T039 [US3] Show provenance and the corporate-action warning with run results in
+- [X] T039 [US3] Show provenance and the corporate-action warning with run results in
       `frontend/src/workbench/RunResults.tsx`, per `contracts/ui-contracts.md` §2 (depends on: T036
       failing first).
 - [ ] T040 [US3] Surface a dataset mismatch in `frontend/src/workbench/RunCompare.tsx` **as
@@ -253,14 +253,14 @@ results intact, clearly marked not re-runnable — per `quickstart.md` §5.
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-- [ ] T042 Extend `backend/tests/unit/test_run_isolation.py` to guard the **catalog's** materialised
+- [X] T042 Extend `backend/tests/unit/test_run_isolation.py` to guard the **catalog's** materialised
       `signals` table as well as the demo's — the same trap on a different store: experiment output
       would insert cleanly and then surface in the Signal Viewer.
-- [ ] T043 Confirm the look-ahead truncation sweep in `backend/tests/lookahead/` still passes over
+- [X] T043 Confirm the look-ahead truncation sweep in `backend/tests/lookahead/` still passes over
       the warehouse path, including parameter-overridden runs (Constitution VII).
 - [ ] T044 [P] Update `docs/STORAGE.md` and `docs/ARCHITECTURE.md` to describe experiment storage
       alongside the bars/catalog split, and `docs/SIGNAL_VIEWER_DEMO.md` to explain the two datasets.
-- [ ] T045 [P] Add structured logging for the dataset and ingest provenance of each run in
+- [X] T045 [P] Add structured logging for the dataset and ingest provenance of each run in
       `backend/src/quantlab/research/runner.py` (Constitution VI).
 - [ ] T046 Run the full gate: `pytest`, `npm run lint`, `npx prettier --check .`, `npm run build`,
       `npm test`, and `make check-contract` (depends on: all story phases).
@@ -355,3 +355,41 @@ Developer B (US2): health dataset reporting + driver isolation + dataset badge
 - Do not implement as-of vendor-symbol resolution — `research.md` records why FR-007 is satisfied by
   recording `instrument_id`.
 - No blending of datasets anywhere: one run draws entirely from one dataset.
+
+---
+
+## Implementation Status Note (added by /speckit-implement)
+
+**Green: 137 backend tests (10 Postgres params skipping without a catalog), 95 frontend, ruff
+clean, lint/format/tsc/build clean, `make check-contract` passing, and no handler reaching past
+the storage seams.** Verified live against a locally-run backend on the demo path.
+
+### Done
+
+The merge is landed. Both seams exist and the workbench runs through them. The warehouse adapters,
+instrument identity, ingest provenance and corporate-action reporting are implemented and unit
+tested against fakes. The demo path is guarded by a test that makes the warehouse drivers
+unimportable. Dataset and run provenance are surfaced in the UI.
+
+### Remaining, and why
+
+- **T020, T026, T033, T041, T048** — need a **live warehouse**. Everything about the warehouse
+  path is tested against fakes; nothing has executed against real ClickHouse and Postgres. The
+  round-trip checks in `quickstart.md` §3–§5 (spot-checking a signal against real price history,
+  the re-ingest provenance diff, a real split appearing) are the ones that would catch a wrong
+  query or a mismapped column, and they have not run.
+- **T028, T035** — contract tests for warehouse-path responses; same dependency.
+- **T040** — `RunCompare` dataset-mismatch prominence. The data is on the response and shown in
+  results; the comparison view has not been updated.
+- **T044** — docs.
+- **T046/T047** — the gate has been run piecewise and passes; `make up` currently cannot start
+  because of the port clash below.
+
+### Two things worth knowing
+
+1. **The merge brought the warehouse compose services into the root `docker-compose.yml`, and
+   ports 8123/5432 clash with the `pg-historical-store` worktree's stack if both are up.** Bring
+   one down before the other, or the ClickHouse container fails to bind.
+2. **`corporate_actions` is persisted, not merely reported.** The plan said "reported, not
+   stored"; reporting alone meant reopening a saved experiment silently dropped the split warning,
+   which defeats the requirement. Both stores gained a column.

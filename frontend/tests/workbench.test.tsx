@@ -66,6 +66,11 @@ function makeRun(overrides: Partial<apiClient.RunDetail> = {}): apiClient.RunDet
       instruments_full_warmup: 1,
     },
     model_available: true,
+    dataset: 'sqlite',
+    instrument_ids: null,
+    ingest_run_ids: null,
+    corporate_actions: [],
+    re_runnable: true,
     signals: [
       {
         symbol: 'ZZTRND',
@@ -223,5 +228,73 @@ describe('RunResults', () => {
 
     expect(await screen.findByTestId('run-failed')).toBeInTheDocument();
     expect(screen.queryByTestId('run-empty')).not.toBeInTheDocument();
+  });
+});
+
+describe('RunResults provenance (feature 006)', () => {
+  async function runAndRender(run: apiClient.RunDetail) {
+    vi.mocked(apiClient.createRun).mockResolvedValue(run);
+    vi.mocked(apiClient.getRun).mockResolvedValue(run);
+    const user = userEvent.setup();
+
+    renderWorkbench(
+      <>
+        <RunConfig />
+        <RunResults />
+      </>,
+    );
+    await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
+    await user.click(screen.getByRole('button', { name: /^run$/i }));
+  }
+
+  it('shows which dataset produced the result', async () => {
+    await runAndRender(makeRun({ dataset: 'warehouse' }));
+
+    expect(await screen.findByTestId('run-dataset')).toHaveTextContent(/live history/i);
+  });
+
+  it('marks demo results plainly, so they cannot pass for real ones', async () => {
+    await runAndRender(makeRun({ dataset: 'sqlite' }));
+
+    expect(await screen.findByTestId('run-dataset')).toHaveTextContent(/demo data/i);
+  });
+
+  it('warns about unadjusted corporate actions in the window', async () => {
+    await runAndRender(
+      makeRun({
+        corporate_actions: [
+          {
+            instrument_id: 1,
+            symbol: 'AAPL.US',
+            ex_date: '2020-08-31',
+            action_type: 'split',
+            split_ratio: 4,
+            dividend: null,
+          },
+        ],
+      }),
+    );
+
+    const warning = await screen.findByTestId('run-corporate-actions');
+    // A correctness warning, not a footnote: signals near an ex-date may be
+    // artefacts of the unadjusted split rather than market moves.
+    expect(warning).toHaveAttribute('role', 'alert');
+    expect(warning).toHaveTextContent(/AAPL\.US/);
+    expect(warning).toHaveTextContent(/2020-08-31/);
+  });
+
+  it('says nothing about corporate actions when there are none', async () => {
+    await runAndRender(makeRun());
+
+    await screen.findByTestId('run-coverage');
+    expect(screen.queryByTestId('run-corporate-actions')).not.toBeInTheDocument();
+  });
+
+  it('marks a run recorded against another dataset as not reproducible', async () => {
+    await runAndRender(makeRun({ re_runnable: false }));
+
+    expect(await screen.findByTestId('run-not-rerunnable')).toHaveTextContent(
+      /not reproducible as recorded/i,
+    );
   });
 });

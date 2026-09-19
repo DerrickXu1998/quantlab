@@ -169,3 +169,37 @@ def test_corporate_actions_shape_is_reported_not_applied():
             "dividend": None,
         }
     ]
+
+
+def test_ingest_provenance_distinguishes_a_re_ingest():
+    """The case that matters: identical configuration, different data.
+
+    Every input the researcher chose is the same; only the ingest behind the
+    bars changed. If this were not recorded the two runs would look
+    reproducible when they are not.
+    """
+    before = _FakeWarehouse(catalog_rows=[("AAPL.US", 1)], bar_rows=[(7,)])
+    after = _FakeWarehouse(catalog_rows=[("AAPL.US", 1)], bar_rows=[(9,)])
+
+    first = warehouse.ingest_run_ids(before, ["AAPL.US"], "2024-01-01", "2024-12-31")
+    second = warehouse.ingest_run_ids(after, ["AAPL.US"], "2024-01-01", "2024-12-31")
+
+    assert first == [7]
+    assert second == [9]
+    assert first != second
+
+
+def test_ingest_provenance_reads_the_deduplicating_view():
+    """A re-ingest supersedes earlier rows only after a merge, so the raw table
+    would report both the old and new run ids."""
+    wh = _FakeWarehouse(catalog_rows=[("AAPL.US", 1)], bar_rows=[(7,)])
+
+    warehouse.ingest_run_ids(wh, ["AAPL.US"], "2024-01-01", "2024-12-31")
+
+    assert "price_bars_current" in wh.client.queries[0]
+
+
+def test_no_known_symbols_means_no_ingest_lineage():
+    wh = _FakeWarehouse(catalog_rows=[], bar_rows=[])
+    assert warehouse.ingest_run_ids(wh, ["NOSUCH"], "2024-01-01", "2024-12-31") == []
+    assert wh.client.queries == []
