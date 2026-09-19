@@ -189,3 +189,94 @@ def test_running_does_not_change_the_seeded_signal_set(client, symbols):
     client.post("/api/v1/runs", json=_run_body(symbols, parameters={"fast": 9}))
     after = client.get("/api/v1/signals", params={"limit": 1}).json()["total"]
     assert after == before
+
+
+# --- GET /runs/{run_id}/performance ----------------------------------------
+
+
+def test_performance_matches_the_contract(client, symbols):
+    run = client.post("/api/v1/runs", json=_run_body(symbols)).json()
+
+    payload = client.get(f"/api/v1/runs/{run['id']}/performance").json()
+
+    assert set(SCHEMAS["RunPerformance"]["required"]) <= set(payload)
+    assert payload["run_id"] == run["id"]
+    assert payload["initial_capital"] > 0
+
+    for point in payload["equity"] + payload["benchmark"]:
+        assert set(SCHEMAS["EquityPoint"]["required"]) <= set(point)
+    for trade in payload["trades"]:
+        assert set(SCHEMAS["Trade"]["required"]) <= set(trade)
+        assert isinstance(trade["open"], bool)
+        # An open position has no realised exit date; a closed one does.
+        assert (trade["exit_date"] is None) is trade["open"]
+
+    metrics = payload["metrics"]
+    assert set(SCHEMAS["PerformanceMetrics"]["required"]) <= set(metrics)
+    # Reported as a negative fraction, and a curve cannot rise into a drawdown.
+    assert metrics["max_drawdown"] <= 0
+    assert metrics["winning_trades"] + metrics["losing_trades"] <= metrics["trade_count"]
+
+
+def test_performance_is_measured_over_the_reported_window_only(client, symbols):
+    """Warm-up bars are inputs to the signals, not part of the period measured."""
+    run = client.post("/api/v1/runs", json=_run_body(symbols)).json()
+
+    payload = client.get(f"/api/v1/runs/{run['id']}/performance").json()
+
+    for point in payload["equity"]:
+        assert run["start_date"] <= point["date"] <= run["end_date"]
+
+
+def test_performance_ships_its_own_caveats(client, symbols):
+    """These figures are not tradeable. The disclosure travels in the payload
+    so it cannot be dropped by a change to the UI."""
+    run = client.post("/api/v1/runs", json=_run_body(symbols)).json()
+
+    payload = client.get(f"/api/v1/runs/{run['id']}/performance").json()
+
+    assert payload["assumptions"]
+    assert all(isinstance(line, str) and line for line in payload["assumptions"])
+
+
+def test_performance_of_an_unknown_run_is_404(client):
+    response = client.get("/api/v1/runs/does-not-exist/performance")
+
+    assert response.status_code == 404
+    assert set(SCHEMAS["Error"]["required"]) <= set(response.json())
+
+
+def test_the_frontend_is_not_asked_to_compute_any_of_this():
+    """Constitution V, made checkable: the contract must carry the derived
+    figures, not just the raw material the browser would otherwise reduce."""
+    properties = SCHEMAS["PerformanceMetrics"]["properties"]
+
+    assert {"sharpe_ratio", "max_drawdown", "win_rate", "total_return"} <= set(properties)
+    assert SCHEMAS["RunPerformance"]["properties"]["equity"]["type"] == "array"
+
+
+def test_performance_of_a_failed_run_is_409_rather_than_a_zeroed_body(client):
+    """A failed run has no performance. Returning zeros would render as a flat
+    book -- exactly the empty-vs-failed ambiguity the UI already guards."""
+    from quantlab.research.runner import RunCoverage, RunResult
+
+    broken = RunResult(
+        id="broken-run",
+        model_name="sma-crossover",
+        model_version="1.0.0",
+        parameters={},
+        symbols=["ZZTRND"],
+        start_date="2024-01-01",
+        end_date="2024-12-31",
+        status="failed",
+        created_at="2026-09-19T12:00:00+00:00",
+        signal_count=0,
+        coverage=RunCoverage(1, 0, 0),
+        error="something broke",
+    )
+    client.app.state.experiments.save_run(broken)
+
+    response = client.get("/api/v1/runs/broken-run/performance")
+
+    assert response.status_code == 409
+    assert set(SCHEMAS["Error"]["required"]) <= set(response.json())

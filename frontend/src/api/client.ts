@@ -146,3 +146,16 @@ export function saveRun(runId: string, name: string): Promise<Run> {
 export function deleteRun(runId: string): Promise<void> {
   return send<void>(`/runs/${encodeURIComponent(runId)}`, 'DELETE');
 }
+
+// --- Run performance (Quant Lab) -------------------------------------------
+// Derived figures come from the backend, never from the browser: the frontend
+// must not embed analytical computation (Constitution V).
+
+export type EquityPoint = components['schemas']['EquityPoint'];
+export type Trade = components['schemas']['Trade'];
+export type PerformanceMetrics = components['schemas']['PerformanceMetrics'];
+export type RunPerformance = components['schemas']['RunPerformance'];
+
+export function getRunPerformance(runId: string): Promise<RunPerformance> {
+  return request<RunPerformance>(`/runs/${encodeURIComponent(runId)}/performance`);
+}

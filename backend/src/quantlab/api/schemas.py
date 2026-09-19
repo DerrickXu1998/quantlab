@@ -168,3 +168,41 @@ class RunDetail(Run):
 
 class RunNameRequest(BaseModel):
     name: str
+
+
+class EquityPoint(BaseModel):
+    date: str
+    value: float
+
+
+class Trade(BaseModel):
+    symbol: str
+    entry_date: str
+    entry_price: float
+    exit_date: str | None = None
+    exit_price: float
+    return_pct: float
+    open: bool
+
+
+class PerformanceMetrics(BaseModel):
+    total_return: float
+    # Null rather than 0.0 when undefined: a fabricated zero would read as
+    # "measured, and mediocre" instead of "not measurable".
+    sharpe_ratio: float | None = None
+    max_drawdown: float
+    win_rate: float | None = None
+    trade_count: int
+    winning_trades: int
+    losing_trades: int
+
+
+class RunPerformance(BaseModel):
+    run_id: str
+    initial_capital: float
+    equity: list[EquityPoint]
+    benchmark: list[EquityPoint]
+    metrics: PerformanceMetrics
+    trades: list[Trade]
+    # Carried in the payload so the caveats cannot be lost by a UI refactor.
+    assumptions: list[str]

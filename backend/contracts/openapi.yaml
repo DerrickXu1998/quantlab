@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: QuantLab Signal Viewer API
-  version: 0.3.0
+  version: 0.4.0
   description: >
     Typed API boundary for the QuantLab demo. This document is the authored
     single source of truth (Constitution V): the FastAPI app is validated
@@ -305,6 +305,48 @@ paths:
           description: Deleted
         "404":
           description: Unknown run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /runs/{run_id}/performance:
+    parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [runs]
+      operationId: getRunPerformance
+      summary: Equity curve, benchmark, trades and risk metrics for one run
+      description: >
+        Derived from the run's own signals and the bars inside its window, and
+        computed here because the frontend must not embed analytical
+        computation (Constitution V). Recomputed on request rather than stored:
+        every input is already persisted, so a cached copy could only go stale.
+
+        Not a tradeable backtest. `assumptions` lists every simplification
+        applied and ships inside the payload, so the caveat travels with the
+        numbers rather than living in UI copy that a refactor can drop.
+      responses:
+        "200":
+          description: Performance of the run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunPerformance"
+        "404":
+          description: Unknown run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >
+            The run failed, so it has no performance. Zeroed figures would read
+            as a flat book rather than as an absent result.
           content:
             application/json:
               schema:
@@ -743,3 +785,143 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/ExperimentSignal"
+
+    EquityPoint:
+      type: object
+      additionalProperties: false
+      required: [date, value]
+      properties:
+        date:
+          type: string
+          format: date
+        value:
+          type: number
+          description: Book value on that date, in units of initial_capital.
+
+    Trade:
+      type: object
+      additionalProperties: false
+      required:
+        - symbol
+        - entry_date
+        - entry_price
+        - exit_date
+        - exit_price
+        - return_pct
+        - open
+      properties:
+        symbol:
+          type: string
+        entry_date:
+          type: string
+          format: date
+        entry_price:
+          type: number
+        exit_date:
+          type: string
+          format: date
+          nullable: true
+          description: Null while the position is still open at the end of the window.
+        exit_price:
+          type: number
+          description: >
+            Realised exit for a closed trade; the last close for an open one.
+        return_pct:
+          type: number
+        open:
+          type: boolean
+          description: >
+            True when the position was still held at the end of the window. An
+            open trade is marked to market, not realised, and never counts
+            toward the win rate.
+
+    PerformanceMetrics:
+      type: object
+      additionalProperties: false
+      required:
+        - total_return
+        - sharpe_ratio
+        - max_drawdown
+        - win_rate
+        - trade_count
+        - winning_trades
+        - losing_trades
+      properties:
+        total_return:
+          type: number
+          description: Fraction, e.g. 0.12 for +12%.
+        sharpe_ratio:
+          type: number
+          nullable: true
+          description: >
+            Annualised from daily returns at a zero risk-free rate. Null when
+            undefined -- fewer than two points, or zero variance. A fabricated
+            0.0 would read as "measured, and mediocre".
+        max_drawdown:
+          type: number
+          description: >
+            Negative fraction, e.g. -0.153 for a 15.3% peak-to-trough fall.
+            Exactly 0 for a curve that never fell.
+        win_rate:
+          type: number
+          nullable: true
+          description: >
+            Share of *closed* trades that gained. Null when nothing has closed.
+        trade_count:
+          type: integer
+          minimum: 0
+          description: All positions, including any still open.
+        winning_trades:
+          type: integer
+          minimum: 0
+        losing_trades:
+          type: integer
+          minimum: 0
+
+    RunPerformance:
+      type: object
+      additionalProperties: false
+      required:
+        - run_id
+        - initial_capital
+        - equity
+        - benchmark
+        - metrics
+        - trades
+        - assumptions
+      properties:
+        run_id:
+          type: string
+        initial_capital:
+          type: number
+          description: >
+            Notional book size. Arbitrary but fixed: every ratio reported here
+            is scale-invariant, so this only sets the axis labels.
+        equity:
+          type: array
+          items:
+            $ref: "#/components/schemas/EquityPoint"
+          description: >
+            The strategy's book, marked to close on each bar date in the
+            window. Empty when the window contained no bars.
+        benchmark:
+          type: array
+          items:
+            $ref: "#/components/schemas/EquityPoint"
+          description: >
+            Equal-weight buy-and-hold of the same selection. Deliberately the
+            run's own universe rather than an index, so the comparison isolates
+            the model's timing from which names it was pointed at.
+        metrics:
+          $ref: "#/components/schemas/PerformanceMetrics"
+        trades:
+          type: array
+          items:
+            $ref: "#/components/schemas/Trade"
+        assumptions:
+          type: array
+          items:
+            type: string
+          description: >
+            Every simplification applied. These figures are not tradeable and
+            must never be presented as if they were.

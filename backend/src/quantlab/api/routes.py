@@ -8,6 +8,7 @@ synthetic SQLite demo, chosen once at startup.
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import date
 from typing import Annotated, Literal
 
@@ -15,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
 from quantlab.api import schemas
 from quantlab.research import errors as research_errors
-from quantlab.research import runner
+from quantlab.research import performance, runner
 from quantlab.signals import builtins as _builtins  # noqa: F401  (registers builtin rules)
 from quantlab.signals import registry as signal_registry
 
@@ -252,6 +253,38 @@ def get_run(request: Request, run_id: str) -> dict:
         raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
     signals = store.get_run_signals(run_id)
     return {**_run_response(run, backend(request).name), "signals": signals}
+
+@router.get(
+    "/runs/{run_id}/performance",
+    response_model=schemas.RunPerformance,
+    tags=["runs"],
+    operation_id="getRunPerformance",
+    dependencies=[Depends(require_seeded)],
+)
+def get_run_performance(request: Request, run_id: str) -> dict:
+    """Still a thin handler: the analytics live in research.performance, which
+    is where the frontend cannot reach them (Constitution V)."""
+    store = experiments(request)
+    run = store.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
+    # A failed run has no performance. Zeroed figures would read as a flat
+    # book rather than as an absent result -- the same distinction the UI
+    # already draws between an empty run and a failed one.
+    if run["status"] != "completed":
+        raise HTTPException(status_code=409, detail=f"run {run_id} failed; it has no performance")
+
+    symbols = list(run["symbols"])
+    # The reported window only: warm-up bars are inputs to the signals, not
+    # part of the period being measured.
+    bars = backend(request).load_bars_for(symbols, run["start_date"], run["end_date"])
+    result = performance.compute_performance(
+        run_id=run_id,
+        signals=store.get_run_signals(run_id),
+        bars_by_symbol=bars,
+        symbols=symbols,
+    )
+    return asdict(result)
 
 
 @router.patch(

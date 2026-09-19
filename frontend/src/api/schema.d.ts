@@ -137,6 +137,29 @@ export interface paths {
         patch: operations["saveRun"];
         trace?: never;
     };
+    "/runs/{run_id}/performance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Equity curve, benchmark, trades and risk metrics for one run
+         * @description Derived from the run's own signals and the bars inside its window, and computed here because the frontend must not embed analytical computation (Constitution V). Recomputed on request rather than stored: every input is already persisted, so a cached copy could only go stale.
+         *     Not a tradeable backtest. `assumptions` lists every simplification applied and ships inside the payload, so the caveat travels with the numbers rather than living in UI copy that a refactor can drop.
+         */
+        get: operations["getRunPerformance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -347,6 +370,55 @@ export interface components {
         };
         RunDetail: components["schemas"]["Run"] & {
             signals: components["schemas"]["ExperimentSignal"][];
+        };
+        EquityPoint: {
+            /** Format: date */
+            date: string;
+            /** @description Book value on that date, in units of initial_capital. */
+            value: number;
+        };
+        Trade: {
+            symbol: string;
+            /** Format: date */
+            entry_date: string;
+            entry_price: number;
+            /**
+             * Format: date
+             * @description Null while the position is still open at the end of the window.
+             */
+            exit_date: string | null;
+            /** @description Realised exit for a closed trade; the last close for an open one. */
+            exit_price: number;
+            return_pct: number;
+            /** @description True when the position was still held at the end of the window. An open trade is marked to market, not realised, and never counts toward the win rate. */
+            open: boolean;
+        };
+        PerformanceMetrics: {
+            /** @description Fraction, e.g. 0.12 for +12%. */
+            total_return: number;
+            /** @description Annualised from daily returns at a zero risk-free rate. Null when undefined -- fewer than two points, or zero variance. A fabricated 0.0 would read as "measured, and mediocre". */
+            sharpe_ratio: number | null;
+            /** @description Negative fraction, e.g. -0.153 for a 15.3% peak-to-trough fall. Exactly 0 for a curve that never fell. */
+            max_drawdown: number;
+            /** @description Share of *closed* trades that gained. Null when nothing has closed. */
+            win_rate: number | null;
+            /** @description All positions, including any still open. */
+            trade_count: number;
+            winning_trades: number;
+            losing_trades: number;
+        };
+        RunPerformance: {
+            run_id: string;
+            /** @description Notional book size. Arbitrary but fixed: every ratio reported here is scale-invariant, so this only sets the axis labels. */
+            initial_capital: number;
+            /** @description The strategy's book, marked to close on each bar date in the window. Empty when the window contained no bars. */
+            equity: components["schemas"]["EquityPoint"][];
+            /** @description Equal-weight buy-and-hold of the same selection. Deliberately the run's own universe rather than an index, so the comparison isolates the model's timing from which names it was pointed at. */
+            benchmark: components["schemas"]["EquityPoint"][];
+            metrics: components["schemas"]["PerformanceMetrics"];
+            trades: components["schemas"]["Trade"][];
+            /** @description Every simplification applied. These figures are not tradeable and must never be presented as if they were. */
+            assumptions: string[];
         };
     };
     responses: never;
@@ -643,6 +715,46 @@ export interface operations {
             };
             /** @description Unknown run */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getRunPerformance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Performance of the run */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunPerformance"];
+                };
+            };
+            /** @description Unknown run */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The run failed, so it has no performance. Zeroed figures would read as a flat book rather than as an absent result. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
