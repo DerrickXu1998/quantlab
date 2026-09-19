@@ -1,0 +1,301 @@
+openapi: 3.1.0
+info:
+  title: QuantLab Signal Viewer API
+  version: 0.1.0
+  description: >
+    Typed API boundary for the Dockerized Signal Viewer demo (feature
+    002-signal-viewer-demo). This document is the authored single source of truth
+    (Constitution V): the FastAPI app is validated against it by a contract test,
+    and the TypeScript client is generated from it with openapi-typescript.
+    The API is read-only; all computation happens in the backend.
+servers:
+  - url: /api/v1
+tags:
+  - name: system
+  - name: instruments
+  - name: signals
+
+paths:
+  /health:
+    get:
+      tags: [system]
+      operationId: getHealth
+      summary: Service health, including seed status
+      responses:
+        "200":
+          description: Backend is up and the seeded database is reachable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+
+  /instruments:
+    get:
+      tags: [instruments]
+      operationId: listInstruments
+      summary: List the synthetic instrument universe
+      responses:
+        "200":
+          description: All seeded instruments
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstrumentList"
+
+  /instruments/{symbol}/prices:
+    get:
+      tags: [instruments]
+      operationId: getPrices
+      summary: Daily OHLCV history for one instrument
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[A-Z]{2,8}$"
+        - name: start_date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: end_date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Bars ordered ascending by date
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PriceBarList"
+        "404":
+          description: Unknown symbol
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /signals:
+    get:
+      tags: [signals]
+      operationId: listSignals
+      summary: List signals with filtering, sorting, and total count
+      description: >
+        `total` always reflects the full result set under the active filters,
+        independent of pagination, so the UI count can be checked against the
+        backend (SC-004).
+      parameters:
+        - name: instrument
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: "^[A-Z]{2,8}$"
+        - name: signal_type
+          in: query
+          required: false
+          description: Signal rule name, e.g. sma-crossover
+          schema:
+            type: string
+        - name: direction
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/Direction"
+        - name: start_date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: end_date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: sort
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [date_asc, date_desc]
+            default: date_desc
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 200
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: Filtered signals with total count
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SignalList"
+        "400":
+          description: Invalid filter combination (e.g. start_date after end_date)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  schemas:
+    Health:
+      type: object
+      required: [status, seeded, signal_count]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        seeded:
+          type: boolean
+          description: True once the seed step has completed
+        signal_count:
+          type: integer
+          minimum: 0
+
+    Direction:
+      type: string
+      enum: [bullish, bearish]
+
+    Instrument:
+      type: object
+      required: [symbol, name, currency, regime_profile]
+      properties:
+        symbol:
+          type: string
+          example: ZZTRND
+        name:
+          type: string
+          example: Zeno Trend Industries (synthetic)
+        currency:
+          type: string
+          example: USD
+        regime_profile:
+          type: string
+          enum: [trending, mean_reverting, volatile, mixed]
+
+    InstrumentList:
+      type: object
+      required: [total, items]
+      properties:
+        total:
+          type: integer
+          minimum: 0
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Instrument"
+
+    PriceBar:
+      type: object
+      required: [symbol, date, open, high, low, close, volume]
+      properties:
+        symbol:
+          type: string
+        date:
+          type: string
+          format: date
+        open:
+          type: number
+        high:
+          type: number
+        low:
+          type: number
+        close:
+          type: number
+        volume:
+          type: integer
+          minimum: 0
+
+    PriceBarList:
+      type: object
+      required: [total, items]
+      properties:
+        total:
+          type: integer
+          minimum: 0
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PriceBar"
+
+    Signal:
+      type: object
+      required:
+        - id
+        - symbol
+        - date
+        - rule_name
+        - rule_version
+        - parameters
+        - direction
+        - trigger_values
+        - data_window_end
+      properties:
+        id:
+          type: integer
+        symbol:
+          type: string
+        date:
+          type: string
+          format: date
+          description: Signal date T; only data knowable by T was used
+        rule_name:
+          type: string
+          example: sma-crossover
+        rule_version:
+          type: string
+          example: 1.0.0
+        parameters:
+          type: object
+          additionalProperties: true
+          example: { fast: 20, slow: 50 }
+        direction:
+          $ref: "#/components/schemas/Direction"
+        trigger_values:
+          type: object
+          additionalProperties: true
+          description: Indicator values that fired the rule
+          example: { sma_fast: 101.2, sma_slow: 99.8 }
+        data_window_end:
+          type: string
+          format: date
+          description: Latest bar date used as input; always <= date (Constitution VII)
+
+    SignalList:
+      type: object
+      required: [total, items]
+      properties:
+        total:
+          type: integer
+          minimum: 0
+          description: Total signals matching the active filters (pre-pagination)
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Signal"
+
+    Error:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string

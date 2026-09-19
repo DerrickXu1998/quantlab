@@ -1,0 +1,10 @@
+# Docker build context for the frontend image (dist/ is rebuilt inside Docker).
+.git
+.gitignore
+.dockerignore
+Dockerfile
+node_modules/
+dist/
+coverage/
+*.log
+.env*

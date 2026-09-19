@@ -1,0 +1,178 @@
+:root {
+  font-family:
+    system-ui,
+    -apple-system,
+    sans-serif;
+  color: #1c2733;
+  background: #f6f8fa;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+h1 {
+  font-size: 1.5rem;
+}
+
+.signal-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-end;
+  padding: 1rem;
+  background: #fff;
+  border: 1px solid #dde3ea;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+}
+
+.signal-filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #55677a;
+}
+
+.direction-toggle {
+  border: 1px solid #dde3ea;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.direction-toggle legend {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #55677a;
+}
+
+.direction-toggle label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-right: 0.5rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border: 1px solid #dde3ea;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #edf1f5;
+  font-size: 0.9rem;
+}
+
+th {
+  background: #eef2f6;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #55677a;
+}
+
+tbody tr {
+  cursor: pointer;
+}
+
+tbody tr:hover {
+  background: #f2f7fc;
+}
+
+tbody tr.selected {
+  background: #e3eefb;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.badge-bullish {
+  background: #e2f4e5;
+  color: #1e7b34;
+}
+
+.badge-bearish {
+  background: #fbe3e1;
+  color: #b03024;
+}
+
+.trigger-values {
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+  color: #41546a;
+}
+
+.pagination {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  margin-top: 0.75rem;
+}
+
+.state {
+  padding: 2rem;
+  border-radius: 6px;
+  text-align: center;
+  margin: 1rem 0;
+}
+
+.state-loading {
+  background: #eef3fb;
+  border: 1px solid #c8d8ef;
+  color: #2c5a9e;
+}
+
+.state-empty {
+  background: #f4f0e2;
+  border: 1px solid #e0d5ab;
+  color: #7a6520;
+}
+
+.state-error {
+  background: #fbe3e1;
+  border: 1px solid #eeaaa4;
+  color: #8c2318;
+}
+
+.signal-context {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  background: #fff;
+  border: 1px solid #dde3ea;
+  border-radius: 6px;
+}
+
+.price-chart {
+  width: 100%;
+  height: auto;
+}
+
+.chart-axis-label {
+  font-size: 10px;
+  fill: #7a8a9c;
+}
+
+.synthetic-notice {
+  text-align: center;
+  font-size: 0.75rem;
+  color: #93a1b1;
+  padding: 1rem;
+}

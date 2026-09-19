@@ -1,0 +1,47 @@
+services:
+  seed:
+    build: ./backend
+    command: ["python", "-m", "quantlab.seed"]
+    environment:
+      QUANTLAB_DB: /data/quantlab.db
+      QUANTLAB_DB_PATH: /data/quantlab.db
+    volumes:
+      - quantlab-data:/data
+    restart: "no"
+
+  backend:
+    build: ./backend
+    command: ["uvicorn", "quantlab.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      QUANTLAB_DB: /data/quantlab.db
+      QUANTLAB_DB_PATH: /data/quantlab.db
+    volumes:
+      - quantlab-data:/data
+    ports:
+      - "8000:8000"
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health', timeout=5)",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  quantlab-data:

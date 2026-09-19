@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+dist/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Node / TypeScript
+node_modules/
+dist/
+build/
+*.log
+
+# Test coverage
+coverage/
+htmlcov/
+.coverage
+.coverage.*
+
+# Data / runtime
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+quantlab-data/
+
+# Universal
+.DS_Store
+*.tmp
+*.swp
+.vscode/
+.idea/
+.env*
+!.env.example
+.quantlab/*

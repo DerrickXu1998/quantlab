@@ -1,0 +1,15 @@
+# Docker build context for the backend image.
+.git
+.gitignore
+.dockerignore
+Dockerfile
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+*.db
+*.log
+.env*
