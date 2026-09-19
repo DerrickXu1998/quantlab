@@ -1,57 +1,28 @@
-import { useRef, useState } from 'react';
-import { SignalsPage } from './pages/SignalsPage';
+import { useState } from 'react';
+import { DatasetProvider } from './api/DatasetProvider';
+import { QuantLabPage } from './quantlab/QuantLabPage';
 import { SplashScreen } from './splash/SplashScreen';
-import { ThemeToggle } from './theme/ThemeToggle';
-import { DatasetBadge } from './workbench/DatasetBadge';
-import { Button } from './components/ui/button';
-import type { WorkspaceHandle } from './workspace/Workspace';
+import { SignalsSurface } from './surface/SignalsSurface';
+import { useSurface } from './surface/useSurface';
 
 export default function App() {
-  const workspace = useRef<WorkspaceHandle | null>(null);
-  const [ready, setReady] = useState(false);
   const [booting, setBooting] = useState(true);
+  const { surface, setSurface } = useSurface();
 
   return (
-    // h-screen + min-h-0 below: docking needs a bounded, full-height container.
-    <div className="flex h-screen flex-col bg-background text-foreground">
+    <DatasetProvider>
       {/* Rendered over the workspace rather than instead of it, so the page
-          is already loaded and behind the field as it contracts away. */}
+          is already loaded and behind the field as it contracts away. Shared
+          by both surfaces: it is a boot animation, not a per-view one. */}
       {booting && <SplashScreen onComplete={() => setBooting(false)} />}
 
-      <header className="shrink-0 border-b border-border bg-card">
-        <div className="flex items-center justify-between gap-4 px-6 py-3">
-          <div className="flex items-center gap-3">
-            <span className="text-sm font-semibold tracking-tight">QuantLab Signal Viewer</span>
-            <DatasetBadge />
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={!ready}
-              onClick={() => workspace.current?.resetLayout()}
-            >
-              Reset layout
-            </Button>
-            <ThemeToggle />
-          </div>
-        </div>
-      </header>
-
-      <main className="min-h-0 flex-1">
-        <SignalsPage
-          onReady={(handle) => {
-            workspace.current = handle;
-            setReady(true);
-          }}
-        />
-      </main>
-
-      <footer className="shrink-0 px-6 py-2 text-center text-xs text-muted-foreground">
-        All instruments, prices, and signals shown here are synthetic and fictitious — demo data
-        only, not real market data.
-      </footer>
-    </div>
+      {/* Conditional, never `hidden`: a display:none Dockview measures 0x0 and
+          corrupts its layout. layoutStorage already restores it on return. */}
+      {surface === 'lab' ? (
+        <QuantLabPage onExit={() => setSurface('signals')} />
+      ) : (
+        <SignalsSurface onOpenLab={() => setSurface('lab')} />
+      )}
+    </DatasetProvider>
   );
 }

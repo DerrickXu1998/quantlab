@@ -1,10 +1,4 @@
-import { useEffect, useState } from 'react';
-import { ApiError, getHealth, type Health } from '../api/client';
-
-type State =
-  | { status: 'loading' }
-  | { status: 'ready'; health: Health }
-  | { status: 'unreachable'; message: string };
+import { useDataset } from '../api/DatasetProvider';
 
 /**
  * Which dataset is answering, shown without opening a menu.
@@ -14,25 +8,7 @@ type State =
  * a synthetic result mistakable for a real one.
  */
 export function DatasetBadge() {
-  const [state, setState] = useState<State>({ status: 'loading' });
-
-  useEffect(() => {
-    let cancelled = false;
-    getHealth()
-      .then((health) => {
-        if (!cancelled) setState({ status: 'ready', health });
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        setState({
-          status: 'unreachable',
-          message: error instanceof ApiError ? error.message : 'backend unreachable',
-        });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const state = useDataset();
 
   if (state.status === 'loading') {
     return <span className="text-[11px] text-muted-foreground">checking data source…</span>;

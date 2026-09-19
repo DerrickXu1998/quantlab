@@ -1,30 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { ParamSpec } from '../api/client';
 import { Button } from '../components/ui/button';
 import { Input, Label, Select } from '../components/ui/field';
 import { useWorkspace } from '../workspace/WorkspaceContext';
 import { useWorkbench } from './WorkbenchContext';
-
-/** Mirrors the declared constraint for immediate feedback. The server
- *  validates independently and its rejection is authoritative. */
-function localError(spec: ParamSpec, raw: string): string | null {
-  if (raw === '') return 'required';
-  if (spec.type === 'int' || spec.type === 'float') {
-    const value = Number(raw);
-    if (Number.isNaN(value)) return 'must be a number';
-    if (spec.type === 'int' && !Number.isInteger(value)) return 'must be a whole number';
-    if (spec.minimum != null && value < spec.minimum) return `must be >= ${spec.minimum}`;
-    if (spec.maximum != null && value > spec.maximum) return `must be <= ${spec.maximum}`;
-  }
-  return null;
-}
-
-function coerce(spec: ParamSpec, raw: string): unknown {
-  if (spec.type === 'int') return Number.parseInt(raw, 10);
-  if (spec.type === 'float') return Number(raw);
-  if (spec.type === 'bool') return raw === 'true';
-  return raw;
-}
+// Shared with the Quant Lab backtest form: two copies of this would drift.
+import { coerce, defaultValues, localError } from './paramSpec';
 
 export function RunConfig() {
   const { selected, runs } = useWorkbench();
@@ -39,9 +19,7 @@ export function RunConfig() {
   // anticipated still renders a usable form.
   useEffect(() => {
     if (!selected) return;
-    setValues(
-      Object.fromEntries(selected.parameters.map((spec) => [spec.name, String(spec.default)])),
-    );
+    setValues(defaultValues(selected.parameters));
   }, [selected]);
 
   const fieldErrors = useMemo(() => {

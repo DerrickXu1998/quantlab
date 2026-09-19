@@ -3,6 +3,56 @@
 @tailwind utilities;
 
 /*
+  Self-hosted rather than linked from a CDN. The demo's promise is that `make
+  up` works with no network and no credentials; a third-party font request
+  would erode that cosmetically and block first paint on someone else's server.
+  Clash Display and General Sans are Fontshare (ITF license permits
+  self-hosting); JetBrains Mono is SIL OFL, shipped as its variable face.
+*/
+@font-face {
+  font-family: 'Clash Display';
+  src: url('/fonts/ClashDisplay-500.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Clash Display';
+  src: url('/fonts/ClashDisplay-600.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'General Sans';
+  src: url('/fonts/GeneralSans-400.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'General Sans';
+  src: url('/fonts/GeneralSans-500.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'General Sans';
+  src: url('/fonts/GeneralSans-600.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Variable.woff2') format('woff2-variations');
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+/*
   shadcn/ui-style design tokens. Values are HSL triplets (no hsl() wrapper) so
   Tailwind's `hsl(var(--x))` color definitions in tailwind.config.ts can apply
   opacity modifiers. .dark overrides are toggled by ThemeProvider on <html>.
@@ -84,4 +134,70 @@ body {
   --dv-floating-titlebar-background-color: hsl(var(--muted));
   --dv-floating-group-border: 1px solid hsl(var(--border));
   --dv-icon-hover-background-color: hsl(var(--accent));
+}
+
+/*
+  Quant Lab palette. Scoped to the surface root rather than <html>, so it
+  cannot disturb ThemeProvider's light/dark toggle or the Signal Viewer, and so
+  every existing ui/* primitive re-skins for free -- Tailwind resolves
+  hsl(var(--x)) at the use site, not at build time.
+
+  The terminal is fixed near-black by design; it has no light mode. Losses and
+  drawdown are the only things allowed to use --destructive.
+*/
+.quantlab {
+  --background: 220 11% 5%; /* #0A0B0D */
+  --foreground: 210 14% 93%;
+  --card: 220 12% 7%; /* #0F1114 */
+  --card-foreground: 210 14% 93%;
+  --border: 216 15% 13%; /* #1C2026 hairline */
+  --input: 216 15% 13%;
+  --ring: 76 100% 62%;
+  --primary: 76 100% 62%; /* #BFFF3C -- the single accent */
+  --primary-foreground: 220 11% 5%;
+  --secondary: 218 14% 11%;
+  --secondary-foreground: 210 14% 93%;
+  --muted: 218 14% 11%;
+  --muted-foreground: 215 12% 55%;
+  --accent: 218 14% 14%;
+  --accent-foreground: 210 14% 93%;
+  --destructive: 0 100% 65%; /* #FF4D4D -- losses and drawdown only */
+  --destructive-foreground: 220 11% 5%;
+  --success: 76 100% 62%;
+  --success-foreground: 220 11% 5%;
+  /* Chart grid lines, and the resting colour of a value that can tick. */
+  --grid: 216 15% 13%;
+  --tick: 215 12% 55%;
+  /* The brief caps corner radius at 4px. 0.25rem = 4px, and the sm/md steps
+     derived from it in tailwind.config.ts stay below that. */
+  --radius: 0.25rem;
+
+  font-family: theme('fontFamily.sans');
+  /* body's bg-background is bound to :root, so the surface sets its own. */
+  @apply bg-background text-foreground;
+}
+
+/*
+  Film grain: one static SVG noise tile at 3% over the background only. Sits
+  under everything interactive and never receives a pointer event.
+*/
+.quantlab-grain {
+  pointer-events: none;
+  opacity: 0.03;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/*
+  The one entrance, and the one continuous animation. Both are suppressed for
+  anyone who has asked for reduced motion -- otherwise the "single animation"
+  rule becomes an accessibility problem.
+*/
+@media (prefers-reduced-motion: reduce) {
+  .quantlab [data-cascade],
+  .quantlab [data-flash] {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+  }
 }
