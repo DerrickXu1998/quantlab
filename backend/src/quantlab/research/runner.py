@@ -145,6 +145,12 @@ def run_experiment(
     # Warm-up bars are inputs, not results: report only the requested window.
     in_window = [s for s in computed if start_date <= s.date <= end_date]
 
+    # Surrogate identities, where the store has them. Recorded because the
+    # canonical symbol is unique but editable, while instrument_id is the
+    # stable key the bar store joins on.
+    ids = backend.instrument_ids(requested_symbols)
+    instrument_ids = [ids[s] for s in requested_symbols if s in ids] or None
+
     earliest = backend.earliest_bar_dates(requested_symbols)
     # Reported, never applied: stored bars are unadjusted, so a split inside
     # the window makes the series jump in a way that is an artefact.
@@ -174,6 +180,7 @@ def run_experiment(
         ),
         signals=in_window,
         dataset=getattr(backend, "name", "sqlite"),
+        instrument_ids=instrument_ids,
         corporate_actions=actions,
     )
 

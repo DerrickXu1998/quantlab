@@ -36,6 +36,7 @@ class StorageBackend(Protocol):
     def load_bars_for(self, symbols: list[str], start: str, end: str) -> dict: ...
     def earliest_bar_dates(self, symbols: list[str]) -> dict: ...
     def corporate_actions(self, symbols: list[str], start: str, end: str) -> list[dict]: ...
+    def instrument_ids(self, symbols: list[str]) -> dict: ...
 
 
 class SqliteBackend:
@@ -97,6 +98,10 @@ class SqliteBackend:
         # keeps the runner free of branching on which store it is talking to.
         return []
 
+    def instrument_ids(self, symbols: list[str]) -> dict[str, int]:
+        # The demo has no surrogate identities; symbols are its identity.
+        return {}
+
 
 class WarehouseBackend:
     """Real ingested history: ClickHouse bars over a Postgres catalog."""
@@ -129,6 +134,9 @@ class WarehouseBackend:
 
     def corporate_actions(self, symbols: list[str], start: str, end: str) -> list[dict]:
         return warehouse.corporate_actions(self.wh, symbols, start, end)
+
+    def instrument_ids(self, symbols: list[str]) -> dict[str, int]:
+        return warehouse._instrument_ids(self.wh, symbols)
 
 
 def select_backend(db_path: str | Path | None = None) -> StorageBackend:

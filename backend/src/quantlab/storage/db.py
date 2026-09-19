@@ -91,6 +91,10 @@ CREATE TABLE IF NOT EXISTS experiment_runs (
                                   CHECK (dataset IN ('sqlite', 'warehouse')),
     instrument_ids           TEXT,
     ingest_run_ids           TEXT,
+    -- Splits/dividends inside the window. Persisted rather than only
+    -- reported, so reopening a saved run still warns that its price series
+    -- contains unadjusted discontinuities.
+    corporate_actions        TEXT,
     CHECK (start_date <= end_date),
     CHECK ((status = 'failed') = (error IS NOT NULL))
 );

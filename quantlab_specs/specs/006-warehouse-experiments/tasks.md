@@ -135,11 +135,11 @@ per `quickstart.md` §3.
 
 ### Tests for User Story 1 ⚠️
 
-- [ ] T018 [P] [US1] Write `backend/tests/test_warehouse_bar_reads.py` against a fake ClickHouse
+- [X] T018 [P] [US1] Write `backend/tests/test_warehouse_bar_reads.py` against a fake ClickHouse
       client: `load_bars_for` reads through the **`price_bars_current` view, never the raw
       `price_bars` table** (reading the raw table returns doubled rows after a re-ingest), filters by
       instrument and window, and `earliest_bar_dates` returns the first bar per instrument.
-- [ ] T019 [P] [US1] Write `backend/tests/test_corporate_actions.py`: actions overlapping the run
+- [X] T019 [P] [US1] Write `backend/tests/test_corporate_actions.py`: actions overlapping the run
       window are returned for the selected instruments, with `action_type` in `split | dividend`
       matching the catalog's CHECK constraint; a window containing no action returns empty.
 - [ ] T020 [P] [US1] Add a contract test in `backend/tests/contract/` asserting a run against the
@@ -148,19 +148,19 @@ per `quickstart.md` §3.
 
 ### Implementation for User Story 1
 
-- [ ] T021 [US1] Implement windowed multi-instrument bar reading in
+- [X] T021 [US1] Implement windowed multi-instrument bar reading in
       `backend/src/quantlab/storage/warehouse.py`, reading through `price_bars_current` and resolving
       canonical symbols to `instrument_id` via `instruments.symbol` (depends on: T018 failing first).
-- [ ] T022 [US1] Implement `earliest_bar_dates` and `corporate_actions` in
+- [X] T022 [US1] Implement `earliest_bar_dates` and `corporate_actions` in
       `backend/src/quantlab/storage/warehouse.py`, the latter querying `corporate_actions` by
       `instrument_id` and `ex_date` within the window (depends on: T019 failing first, T021).
-- [ ] T023 [US1] Implement the three new `StorageBackend` methods on `WarehouseBackend` in
+- [X] T023 [US1] Implement the three new `StorageBackend` methods on `WarehouseBackend` in
       `backend/src/quantlab/storage/backends.py`, delegating to T021/T022 (depends on: T021, T022).
-- [ ] T024 [US1] Record `instrument_ids` on warehouse runs in
+- [X] T024 [US1] Record `instrument_ids` on warehouse runs in
       `backend/src/quantlab/research/runner.py` — **"Recorded because the canonical symbol is unique
       but editable, while `instrument_id` is the stable key the bar store joins on."** Do not build
       as-of vendor-symbol resolution (see `research.md`) (depends on: T023).
-- [ ] T025 [US1] Surface `corporate_actions` on the run result in
+- [X] T025 [US1] Surface `corporate_actions` on the run result in
       `backend/src/quantlab/api/schemas.py` and the runner, reported and **never applied to prices**
       (depends on: T022, T024).
 - [ ] T026 [US1] Run the backend suite, then walk `quickstart.md` §2–§3 against a live warehouse:

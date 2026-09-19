@@ -347,3 +347,140 @@ def iter_symbol_bars(
             yield symbol, int(instrument_id), bars
     finally:
         client.close()
+
+
+# ---------------------------------------------------------------------------
+# What the experiment runner needs (feature 006)
+# ---------------------------------------------------------------------------
+
+
+def _instrument_ids(wh: Warehouse, symbols: list[str]) -> dict[str, int]:
+    """Canonical symbol -> surrogate id.
+
+    Resolution is by `instruments.symbol`, the canonical quantlab id, which is
+    unique and stable. Vendor tickers -- the ones that get reused and
+    reassigned -- live in `symbol_map` and are bound to a date range there,
+    enforced by an exclusion constraint at ingest. The workbench never sees
+    them, so no as-of resolution is needed on this path.
+    """
+    if not symbols:
+        return {}
+    with wh.catalog() as conn:
+        rows = conn.execute(
+            "SELECT symbol, instrument_id FROM instruments WHERE symbol = ANY(%s)",
+            (list(symbols),),
+        ).fetchall()
+    return {symbol: int(instrument_id) for symbol, instrument_id in rows}
+
+
+def load_bars_for(
+    wh: Warehouse,
+    symbols: list[str],
+    start: str,
+    end: str,
+    frequency: str = "1d",
+) -> dict[str, list[Bar]]:
+    """Bars for several instruments across one window, keyed by symbol.
+
+    Reads through the deduplicating view, never the raw table: collapsing
+    happens at merge time on ClickHouse's own schedule, so a re-ingested range
+    read straight from `price_bars` comes back doubled.
+    """
+    ids = _instrument_ids(wh, symbols)
+    if not ids:
+        return {}
+    by_id = {instrument_id: symbol for symbol, instrument_id in ids.items()}
+
+    client = wh.bars()
+    try:
+        rows = client.query(
+            f"""
+            SELECT instrument_id, ts, open, high, low, close, volume
+              FROM {BARS_VIEW}
+             WHERE instrument_id IN %(ids)s
+               AND frequency = %(frequency)s
+               AND ts >= %(start)s AND ts <= %(end)s
+             ORDER BY instrument_id, ts ASC
+            """,
+            parameters={
+                "ids": tuple(by_id),
+                "frequency": frequency,
+                "start": f"{start} 00:00:00",
+                "end": f"{end} 23:59:59",
+            },
+        ).result_rows
+    finally:
+        client.close()
+
+    out: dict[str, list[Bar]] = {}
+    for instrument_id, ts, o, h, lo, c, v in rows:
+        symbol = by_id[int(instrument_id)]
+        out.setdefault(symbol, []).append(
+            Bar(ts.date().isoformat(), float(o), float(h), float(lo), float(c), int(v))
+        )
+    return out
+
+
+def earliest_bar_dates(
+    wh: Warehouse, symbols: list[str], frequency: str = "1d"
+) -> dict[str, str]:
+    """First available bar per instrument, for warm-up coverage reporting."""
+    ids = _instrument_ids(wh, symbols)
+    if not ids:
+        return {}
+    by_id = {instrument_id: symbol for symbol, instrument_id in ids.items()}
+
+    client = wh.bars()
+    try:
+        rows = client.query(
+            f"""
+            SELECT instrument_id, min(ts)
+              FROM {BARS_VIEW}
+             WHERE instrument_id IN %(ids)s AND frequency = %(frequency)s
+             GROUP BY instrument_id
+            """,
+            parameters={"ids": tuple(by_id), "frequency": frequency},
+        ).result_rows
+    finally:
+        client.close()
+
+    return {by_id[int(iid)]: ts.date().isoformat() for iid, ts in rows}
+
+
+def corporate_actions(wh: Warehouse, symbols: list[str], start: str, end: str) -> list[dict]:
+    """Splits and dividends inside the window, for the selected instruments.
+
+    Reported, never applied. Stored bars are unadjusted and the vendor's
+    adjusted close is explicitly not authoritative, so a split inside a run's
+    window makes the series jump in a way that is an artefact rather than a
+    market move. Making it visible is what keeps a distorted result
+    recognisable; rebuilding a point-in-time adjustment factor is its own
+    feature.
+    """
+    ids = _instrument_ids(wh, symbols)
+    if not ids:
+        return []
+    by_id = {instrument_id: symbol for symbol, instrument_id in ids.items()}
+
+    with wh.catalog() as conn:
+        rows = conn.execute(
+            """
+            SELECT instrument_id, ex_date, action_type, split_ratio, dividend
+              FROM corporate_actions
+             WHERE instrument_id = ANY(%s) AND ex_date >= %s AND ex_date <= %s
+             ORDER BY ex_date, instrument_id
+            """,
+            (list(by_id), start, end),
+        ).fetchall()
+
+    return [
+        {
+            "instrument_id": int(instrument_id),
+            "symbol": by_id[int(instrument_id)],
+            "ex_date": ex_date.isoformat(),
+            "action_type": action_type,
+            "split_ratio": float(split_ratio) if split_ratio is not None else None,
+            "dividend": float(dividend) if dividend is not None else None,
+        }
+        for instrument_id, ex_date, action_type, split_ratio, dividend in rows
+    ]

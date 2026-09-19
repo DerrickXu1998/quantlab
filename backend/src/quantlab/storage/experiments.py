@@ -64,7 +64,7 @@ class SqliteExperimentStore:
         "id, name, model_name, model_version, parameters, symbols, start_date, end_date, "
         "status, error, created_at, signal_count, instruments_requested, "
         "instruments_with_data, instruments_full_warmup, dataset, instrument_ids, "
-        "ingest_run_ids"
+        "ingest_run_ids, corporate_actions"
     )
 
     @staticmethod
@@ -72,7 +72,7 @@ class SqliteExperimentStore:
         (
             run_id, name, model_name, model_version, parameters, symbols, start_date,
             end_date, status, error, created_at, signal_count, requested, with_data,
-            full_warmup, dataset, instrument_ids, ingest_run_ids,
+            full_warmup, dataset, instrument_ids, ingest_run_ids, actions,
         ) = row
         return {
             "id": run_id,
@@ -91,13 +91,14 @@ class SqliteExperimentStore:
             "dataset": dataset or "sqlite",
             "instrument_ids": json.loads(instrument_ids) if instrument_ids else None,
             "ingest_run_ids": json.loads(ingest_run_ids) if ingest_run_ids else None,
+            "corporate_actions": json.loads(actions) if actions else [],
         }
 
     def save_run(self, result: Any) -> None:
         with db.connect(self.db_path) as conn:
             conn.execute(
                 f"INSERT INTO experiment_runs ({self._COLUMNS}) "
-                f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     result.id,
                     result.name,
@@ -117,6 +118,7 @@ class SqliteExperimentStore:
                     getattr(result, "dataset", "sqlite"),
                     _json_or_none(getattr(result, "instrument_ids", None)),
                     _json_or_none(getattr(result, "ingest_run_ids", None)),
+                    _json_or_none(getattr(result, "corporate_actions", None)),
                 ),
             )
             conn.executemany(
@@ -226,7 +228,8 @@ class PostgresExperimentStore:
 
     _COLUMNS = (
         "run_id, name, model_name, model_version, parameters, symbols, instrument_ids, "
-        "ingest_run_ids, dataset, start_date, end_date, status, error, created_at, "
+        "ingest_run_ids, corporate_actions, dataset, start_date, end_date, status, "
+        "error, created_at, "
         "signal_count, instruments_requested, instruments_with_data, instruments_full_warmup"
     )
 
@@ -234,8 +237,8 @@ class PostgresExperimentStore:
     def _row_to_run(row: tuple) -> dict:
         (
             run_id, name, model_name, model_version, parameters, symbols, instrument_ids,
-            ingest_run_ids, dataset, start_date, end_date, status, error, created_at,
-            signal_count, requested, with_data, full_warmup,
+            ingest_run_ids, actions, dataset, start_date, end_date, status, error,
+            created_at, signal_count, requested, with_data, full_warmup,
         ) = row
         return {
             "id": run_id,
@@ -246,6 +249,7 @@ class PostgresExperimentStore:
             "symbols": symbols,
             "instrument_ids": instrument_ids,
             "ingest_run_ids": ingest_run_ids,
+            "corporate_actions": actions or [],
             "dataset": dataset,
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
@@ -264,7 +268,7 @@ class PostgresExperimentStore:
         with self._connect() as conn:
             conn.execute(
                 f"INSERT INTO experiment_runs ({self._COLUMNS}) "
-                f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                "VALUES (" + ", ".join(["%s"] * 19) + ")",
                 (
                     result.id,
                     result.name,
@@ -274,6 +278,7 @@ class PostgresExperimentStore:
                     json.dumps(result.symbols),
                     json.dumps(instrument_ids) if instrument_ids else None,
                     json.dumps(getattr(result, "ingest_run_ids", None) or []) or None,
+                    json.dumps(getattr(result, "corporate_actions", []) or []),
                     getattr(result, "dataset", "warehouse"),
                     result.start_date,
                     result.end_date,

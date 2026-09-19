@@ -29,6 +29,10 @@ CREATE TABLE experiment_runs (
     -- rows -- which is what makes a re-ingest distinguishable from the
     -- original run when every input the researcher chose is identical.
     ingest_run_ids          JSONB,
+    -- Splits/dividends inside the window. Persisted rather than only
+    -- reported, so reopening a saved run still warns that its price series
+    -- contains unadjusted discontinuities.
+    corporate_actions       JSONB NOT NULL DEFAULT '[]'::jsonb,
     dataset                 TEXT        NOT NULL CHECK (dataset IN ('sqlite', 'warehouse')),
     start_date              DATE        NOT NULL,
     end_date                DATE        NOT NULL,

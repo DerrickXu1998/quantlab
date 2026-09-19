@@ -158,3 +158,26 @@ def test_a_zero_signal_run_is_storable(store):
 def test_dataset_is_recorded(store):
     store.save_run(_make_result("tagged", dataset="sqlite"))
     assert store.get_run("tagged")["dataset"] == "sqlite"
+
+
+def test_corporate_actions_survive_a_round_trip(store):
+    """Persisted rather than only reported: reopening a saved run must still
+    warn that its price series contains unadjusted discontinuities."""
+    result = _make_result("with-split")
+    split = {
+        "instrument_id": 1,
+        "symbol": "ZZTRND",
+        "ex_date": "2024-08-31",
+        "action_type": "split",
+        "split_ratio": 4.0,
+        "dividend": None,
+    }
+    result = RunResult(**{**result.__dict__, "corporate_actions": [split]})
+    store.save_run(result)
+
+    assert store.get_run("with-split")["corporate_actions"] == [split]
+
+
+def test_a_run_without_actions_reports_an_empty_list_not_null(store):
+    store.save_run(_make_result("clean"))
+    assert store.get_run("clean")["corporate_actions"] == []
