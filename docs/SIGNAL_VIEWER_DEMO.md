@@ -26,7 +26,7 @@ Run these from the repository root. `make up` is safe to re-run — a port that 
 of its own containers already publishes is not treated as a conflict.
 
 Then open the UI at **http://localhost:8080**. The API is served at
-`http://localhost:8000/api/v1` (see `quantlab_specs/specs/002-signal-viewer-demo/contracts/openapi.yaml`).
+`http://localhost:8000/api/v1` (see `quantlab_specs/specs/005-signal-research-workbench/contracts/openapi.yaml`).
 
 ## Make targets
 
@@ -53,13 +53,27 @@ Then open the UI at **http://localhost:8080**. The API is served at
   Generation is fully deterministic: no wall-clock, per-instrument seeds derived from the
   symbol, so a fresh `make up` always produces a byte-identical database.
 - **backend** — FastAPI service (`:8000`) exposing instruments, price bars, and signals
-  with filtering, sorting, and pagination.
-- **frontend** — React SPA behind nginx (`:8080`); lists all signals with a live total
-  count, filters by instrument / type / direction / date range, sorts by date, and shows a
-  price chart with the selected signal marked. `/api/` is reverse-proxied to the backend.
+  with filtering, sorting, and pagination, plus a runtime model catalog and an
+  experiment-run endpoint. The catalog is assembled from the plugin registry on every
+  request, so registering a rule is enough for it to appear and be runnable — no
+  frontend change. A run executes a chosen model with chosen parameters over a chosen
+  slice of instruments and dates, and is stored with full provenance (model name and
+  version, effective parameters, selection, window) so it is reproducible. Experiment
+  output lives in its own tables and never enters the seeded signal set.
+- **frontend** — React SPA behind nginx (`:8080`), arranged as a dockable workspace: the
+  filters, signal list, and price chart are panels that can be dragged to split, resized,
+  tabbed together, floated, closed and reopened. The layout is saved per browser and can be
+  reset to the default at any time; an unreadable or outdated saved layout falls back to the
+  default rather than failing. The chart is an interactive candlestick view (OHLC + volume,
+  pan/zoom, hover readout) with the selected signal marked. Workbench panels add a model
+  catalog, a run configuration form generated from each model's declared parameter
+  metadata, and a results view that always reports coverage alongside the signal count.
+  Supports light and dark mode, defaulting to the OS preference. Below tablet width the panels stack instead of docking.
+  `/api/` is reverse-proxied to the backend.
 
 ## Validation
 
+`quantlab_specs/specs/005-signal-research-workbench/quickstart.md` covers the workbench;
 `quantlab_specs/specs/002-signal-viewer-demo/quickstart.md` contains six runnable scenarios (clean setup,
 cross-run determinism via `make dump-hash`, dataset coverage, UI/API count consistency,
 re-derivation and look-ahead test suites, and backend-down UI behavior). `make test` runs

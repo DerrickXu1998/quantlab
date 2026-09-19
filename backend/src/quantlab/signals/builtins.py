@@ -10,13 +10,22 @@ import numpy as np
 
 from quantlab.indicators.builtins import rsi as rsi_indicator
 from quantlab.indicators.builtins import sma as sma_indicator
-from quantlab.signals.registry import SignalEvent, register_signal_rule
+from quantlab.signals.registry import ParamSpec, SignalEvent, register_signal_rule
 
 
 @register_signal_rule(
     name="sma-crossover",
     version="1.0.0",
-    params={"fast": 20, "slow": 50},
+    params={
+        "fast": ParamSpec(
+            name="fast", type="int", default=20, minimum=2, maximum=200,
+            description="Fast simple-moving-average window, in bars.",
+        ),
+        "slow": ParamSpec(
+            name="slow", type="int", default=50, minimum=3, maximum=400,
+            description="Slow simple-moving-average window, in bars.",
+        ),
+    },
     lookback_days=51,  # SMA(slow) must be defined at both T-1 and T
     scale_class="scale_free",
     direction_semantics=(
@@ -56,7 +65,20 @@ def sma_crossover(bars, fast: int = 20, slow: int = 50) -> list[SignalEvent]:
 @register_signal_rule(
     name="rsi-threshold",
     version="1.0.0",
-    params={"period": 14, "overbought": 70, "oversold": 30},
+    params={
+        "period": ParamSpec(
+            name="period", type="int", default=14, minimum=2, maximum=100,
+            description="RSI lookback period, in bars.",
+        ),
+        "overbought": ParamSpec(
+            name="overbought", type="float", default=70, minimum=50, maximum=100,
+            description="RSI level at or above which the instrument is treated as overbought.",
+        ),
+        "oversold": ParamSpec(
+            name="oversold", type="float", default=30, minimum=0, maximum=50,
+            description="RSI level at or below which the instrument is treated as oversold.",
+        ),
+    },
     lookback_days=16,  # RSI(period) defined at index `period`; an exit needs the prior value
     scale_class="scale_free",
     direction_semantics=(
@@ -95,7 +117,12 @@ def rsi_threshold(
 @register_signal_rule(
     name="breakout-20d",
     version="1.0.0",
-    params={"window": 20},
+    params={
+        "window": ParamSpec(
+            name="window", type="int", default=20, minimum=2, maximum=250,
+            description="Number of prior sessions whose high/low defines the breakout level.",
+        ),
+    },
     lookback_days=21,  # day T plus 20 prior sessions
     scale_class="price_scaled",
     direction_semantics=(

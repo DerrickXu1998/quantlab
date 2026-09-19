@@ -76,3 +76,73 @@ export function getPrices(symbol: string, start?: string, end?: string): Promise
 export function listSignals(filters: SignalQuery = {}): Promise<SignalList> {
   return request<SignalList>('/signals', { ...filters });
 }
+
+// --- Model catalog and experiment runs (feature 005) ----------------------
+
+export type ParamSpec = components['schemas']['ParamSpec'];
+export type Model = components['schemas']['Model'];
+export type ModelList = components['schemas']['ModelList'];
+export type RunRequest = components['schemas']['RunRequest'];
+export type Run = components['schemas']['Run'];
+export type RunList = components['schemas']['RunList'];
+export type RunDetail = components['schemas']['RunDetail'];
+export type ExperimentSignal = components['schemas']['ExperimentSignal'];
+
+async function send<T>(
+  path: string,
+  method: 'POST' | 'PATCH' | 'DELETE',
+  body?: unknown,
+  signal?: AbortSignal,
+): Promise<T> {
+  const url = new URL(`${BASE_URL}${path}`, window.location.origin);
+  let response: Response;
+  try {
+    response = await fetch(url.toString(), {
+      method,
+      signal,
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error;
+    throw new ApiError(0, `Backend unreachable at ${BASE_URL}`);
+  }
+
+  if (!response.ok) {
+    let detail = `Request failed with status ${response.status}`;
+    try {
+      const payload = (await response.json()) as { detail?: unknown };
+      if (payload.detail) detail = String(payload.detail);
+    } catch {
+      // keep the generic message
+    }
+    throw new ApiError(response.status, detail);
+  }
+
+  if (response.status === 204) return undefined as T;
+  return (await response.json()) as T;
+}
+
+export function listModels(): Promise<ModelList> {
+  return request<ModelList>('/models');
+}
+
+export function createRun(body: RunRequest, signal?: AbortSignal): Promise<Run> {
+  return send<Run>('/runs', 'POST', body, signal);
+}
+
+export function listRuns(savedOnly = false): Promise<RunList> {
+  return request<RunList>('/runs', { saved_only: savedOnly ? 'true' : undefined });
+}
+
+export function getRun(runId: string): Promise<RunDetail> {
+  return request<RunDetail>(`/runs/${encodeURIComponent(runId)}`);
+}
+
+export function saveRun(runId: string, name: string): Promise<Run> {
+  return send<Run>(`/runs/${encodeURIComponent(runId)}`, 'PATCH', { name });
+}
+
+export function deleteRun(runId: string): Promise<void> {
+  return send<void>(`/runs/${encodeURIComponent(runId)}`, 'DELETE');
+}

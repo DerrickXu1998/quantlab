@@ -1,4 +1,5 @@
 import type { Direction, Instrument } from '../api/client';
+import { Input, Label, Select } from './ui/field';
 
 export interface SignalFilterState {
   instrument: string;
@@ -18,102 +19,114 @@ export const EMPTY_FILTERS: SignalFilterState = {
   sort: 'date_desc',
 };
 
-const RULES = ['sma-crossover', 'rsi-threshold', 'breakout-20d'] as const;
-
 interface SignalFiltersProps {
   instruments: Instrument[];
+  /** Model names from the catalog. Passed in rather than hardcoded so
+   *  registering a model is enough for it to appear (Constitution II). */
+  ruleNames: string[];
   value: SignalFilterState;
   onChange: (next: SignalFilterState) => void;
 }
 
-export function SignalFilters({ instruments, value, onChange }: SignalFiltersProps) {
+const radioClasses =
+  'h-3.5 w-3.5 accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+
+export function SignalFilters({ instruments, ruleNames, value, onChange }: SignalFiltersProps) {
   const update = (patch: Partial<SignalFilterState>) => onChange({ ...value, ...patch });
 
   return (
-    <form className="signal-filters" onSubmit={(event) => event.preventDefault()}>
-      <label>
+    <form
+      className="signal-filters mb-4 flex flex-wrap items-end gap-4 rounded-lg border border-border bg-card p-4"
+      onSubmit={(event) => event.preventDefault()}
+    >
+      <Label>
         Instrument
-        <select value={value.instrument} onChange={(e) => update({ instrument: e.target.value })}>
+        <Select value={value.instrument} onChange={(e) => update({ instrument: e.target.value })}>
           <option value="">All instruments</option>
           {instruments.map((instrument) => (
             <option key={instrument.symbol} value={instrument.symbol}>
               {instrument.symbol} — {instrument.name}
             </option>
           ))}
-        </select>
-      </label>
+        </Select>
+      </Label>
 
-      <label>
+      <Label>
         Rule
-        <select value={value.signalType} onChange={(e) => update({ signalType: e.target.value })}>
+        <Select value={value.signalType} onChange={(e) => update({ signalType: e.target.value })}>
           <option value="">All rules</option>
-          {RULES.map((rule) => (
+          {ruleNames.map((rule) => (
             <option key={rule} value={rule}>
               {rule}
             </option>
           ))}
-        </select>
-      </label>
+        </Select>
+      </Label>
 
-      <fieldset className="direction-toggle">
-        <legend>Direction</legend>
-        <label>
-          <input
-            type="radio"
-            name="direction"
-            checked={value.direction === ''}
-            onChange={() => update({ direction: '' })}
-          />
-          All
-        </label>
-        <label>
-          <input
-            type="radio"
-            name="direction"
-            checked={value.direction === 'bullish'}
-            onChange={() => update({ direction: 'bullish' })}
-          />
-          Bullish
-        </label>
-        <label>
-          <input
-            type="radio"
-            name="direction"
-            checked={value.direction === 'bearish'}
-            onChange={() => update({ direction: 'bearish' })}
-          />
-          Bearish
-        </label>
+      <fieldset className="direction-toggle rounded-md border border-border px-3 py-2">
+        <legend className="px-1 text-xs font-semibold text-muted-foreground">Direction</legend>
+        <div className="flex items-center gap-3 text-sm text-foreground">
+          <label className="inline-flex items-center gap-1.5">
+            <input
+              type="radio"
+              name="direction"
+              className={radioClasses}
+              checked={value.direction === ''}
+              onChange={() => update({ direction: '' })}
+            />
+            All
+          </label>
+          <label className="inline-flex items-center gap-1.5">
+            <input
+              type="radio"
+              name="direction"
+              className={radioClasses}
+              checked={value.direction === 'bullish'}
+              onChange={() => update({ direction: 'bullish' })}
+            />
+            Bullish
+          </label>
+          <label className="inline-flex items-center gap-1.5">
+            <input
+              type="radio"
+              name="direction"
+              className={radioClasses}
+              checked={value.direction === 'bearish'}
+              onChange={() => update({ direction: 'bearish' })}
+            />
+            Bearish
+          </label>
+        </div>
       </fieldset>
 
-      <label>
+      <Label>
         Start date
-        <input
+        <Input
           type="date"
           value={value.startDate}
           onChange={(e) => update({ startDate: e.target.value })}
         />
-      </label>
+      </Label>
 
-      <label>
+      <Label>
         End date
-        <input
+        <Input
           type="date"
           value={value.endDate}
           onChange={(e) => update({ endDate: e.target.value })}
         />
-      </label>
+      </Label>
 
-      <label>
+      <Label>
         Sort
-        <select
+        <Select
           value={value.sort}
           onChange={(e) => update({ sort: e.target.value as SignalFilterState['sort'] })}
         >
           <option value="date_desc">Newest first</option>
           <option value="date_asc">Oldest first</option>
-        </select>
-      </label>
+        </Select>
+      </Label>
     </form>
   );
 }

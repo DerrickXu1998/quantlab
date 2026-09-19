@@ -38,6 +38,23 @@ describe('StatusStates', () => {
     expect(alert).toHaveTextContent(/start the stack and reload this page/i);
   });
 
+  it('keeps the stable identity hooks each state is addressed by after restyling', () => {
+    render(
+      <div>
+        <Loading />
+        <EmptyResults />
+        <BackendUnavailable message="boom" />
+      </div>,
+    );
+
+    // Restyle guard: styling may change freely, but these hooks are the contract
+    // SignalsPage, the test suite, and assistive tech address these states by.
+    expect(screen.getByRole('status')).toHaveClass('state', 'state-loading');
+    expect(screen.getByTestId('empty-results')).toHaveClass('state', 'state-empty');
+    expect(screen.getByTestId('backend-unavailable')).toHaveClass('state', 'state-error');
+    expect(screen.getByTestId('backend-unavailable')).toHaveAttribute('role', 'alert');
+  });
+
   it('keeps the backend error visually and semantically distinct from an empty list', () => {
     render(
       <div>

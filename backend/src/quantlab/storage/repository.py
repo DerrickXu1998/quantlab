@@ -241,3 +241,173 @@ def load_all_bars(conn: sqlite3.Connection) -> dict[str, list[Bar]]:
     for symbol, date, open_, high, low, close, volume in rows:
         bars_by_symbol.setdefault(symbol, []).append(Bar(date, open_, high, low, close, volume))
     return bars_by_symbol
+
+
+# ---------------------------------------------------------------------------
+# Experiment runs (feature 005)
+# ---------------------------------------------------------------------------
+
+
+def load_bars_for(
+    conn: sqlite3.Connection,
+    symbols: list[str],
+    start: str,
+    end: str,
+) -> dict[str, list[Bar]]:
+    """Bars for several symbols across one window.
+
+    Neither existing loader fits: ``load_all_bars`` loads the whole universe and
+    ``get_prices`` handles a single symbol. Callers pass the *warm-up* start,
+    not the user's requested start.
+    """
+    if not symbols:
+        return {}
+    placeholders = ",".join("?" for _ in symbols)
+    rows = conn.execute(
+        f"SELECT symbol, date, open, high, low, close, volume FROM price_bars "
+        f"WHERE symbol IN ({placeholders}) AND date >= ? AND date <= ? "
+        f"ORDER BY symbol, date",
+        [*symbols, start, end],
+    ).fetchall()
+    out: dict[str, list[Bar]] = {}
+    for symbol, date, open_, high, low, close, volume in rows:
+        out.setdefault(symbol, []).append(Bar(date, open_, high, low, close, volume))
+    return out
+
+
+def earliest_bar_dates(conn: sqlite3.Connection, symbols: list[str]) -> dict[str, str]:
+    """First available bar date per symbol, used to report warm-up coverage."""
+    if not symbols:
+        return {}
+    placeholders = ",".join("?" for _ in symbols)
+    rows = conn.execute(
+        f"SELECT symbol, MIN(date) FROM price_bars WHERE symbol IN ({placeholders}) "
+        f"GROUP BY symbol",
+        list(symbols),
+    ).fetchall()
+    return {symbol: first for symbol, first in rows}
+
+
+def _run_to_dict(row: tuple) -> dict:
+    (
+        run_id, name, model_name, model_version, parameters, symbols, start_date,
+        end_date, status, error, created_at, signal_count, requested, with_data,
+        full_warmup,
+    ) = row
+    return {
+        "id": run_id,
+        "name": name,
+        "model_name": model_name,
+        "model_version": model_version,
+        "parameters": json.loads(parameters),
+        "symbols": json.loads(symbols),
+        "start_date": start_date,
+        "end_date": end_date,
+        "status": status,
+        "error": error,
+        "created_at": created_at,
+        "signal_count": signal_count,
+        "coverage": {
+            "instruments_requested": requested,
+            "instruments_with_data": with_data,
+            "instruments_full_warmup": full_warmup,
+        },
+    }
+
+
+_RUN_COLUMNS = (
+    "id, name, model_name, model_version, parameters, symbols, start_date, end_date, "
+    "status, error, created_at, signal_count, instruments_requested, "
+    "instruments_with_data, instruments_full_warmup"
+)
+
+
+def save_run(conn: sqlite3.Connection, result) -> None:
+    """Persist a run and its signals. Does NOT commit."""
+    conn.execute(
+        f"INSERT INTO experiment_runs ({_RUN_COLUMNS}) "
+        f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            result.id,
+            result.name,
+            result.model_name,
+            result.model_version,
+            canonical_json(result.parameters),
+            canonical_json(result.symbols),
+            result.start_date,
+            result.end_date,
+            result.status,
+            result.error,
+            result.created_at,
+            result.signal_count,
+            result.coverage.instruments_requested,
+            result.coverage.instruments_with_data,
+            result.coverage.instruments_full_warmup,
+        ),
+    )
+    conn.executemany(
+        "INSERT INTO experiment_signals "
+        "(run_id, symbol, date, direction, trigger_values, data_window_end) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (
+                result.id,
+                s.symbol,
+                s.date,
+                s.direction,
+                canonical_json(s.trigger_values),
+                s.data_window_end,
+            )
+            for s in result.signals
+        ],
+    )
+
+
+def get_run(conn: sqlite3.Connection, run_id: str) -> dict | None:
+    row = conn.execute(
+        f"SELECT {_RUN_COLUMNS} FROM experiment_runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    return _run_to_dict(row) if row else None
+
+
+def get_run_signals(conn: sqlite3.Connection, run_id: str) -> list[dict]:
+    rows = conn.execute(
+        "SELECT symbol, date, direction, trigger_values, data_window_end "
+        "FROM experiment_signals WHERE run_id = ? ORDER BY symbol, date",
+        (run_id,),
+    ).fetchall()
+    return [
+        {
+            "symbol": symbol,
+            "date": date,
+            "direction": direction,
+            "trigger_values": json.loads(trigger_values),
+            "data_window_end": data_window_end,
+        }
+        for symbol, date, direction, trigger_values, data_window_end in rows
+    ]
+
+
+def list_runs(conn: sqlite3.Connection, saved_only: bool = False) -> dict:
+    where = "WHERE name IS NOT NULL" if saved_only else ""
+    rows = conn.execute(
+        f"SELECT {_RUN_COLUMNS} FROM experiment_runs {where} "
+        f"ORDER BY created_at DESC, id DESC"
+    ).fetchall()
+    return {"total": len(rows), "items": [_run_to_dict(row) for row in rows]}
+
+
+def set_run_name(conn: sqlite3.Connection, run_id: str, name: str) -> bool:
+    cursor = conn.execute(
+        "UPDATE experiment_runs SET name = ? WHERE id = ?", (name, run_id)
+    )
+    return cursor.rowcount > 0
+
+
+def delete_run(conn: sqlite3.Connection, run_id: str) -> bool:
+    """Delete a run and its signals together. Does NOT commit."""
+    # Explicit child delete: SQLite enforces ON DELETE CASCADE only when
+    # foreign_keys pragma is on, which is not guaranteed for every connection.
+    conn.execute("DELETE FROM experiment_signals WHERE run_id = ?", (run_id,))
+    cursor = conn.execute("DELETE FROM experiment_runs WHERE id = ?", (run_id,))
+    return cursor.rowcount > 0

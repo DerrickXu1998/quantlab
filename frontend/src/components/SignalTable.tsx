@@ -1,5 +1,8 @@
 import type { Signal } from '../api/client';
 import { EmptyResults } from './StatusStates';
+import { Button } from './ui/button';
+import { CardHeader, CardTitle } from './ui/card';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 
 interface SignalTableProps {
   signals: Signal[];
@@ -17,6 +20,11 @@ function formatTriggerValues(values: Record<string, unknown>): string {
     .join(', ');
 }
 
+const DIRECTION_BADGE: Record<string, string> = {
+  bullish: 'bg-success/15 text-success',
+  bearish: 'bg-destructive/15 text-destructive',
+};
+
 export function SignalTable({
   signals,
   total,
@@ -29,62 +37,87 @@ export function SignalTable({
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
   return (
-    <section className="signal-table">
-      <header className="signal-table-header">
-        <h2>
+    <section className="signal-table overflow-hidden rounded-lg border border-border bg-card text-card-foreground">
+      <CardHeader className="signal-table-header border-b border-border">
+        <CardTitle>
           <span data-testid="signal-count">{total}</span> signal{total === 1 ? '' : 's'}
-        </h2>
-      </header>
+        </CardTitle>
+      </CardHeader>
 
       {signals.length === 0 ? (
-        <EmptyResults />
+        <div className="p-4">
+          <EmptyResults />
+        </div>
       ) : (
         <>
-          <table>
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Date</th>
-                <th>Rule</th>
-                <th>Direction</th>
-                <th>Trigger values</th>
-              </tr>
-            </thead>
-            <tbody>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Symbol</TableHead>
+                <TableHead>Date</TableHead>
+                <TableHead>Rule</TableHead>
+                <TableHead>Direction</TableHead>
+                <TableHead>Trigger values</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {signals.map((signal) => (
-                <tr
+                <TableRow
                   key={signal.id}
-                  className={signal.id === selectedId ? 'selected' : undefined}
+                  className={
+                    signal.id === selectedId
+                      ? 'selected cursor-pointer bg-accent'
+                      : 'cursor-pointer hover:bg-accent/50'
+                  }
                   onClick={() => onSelect(signal)}
                 >
-                  <td>{signal.symbol}</td>
-                  <td>{signal.date}</td>
-                  <td>
+                  <TableCell className="font-medium">{signal.symbol}</TableCell>
+                  <TableCell className="tabular-nums">{signal.date}</TableCell>
+                  <TableCell>
                     {signal.rule_name} v{signal.rule_version}
-                  </td>
-                  <td>
-                    <span className={`badge badge-${signal.direction}`}>{signal.direction}</span>
-                  </td>
-                  <td className="trigger-values">{formatTriggerValues(signal.trigger_values)}</td>
-                </tr>
+                  </TableCell>
+                  <TableCell>
+                    <span
+                      className={`badge badge-${signal.direction} inline-block rounded-full px-2 py-0.5 text-xs font-bold ${
+                        DIRECTION_BADGE[signal.direction] ?? 'bg-muted text-muted-foreground'
+                      }`}
+                    >
+                      {signal.direction}
+                    </span>
+                  </TableCell>
+                  <TableCell className="trigger-values font-mono text-xs text-muted-foreground">
+                    {formatTriggerValues(signal.trigger_values)}
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
 
-          <nav className="pagination" aria-label="Pagination">
-            <button type="button" disabled={page <= 0} onClick={() => onPageChange(page - 1)}>
+          <nav
+            className="pagination flex items-center gap-4 border-t border-border px-4 py-3 text-sm"
+            aria-label="Pagination"
+          >
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={page <= 0}
+              onClick={() => onPageChange(page - 1)}
+            >
               Previous
-            </button>
-            <span>
+            </Button>
+            <span className="text-muted-foreground">
               Page {page + 1} of {pageCount}
             </span>
-            <button
+            <Button
               type="button"
+              variant="outline"
+              size="sm"
               disabled={page >= pageCount - 1}
               onClick={() => onPageChange(page + 1)}
             >
               Next
-            </button>
+            </Button>
           </nav>
         </>
       )}

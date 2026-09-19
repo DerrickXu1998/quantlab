@@ -75,6 +75,68 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Catalog of registered signal models, discovered at runtime
+         * @description Enumerates every model currently registered in the backend plugin registry, with its declared parameter metadata (Constitution II). Registering a model MUST make it appear here with no change to this document's consumers.
+         */
+        get: operations["listModels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List recorded runs, newest first */
+        get: operations["listRuns"];
+        put?: never;
+        /**
+         * Run a model over a dataset selection
+         * @description Validates the requested parameters against the model's declared metadata, resolves a warm-up window of the model's lookback_days before start_date, executes, and returns the completed run. Signals dated outside [start_date, end_date] are computed for warm-up but not reported. Execution is synchronous; see research.md for the scaling boundary this implies.
+         */
+        post: operations["createRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        /** One run with its provenance, summary, and produced signals */
+        get: operations["getRun"];
+        put?: never;
+        post?: never;
+        /** Delete a run and the signals it produced */
+        delete: operations["deleteRun"];
+        options?: never;
+        head?: never;
+        /** Name a run to keep it as a saved experiment */
+        patch: operations["saveRun"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -161,6 +223,104 @@ export interface components {
         };
         Error: {
             detail: string;
+        };
+        ParamSpec: {
+            name: string;
+            /** @enum {string} */
+            type: "int" | "float" | "bool" | "enum";
+            default: unknown;
+            /** @description Inclusive lower bound; numeric types only. */
+            minimum?: number | null;
+            /** @description Inclusive upper bound; numeric types only. */
+            maximum?: number | null;
+            /** @description Permitted values; required when type is enum. */
+            choices?: unknown[] | null;
+            description?: string;
+        };
+        Model: {
+            /** @example sma-crossover */
+            name: string;
+            /** @example 1.0.0 */
+            version: string;
+            parameters: components["schemas"]["ParamSpec"][];
+            /** @description Bars of history the model needs before it can emit. */
+            lookback_days: number;
+            /** @enum {string} */
+            scale_class: "scale_free" | "price_scaled";
+            direction_semantics: string;
+        };
+        ModelList: {
+            total: number;
+            items: components["schemas"]["Model"][];
+        };
+        RunRequest: {
+            model_name: string;
+            /** @description Omit to use the highest registered version. */
+            model_version?: string;
+            /** @description Overrides only. Omitted parameters take the model's declared default; the merged result is recorded as the run's effective parameters. */
+            parameters?: {
+                [key: string]: unknown;
+            };
+            symbols: string[];
+            /** Format: date */
+            start_date: string;
+            /** Format: date */
+            end_date: string;
+        };
+        RunCoverage: {
+            instruments_requested: number;
+            /** @description How many requested instruments had bars in the window. */
+            instruments_with_data: number;
+            /** @description How many had the model's full lookback before start_date. The remainder may under-report early in the window. */
+            instruments_full_warmup: number;
+        };
+        Run: {
+            id: string;
+            /** @description Set when saved as a named experiment; null otherwise. */
+            name?: string | null;
+            model_name: string;
+            model_version: string;
+            /** @description Effective parameters (declared defaults merged with overrides). */
+            parameters: {
+                [key: string]: unknown;
+            };
+            symbols: string[];
+            /** Format: date */
+            start_date: string;
+            /** Format: date */
+            end_date: string;
+            /** @enum {string} */
+            status: "completed" | "failed";
+            /** @description Present when status is failed. */
+            error?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** @description Zero is a valid result, not a failure. */
+            signal_count: number;
+            coverage: components["schemas"]["RunCoverage"];
+            /** @description False when the recorded model/version is no longer registered; the run stays readable but is not re-runnable. */
+            model_available?: boolean;
+        };
+        RunList: {
+            total: number;
+            items: components["schemas"]["Run"][];
+        };
+        ExperimentSignal: {
+            symbol: string;
+            /** Format: date */
+            date: string;
+            direction: components["schemas"]["Direction"];
+            trigger_values: {
+                [key: string]: unknown;
+            };
+            /**
+             * Format: date
+             * @description Latest bar date used as input; always <= date (point-in-time proof, Constitution VII).
+             */
+            data_window_end: string;
+        };
+        RunDetail: components["schemas"]["Run"] & {
+            signals: components["schemas"]["ExperimentSignal"][];
         };
     };
     responses: never;
@@ -275,6 +435,188 @@ export interface operations {
             };
             /** @description Invalid filter combination (e.g. start_date after end_date) */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listModels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registered models */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelList"];
+                };
+            };
+        };
+    };
+    listRuns: {
+        parameters: {
+            query?: {
+                /** @description When true, return only runs saved with a name. */
+                saved_only?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recorded runs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunList"];
+                };
+            };
+        };
+    };
+    createRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunRequest"];
+            };
+        };
+        responses: {
+            /** @description Run completed (a run producing zero signals is a success) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Unknown model, or an unknown symbol in the selection */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Parameter outside its declared range, window shorter than the model's lookback, start_date after end_date, or a selection larger than the permitted bound. The offending field is named. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The run */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunDetail"];
+                };
+            };
+            /** @description Unknown run */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    deleteRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown run */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    saveRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Updated run */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Unknown run */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

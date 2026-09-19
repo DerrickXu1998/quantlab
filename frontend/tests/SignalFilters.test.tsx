@@ -10,6 +10,9 @@ function renderFilters(overrides: Partial<Parameters<typeof SignalFilters>[0]> =
       makeInstrument(),
       makeInstrument({ symbol: 'ZZMEAN', name: 'Zeno Mean Reversion Co (synthetic)' }),
     ],
+    // Supplied by the caller (the panel sources these from the model catalog)
+    // rather than hardcoded inside the component.
+    ruleNames: ['sma-crossover', 'rsi-threshold', 'breakout-20d'],
     value: { ...EMPTY_FILTERS },
     onChange: vi.fn(),
     ...overrides,

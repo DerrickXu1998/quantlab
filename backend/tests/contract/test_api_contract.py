@@ -35,7 +35,7 @@ def _resolve_contract_path() -> Path:
         backend_dir.parent
         / "quantlab_specs"
         / "specs"
-        / "002-signal-viewer-demo"
+        / "005-signal-research-workbench"
         / "contracts"
         / "openapi.yaml"
     )

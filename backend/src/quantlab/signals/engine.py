@@ -28,22 +28,37 @@ class ComputedSignal:
 def compute_signals(
     bars_by_symbol: dict[str, list[Any]],
     rules: list[SignalRule] | None = None,
+    overrides: dict[str, Any] | None = None,
 ) -> list[ComputedSignal]:
+    """Run ``rules`` over the supplied bars.
+
+    ``overrides`` replaces declared parameter defaults for this call. The
+    *effective* parameters (defaults merged with overrides) are what get
+    recorded on each signal — recording the bare defaults while executing
+    overrides would make the record unreproducible (Constitution VI).
+    """
     rules = list(rules) if rules is not None else list_rules()
+    # Resolved once per rule so an unknown override key fails immediately,
+    # rather than after part of the universe has already been processed.
+    effective_by_rule = {
+        (rule.name, rule.version): rule.effective_params(overrides) for rule in rules
+    }
+
     out: list[ComputedSignal] = []
     for symbol in sorted(bars_by_symbol):
         bars = bars_by_symbol[symbol]
         for rule in rules:
             if len(bars) < rule.lookback_days:
                 continue
-            for event in rule.compute(bars, **rule.params):
+            effective = effective_by_rule[(rule.name, rule.version)]
+            for event in rule.compute(bars, **effective):
                 out.append(
                     ComputedSignal(
                         symbol=symbol,
                         date=event.date,
                         rule_name=rule.name,
                         rule_version=rule.version,
-                        parameters=dict(rule.params),
+                        parameters=dict(effective),
                         direction=event.direction,
                         trigger_values=dict(event.trigger_values),
                         data_window_end=event.data_window_end,

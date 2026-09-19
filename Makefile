@@ -14,7 +14,7 @@ SERVICE ?= backend
 # The OpenAPI contract is authored once under quantlab_specs/. backend/contracts/
 # holds a copy only because the backend image's build context is backend/ and so
 # cannot reach outside it; `make check-contract` guards the two against drift.
-CONTRACT_SRC := quantlab_specs/specs/002-signal-viewer-demo/contracts/openapi.yaml
+CONTRACT_SRC := quantlab_specs/specs/005-signal-research-workbench/contracts/openapi.yaml
 CONTRACT_COPY := backend/contracts/openapi.yaml
 
 .PHONY: help up down build seed logs shell docker-shell test smoke hash dump-hash gen-api \
@@ -77,4 +77,4 @@ sync-contract: ## Refresh backend/contracts/openapi.yaml from the authored spec
 
 gen-api: ## Regenerate frontend/src/api/schema.d.ts from the OpenAPI contract (node runs in a container)
 	docker run --rm -v "$(CURDIR)":/work -w /work node:22 \
-		npx -y openapi-typescript quantlab_specs/specs/002-signal-viewer-demo/contracts/openapi.yaml -o frontend/src/api/schema.d.ts
+		npx -y openapi-typescript quantlab_specs/specs/005-signal-research-workbench/contracts/openapi.yaml -o frontend/src/api/schema.d.ts

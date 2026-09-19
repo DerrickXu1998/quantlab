@@ -63,9 +63,51 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+
+-- Experiment storage (feature 005). Deliberately separate from `signals`:
+-- that table is the Signal Viewer's source, and run output inserted there
+-- would appear in the viewer, silently mixing exploratory runs into the
+-- curated seeded set.
+CREATE TABLE IF NOT EXISTS experiment_runs (
+    id                       TEXT PRIMARY KEY,
+    name                     TEXT,
+    model_name               TEXT NOT NULL,
+    model_version            TEXT NOT NULL,
+    parameters               TEXT NOT NULL,
+    symbols                  TEXT NOT NULL,
+    start_date               TEXT NOT NULL,
+    end_date                 TEXT NOT NULL,
+    status                   TEXT NOT NULL CHECK (status IN ('completed', 'failed')),
+    error                    TEXT,
+    created_at               TEXT NOT NULL,
+    signal_count             INTEGER NOT NULL CHECK (signal_count >= 0),
+    instruments_requested    INTEGER NOT NULL CHECK (instruments_requested >= 1),
+    instruments_with_data    INTEGER NOT NULL CHECK (instruments_with_data >= 0),
+    instruments_full_warmup  INTEGER NOT NULL CHECK (instruments_full_warmup >= 0),
+    CHECK (start_date <= end_date),
+    CHECK ((status = 'failed') = (error IS NOT NULL))
+);
+
+CREATE TABLE IF NOT EXISTS experiment_signals (
+    run_id           TEXT NOT NULL REFERENCES experiment_runs (id) ON DELETE CASCADE,
+    symbol           TEXT NOT NULL REFERENCES instruments (symbol),
+    date             TEXT NOT NULL,
+    direction        TEXT NOT NULL CHECK (direction IN ('bullish', 'bearish')),
+    trigger_values   TEXT NOT NULL,
+    -- Same point-in-time proof the seeded `signals` table enforces
+    -- (Constitution VII): a signal may never be built from a later bar.
+    data_window_end  TEXT NOT NULL CHECK (data_window_end <= date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_experiment_signals_run
+    ON experiment_signals (run_id, symbol, date);
 """
 
 # Fixed table + ordering for the deterministic dump hash.
+#
+# Experiment tables are deliberately excluded: this hash proves the *seed* is
+# reproducible, and experiment data is user-generated. Including it would make
+# the determinism proof depend on whatever runs a user happened to execute.
 _DUMP_ORDER: tuple[tuple[str, str], ...] = (
     ("instruments", "symbol"),
     ("price_bars", "symbol, date"),

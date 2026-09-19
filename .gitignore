@@ -32,3 +32,6 @@ quantlab-data/
 .env*
 !.env.example
 .quantlab/*
+
+# Agent-managed git worktrees: a full nested checkout, never part of a commit.
+.claude/worktrees/

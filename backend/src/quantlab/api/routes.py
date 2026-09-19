@@ -12,6 +12,10 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
 from quantlab.api import schemas
+from quantlab.research import errors as research_errors
+from quantlab.research import runner
+from quantlab.signals import builtins as _builtins  # noqa: F401  (registers builtin rules)
+from quantlab.signals import registry as signal_registry
 from quantlab.storage import db, repository
 
 router = APIRouter()
@@ -120,3 +124,156 @@ def list_signals(
             limit=limit,
             offset=offset,
         )
+
+
+# --- Model catalog and experiment runs (feature 005) -----------------------
+#
+# Still thin handlers: execution lives in quantlab.research.runner so it stays
+# testable without HTTP (Constitution I). These map typed errors to statuses.
+
+
+def _model_to_schema(rule) -> dict:
+    return {
+        "name": rule.name,
+        "version": rule.version,
+        "parameters": [
+            {
+                "name": spec.name,
+                "type": spec.type,
+                "default": spec.default,
+                "minimum": spec.minimum,
+                "maximum": spec.maximum,
+                "choices": spec.choices,
+                "description": spec.description,
+            }
+            for spec in rule.param_specs.values()
+        ],
+        "lookback_days": rule.lookback_days,
+        "scale_class": rule.scale_class,
+        "direction_semantics": rule.direction_semantics,
+    }
+
+
+@router.get(
+    "/models",
+    response_model=schemas.ModelList,
+    tags=["models"],
+    operation_id="listModels",
+)
+def list_models() -> dict:
+    """Assembled from the registry at request time, so registering a model
+    changes this response with no code change (Constitution II)."""
+    rules = signal_registry.list_rules()
+    return {"total": len(rules), "items": [_model_to_schema(rule) for rule in rules]}
+
+
+def _is_registered(model_name: str, model_version: str) -> bool:
+    try:
+        signal_registry.get_rule(model_name, model_version)
+    except KeyError:
+        return False
+    return True
+
+
+def _run_response(run: dict) -> dict:
+    run = dict(run)
+    run["model_available"] = _is_registered(run["model_name"], run["model_version"])
+    return run
+
+
+@router.post(
+    "/runs",
+    response_model=schemas.Run,
+    status_code=201,
+    tags=["runs"],
+    operation_id="createRun",
+    dependencies=[Depends(require_seeded)],
+)
+def create_run(request: Request, body: schemas.RunRequest) -> dict:
+    with db.connect(request.app.state.db_path) as conn:
+        try:
+            result = runner.run_experiment(
+                conn,
+                model_name=body.model_name,
+                model_version=body.model_version,
+                overrides=body.parameters,
+                symbols=body.symbols,
+                start_date=body.start_date,
+                end_date=body.end_date,
+            )
+        except research_errors.UnknownModelError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except research_errors.UnknownSymbolError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except research_errors.ParameterValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except (
+            research_errors.InvalidWindowError,
+            research_errors.WindowTooShortError,
+            research_errors.SelectionTooLargeError,
+        ) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        repository.save_run(conn, result)
+        conn.commit()
+        stored = repository.get_run(conn, result.id)
+    return _run_response(stored)
+
+
+@router.get(
+    "/runs",
+    response_model=schemas.RunList,
+    tags=["runs"],
+    operation_id="listRuns",
+    dependencies=[Depends(require_seeded)],
+)
+def list_runs(request: Request, saved_only: bool = False) -> dict:
+    with db.connect(request.app.state.db_path) as conn:
+        result = repository.list_runs(conn, saved_only=saved_only)
+    return {"total": result["total"], "items": [_run_response(r) for r in result["items"]]}
+
+
+@router.get(
+    "/runs/{run_id}",
+    response_model=schemas.RunDetail,
+    tags=["runs"],
+    operation_id="getRun",
+    dependencies=[Depends(require_seeded)],
+)
+def get_run(request: Request, run_id: str) -> dict:
+    with db.connect(request.app.state.db_path) as conn:
+        run = repository.get_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
+        signals = repository.get_run_signals(conn, run_id)
+    return {**_run_response(run), "signals": signals}
+
+
+@router.patch(
+    "/runs/{run_id}",
+    response_model=schemas.Run,
+    tags=["runs"],
+    operation_id="saveRun",
+    dependencies=[Depends(require_seeded)],
+)
+def save_run(request: Request, run_id: str, body: schemas.RunNameRequest) -> dict:
+    with db.connect(request.app.state.db_path) as conn:
+        if not repository.set_run_name(conn, run_id, body.name):
+            raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
+        conn.commit()
+        run = repository.get_run(conn, run_id)
+    return _run_response(run)
+
+
+@router.delete(
+    "/runs/{run_id}",
+    status_code=204,
+    tags=["runs"],
+    operation_id="deleteRun",
+    dependencies=[Depends(require_seeded)],
+)
+def delete_run(request: Request, run_id: str) -> None:
+    with db.connect(request.app.state.db_path) as conn:
+        if not repository.delete_run(conn, run_id):
+            raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
+        conn.commit()
