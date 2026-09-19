@@ -1,9 +1,0 @@
-{
-  "ai": "kimi",
-  "ai_skills": true,
-  "feature_numbering": "sequential",
-  "here": false,
-  "integration": "kimi",
-  "script": "sh",
-  "speckit_version": "1.0.9.dev0"
-}
