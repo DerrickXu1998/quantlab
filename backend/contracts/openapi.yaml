@@ -1,19 +1,20 @@
 openapi: 3.1.0
 info:
   title: QuantLab Signal Viewer API
-  version: 0.2.0
+  version: 0.3.0
   description: >
     Typed API boundary for the QuantLab demo. This document is the authored
     single source of truth (Constitution V): the FastAPI app is validated
     against it by a contract test, and the TypeScript client is generated from
     it with openapi-typescript. All computation happens in the backend.
 
-    Supersedes specs/002-signal-viewer-demo/contracts/openapi.yaml as the
-    authored home, carrying every existing path forward unchanged and adding
-    the model catalog and experiment-run paths for feature
-    005-signal-research-workbench. Read paths remain read-only; running a model
-    is the one state-changing operation, and it writes only to experiment
-    storage, never to the seeded signal set.
+    Supersedes specs/005-signal-research-workbench/contracts/openapi.yaml as
+    the authored home, carrying every existing path forward and adding dataset
+    provenance for feature 006-warehouse-experiments. The same paths serve
+    either the synthetic demo dataset or real ingested history; handlers do not
+    branch on which, and every run records which one produced it. Running a
+    model remains the one state-changing operation, and it writes only to
+    experiment storage -- never to a curated or materialised signal set.
 servers:
   - url: /api/v1
 tags:
@@ -61,7 +62,7 @@ paths:
           required: true
           schema:
             type: string
-            pattern: "^[A-Z0-9][A-Z0-9._\\-]{0,19}$"
+            pattern: "^[A-Z]{2,8}$"
         - name: start_date
           in: query
           required: false
@@ -103,7 +104,7 @@ paths:
           required: false
           schema:
             type: string
-            pattern: "^[A-Z0-9][A-Z0-9._\\-]{0,19}$"
+            pattern: "^[A-Z]{2,8}$"
         - name: signal_type
           in: query
           required: false
@@ -311,13 +312,49 @@ paths:
 
 components:
   schemas:
+    Dataset:
+      type: string
+      enum: [sqlite, warehouse]
+      description: >
+        Which store answered. `sqlite` is the synthetic demo dataset;
+        `warehouse` is real ingested history. Two runs from different datasets
+        are never directly comparable.
+
+    CorporateActionNotice:
+      type: object
+      additionalProperties: false
+      required: [instrument_id, symbol, ex_date, action_type]
+      description: >
+        A split or dividend inside a run's window. Reported, never applied:
+        stored bars are unadjusted, so a split makes the price series jump in a
+        way that is an artefact rather than a market move.
+      properties:
+        instrument_id:
+          type: integer
+        symbol:
+          type: string
+        ex_date:
+          type: string
+          format: date
+        action_type:
+          type: string
+          enum: [split, dividend]
+        split_ratio:
+          type: number
+          nullable: true
+        dividend:
+          type: number
+          nullable: true
+
     Health:
       type: object
-      required: [status, seeded, signal_count]
+      required: [status, dataset, seeded, signal_count]
       properties:
         status:
           type: string
           enum: [ok]
+        dataset:
+          $ref: "#/components/schemas/Dataset"
         seeded:
           type: boolean
           description: True once the seed step has completed
@@ -331,7 +368,7 @@ components:
 
     Instrument:
       type: object
-      required: [symbol, name, currency]
+      required: [symbol, name, currency, regime_profile]
       properties:
         symbol:
           type: string
@@ -343,12 +380,8 @@ components:
           type: string
           example: USD
         regime_profile:
-          type: [string, "null"]
-          enum: [trending, mean_reverting, volatile, mixed, null]
-          description: >-
-            Synthetic demo dataset only. Generated instruments follow a known
-            regime, which is what makes the demo assertable. Real ingested
-            instruments carry no such label and report null.
+          type: string
+          enum: [trending, mean_reverting, volatile, mixed]
 
     InstrumentList:
       type: object
@@ -585,6 +618,7 @@ components:
         - created_at
         - signal_count
         - coverage
+        - dataset
       properties:
         id:
           type: string
@@ -626,6 +660,39 @@ components:
           description: Zero is a valid result, not a failure.
         coverage:
           $ref: "#/components/schemas/RunCoverage"
+        dataset:
+          $ref: "#/components/schemas/Dataset"
+        instrument_ids:
+          type: array
+          nullable: true
+          items:
+            type: integer
+          description: >
+            Surrogate instrument identities actually run against. Present for
+            warehouse runs, null on the demo. Recorded because the canonical
+            symbol is unique but editable, while instrument_id is the stable
+            key the bar store joins on.
+        ingest_run_ids:
+          type: array
+          nullable: true
+          items:
+            type: integer
+          description: >
+            The ingest runs behind the bars this run read. This is what makes a
+            later re-ingest of the same window distinguishable from the
+            original run, when every input the researcher chose is identical.
+        corporate_actions:
+          type: array
+          items:
+            $ref: "#/components/schemas/CorporateActionNotice"
+          description: >
+            Actions overlapping the window for the selected instruments. Empty
+            on the demo dataset, which has none.
+        re_runnable:
+          type: boolean
+          description: >
+            False when the run's recorded dataset is not the active one. The
+            run stays readable; it simply cannot be reproduced as recorded.
         model_available:
           type: boolean
           description: >

@@ -141,9 +141,26 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description Which store answered. `sqlite` is the synthetic demo dataset; `warehouse` is real ingested history. Two runs from different datasets are never directly comparable.
+         * @enum {string}
+         */
+        Dataset: "sqlite" | "warehouse";
+        /** @description A split or dividend inside a run's window. Reported, never applied: stored bars are unadjusted, so a split makes the price series jump in a way that is an artefact rather than a market move. */
+        CorporateActionNotice: {
+            instrument_id: number;
+            symbol: string;
+            /** Format: date */
+            ex_date: string;
+            /** @enum {string} */
+            action_type: "split" | "dividend";
+            split_ratio?: number | null;
+            dividend?: number | null;
+        };
         Health: {
             /** @enum {string} */
             status: "ok";
+            dataset: components["schemas"]["Dataset"];
             /** @description True once the seed step has completed */
             seeded: boolean;
             signal_count: number;
@@ -298,6 +315,15 @@ export interface components {
             /** @description Zero is a valid result, not a failure. */
             signal_count: number;
             coverage: components["schemas"]["RunCoverage"];
+            dataset: components["schemas"]["Dataset"];
+            /** @description Surrogate instrument identities actually run against. Present for warehouse runs, null on the demo. Recorded because the canonical symbol is unique but editable, while instrument_id is the stable key the bar store joins on. */
+            instrument_ids?: number[] | null;
+            /** @description The ingest runs behind the bars this run read. This is what makes a later re-ingest of the same window distinguishable from the original run, when every input the researcher chose is identical. */
+            ingest_run_ids?: number[] | null;
+            /** @description Actions overlapping the window for the selected instruments. Empty on the demo dataset, which has none. */
+            corporate_actions?: components["schemas"]["CorporateActionNotice"][];
+            /** @description False when the run's recorded dataset is not the active one. The run stays readable; it simply cannot be reproduced as recorded. */
+            re_runnable?: boolean;
             /** @description False when the recorded model/version is no longer registered; the run stays readable but is not re-runnable. */
             model_available?: boolean;
         };

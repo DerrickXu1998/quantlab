@@ -7,8 +7,14 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 
+Dataset = Literal["sqlite", "warehouse"]
+"""Which store answered. Two runs from different datasets are never directly
+comparable, however identical their configuration."""
+
+
 class Health(BaseModel):
     status: Literal["ok"] = "ok"
+    dataset: Dataset
     seeded: bool
     signal_count: int
 
@@ -103,6 +109,19 @@ class RunRequest(BaseModel):
     end_date: str
 
 
+class CorporateActionNotice(BaseModel):
+    """A split or dividend inside a run's window. Reported, never applied:
+    stored bars are unadjusted, so a split makes the series jump in a way that
+    is an artefact rather than a market move."""
+
+    instrument_id: int
+    symbol: str
+    ex_date: str
+    action_type: Literal["split", "dividend"]
+    split_ratio: float | None = None
+    dividend: float | None = None
+
+
 class RunCoverage(BaseModel):
     instruments_requested: int
     instruments_with_data: int
@@ -123,6 +142,11 @@ class Run(BaseModel):
     created_at: str
     signal_count: int
     coverage: RunCoverage
+    dataset: Dataset
+    instrument_ids: list[int] | None = None
+    ingest_run_ids: list[int] | None = None
+    corporate_actions: list[CorporateActionNotice] = []
+    re_runnable: bool = True
     model_available: bool = True
 
 

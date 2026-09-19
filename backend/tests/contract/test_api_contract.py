@@ -35,7 +35,7 @@ def _resolve_contract_path() -> Path:
         backend_dir.parent
         / "quantlab_specs"
         / "specs"
-        / "005-signal-research-workbench"
+        / "006-warehouse-experiments"
         / "contracts"
         / "openapi.yaml"
     )
@@ -256,7 +256,14 @@ def test_unseeded_database_returns_503_except_health(tmp_path):
     with TestClient(create_app(str(empty_db))) as client:
         health = client.get("/api/v1/health")
         assert health.status_code == 200
-        assert health.json() == {"status": "ok", "seeded": False, "signal_count": 0}
+        # dataset is reported even when unseeded: "which store" and "has it
+        # got data" are different questions.
+        assert health.json() == {
+            "status": "ok",
+            "dataset": "sqlite",
+            "seeded": False,
+            "signal_count": 0,
+        }
         for path in ("/api/v1/instruments", "/api/v1/instruments/ZZTRND/prices", "/api/v1/signals"):
             response = client.get(path)
             assert response.status_code == 503, path

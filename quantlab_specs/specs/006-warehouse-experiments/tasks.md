@@ -40,24 +40,24 @@ Principle VII requires the look-ahead sweep to keep passing over the new data pa
 **Purpose**: Land the warehouse architecture on `main` and move the authored contract forward,
 without breaking anything that works today.
 
-- [ ] T001 Merge `worktree-pg-historical-store` into `main`, resolving the sole conflict in
+- [X] T001 Merge `worktree-pg-historical-store` into `main`, resolving the sole conflict in
       `backend/src/quantlab/api/routes.py` by **keeping both** sets of handlers: the warehouse
       branch's seam-based instrument/price/signal routes, and feature 005's workbench routes
       unchanged. The workbench is temporarily demo-only; Phase 2 ports it onto the seam. Resolving
       the conflict this way is what keeps every commit in this sequence working.
-- [ ] T002 Run `pytest` in `backend/` and `npm test` in `frontend/` and confirm the post-merge tree
+- [X] T002 Run `pytest` in `backend/` and `npm test` in `frontend/` and confirm the post-merge tree
       is green before any further change (depends on: T001).
-- [ ] T003 [P] Copy the authored contract forward to
+- [X] T003 [P] Copy the authored contract forward to
       `quantlab_specs/specs/006-warehouse-experiments/contracts/openapi.yaml` as the live document and
       re-point every consumer: `CONTRACT_SRC` and `gen-api` in `Makefile`, the `gen:api`/`codegen`
       scripts in `frontend/package.json`, and the contract-path resolver in
       `backend/tests/contract/test_api_contract.py` **and** `test_workbench_contract.py` â€” both
       hardcode a feature directory, and a stale one silently validates the wrong document.
-- [ ] T004 Run `make sync-contract` then `make check-contract` and confirm the guard passes against
+- [X] T004 Run `make sync-contract` then `make check-contract` and confirm the guard passes against
       the new source (depends on: T003).
-- [ ] T005 Regenerate `frontend/src/api/schema.d.ts` via `npm run gen:api` and confirm it contains
+- [X] T005 Regenerate `frontend/src/api/schema.d.ts` via `npm run gen:api` and confirm it contains
       `Dataset` and `CorporateActionNotice` (depends on: T003).
-- [ ] T006 [P] Ensure the backend image installs the store extras (`psycopg`, `clickhouse-connect`)
+- [X] T006 [P] Ensure the backend image installs the store extras (`psycopg`, `clickhouse-connect`)
       in `backend/pyproject.toml` / `backend/Dockerfile`, so the warehouse path is runnable in the
       container while remaining optional at import time.
 
@@ -192,7 +192,7 @@ confirm the application starts and serves without any database being reachable â
 
 ### Implementation for User Story 2
 
-- [ ] T030 [US2] Add the active dataset to the health response in
+- [X] T030 [US2] Add the active dataset to the health response in
       `backend/src/quantlab/api/routes.py` and `schemas.py`, sourced from the bound backend's `name`
       (depends on: T028 failing first).
 - [ ] T031 [US2] Report a configured-but-unreachable warehouse distinctly at startup and in health in

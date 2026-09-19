@@ -46,8 +46,11 @@ def require_seeded(request: Request) -> None:
     operation_id="getHealth",
 )
 def get_health(request: Request) -> schemas.Health:
-    has_data, signal_count = backend(request).health()
-    return schemas.Health(seeded=has_data, signal_count=signal_count)
+    active = backend(request)
+    has_data, signal_count = active.health()
+    return schemas.Health(
+        dataset=active.name, seeded=has_data, signal_count=signal_count
+    )
 
 
 @router.get(
@@ -168,9 +171,13 @@ def _is_registered(model_name: str, model_version: str) -> bool:
     return True
 
 
-def _run_response(run: dict) -> dict:
+def _run_response(run: dict, dataset: str = "sqlite") -> dict:
     run = dict(run)
     run["model_available"] = _is_registered(run["model_name"], run["model_version"])
+    run.setdefault("dataset", dataset)
+    # A run recorded against a different dataset stays readable but cannot be
+    # reproduced as recorded.
+    run["re_runnable"] = run["dataset"] == dataset
     return run
 
 
@@ -210,7 +217,7 @@ def create_run(request: Request, body: schemas.RunRequest) -> dict:
         repository.save_run(conn, result)
         conn.commit()
         stored = repository.get_run(conn, result.id)
-    return _run_response(stored)
+    return _run_response(stored, backend(request).name)
 
 
 @router.get(
@@ -223,7 +230,8 @@ def create_run(request: Request, body: schemas.RunRequest) -> dict:
 def list_runs(request: Request, saved_only: bool = False) -> dict:
     with db.connect(request.app.state.db_path) as conn:
         result = repository.list_runs(conn, saved_only=saved_only)
-    return {"total": result["total"], "items": [_run_response(r) for r in result["items"]]}
+    active = backend(request).name
+    return {"total": result["total"], "items": [_run_response(r, active) for r in result["items"]]}
 
 
 @router.get(
@@ -239,7 +247,7 @@ def get_run(request: Request, run_id: str) -> dict:
         if run is None:
             raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
         signals = repository.get_run_signals(conn, run_id)
-    return {**_run_response(run), "signals": signals}
+    return {**_run_response(run, backend(request).name), "signals": signals}
 
 
 @router.patch(
@@ -255,7 +263,7 @@ def save_run(request: Request, run_id: str, body: schemas.RunNameRequest) -> dic
             raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
         conn.commit()
         run = repository.get_run(conn, run_id)
-    return _run_response(run)
+    return _run_response(run, backend(request).name)
 
 
 @router.delete(
