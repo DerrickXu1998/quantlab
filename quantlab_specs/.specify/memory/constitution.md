@@ -120,6 +120,39 @@ look-ahead, and it runs in the standard test suite.
 Rationale: Look-ahead bias is the most common and most expensive class of error in quantitative
 research; it produces backtests that cannot be traded.
 
+## Repository Structure (NON-NEGOTIABLE)
+
+`quantlab_specs/` is the specification workspace and MUST contain no code. It holds exactly
+the Spec Kit toolchain (`.specify/`) and the numbered feature specifications (`specs/`).
+Source files, tests, build manifests, Dockerfiles, and dependency lockfiles MUST NOT be added
+under it. Artifacts that a spec legitimately owns — OpenAPI documents, JSON Schemas, fixture
+data referenced by the spec — are contracts, not code, and belong in the feature's
+`contracts/` directory.
+
+Runnable code lives at the repository root: the `quantlab` library in `src/` with its `tests/`,
+and the demo application in `backend/` and `frontend/` with its `Makefile`,
+`docker-compose.yml`, and `scripts/`.
+
+There MUST be exactly one Spec Kit installation in the repository. `.specify/` exists only
+inside `quantlab_specs/`, which makes that directory the Spec Kit project root, so
+`create-new-feature.sh` resolves `$REPO_ROOT/specs` to `quantlab_specs/specs`. A second
+`.specify/` elsewhere in the tree silently splits feature numbering and gives the project two
+divergent constitutions; this is forbidden.
+
+Every artifact has exactly one authored home, and a duplicate that a build constraint forces
+MUST be generated from that home and guarded against drift by an automated check, never
+hand-maintained. The OpenAPI contract is the worked example: it is authored once under the
+feature's `contracts/` directory, and the copy inside `backend/contracts/` — which exists only
+because the backend image's Docker build context is `backend/` and cannot reach outside it —
+is refreshed by `make sync-contract` and verified by `make check-contract`, which runs as part
+of `make test`.
+
+Rationale: specifications and implementations have different review rules, different change
+cadences, and different audiences; mixing them invites edits to a spec that are really code
+changes in disguise. Nested scaffolding is worse than redundant — duplicated Spec Kit roots and
+duplicated constitutions diverge silently, and a hand-copied contract drifts from the document
+it is supposed to certify.
+
 ## Technology Stack & Data Policy
 
 - Backend: Python (analytics, ingestion, indicator engine, API). The package is runnable and
@@ -147,7 +180,7 @@ research; it produces backtests that cannot be traded.
 - Code review MUST verify: plugin contract conformance for indicators (including scale class
   and publication lag declarations), adapter isolation and rate-limit handling for data
   sources, GBX→GBP normalization at adapter boundaries, provenance metadata on derived data,
-  and no analytical logic in the frontend.
+  no analytical logic in the frontend, and no code added under `quantlab_specs/`.
 - Complexity beyond the simplest working design (YAGNI) must be justified in the plan.
 
 ## Governance
@@ -159,4 +192,4 @@ PATCH for clarifications and wording fixes), and a migration note where existing
 affected. All pull requests and reviews MUST verify compliance with the principles above;
 violations block merge unless a justified exception is recorded in the plan.
 
-**Version**: 1.1.0 | **Ratified**: 2026-09-19 | **Last Amended**: 2026-09-19
+**Version**: 1.2.0 | **Ratified**: 2026-09-19 | **Last Amended**: 2026-09-19

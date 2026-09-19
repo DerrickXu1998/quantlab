@@ -7,8 +7,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "gen:api": "openapi-typescript ../specs/002-signal-viewer-demo/contracts/openapi.yaml -o src/api/schema.d.ts",
-    "codegen": "openapi-typescript ../specs/002-signal-viewer-demo/contracts/openapi.yaml -o src/api/schema.d.ts",
+    "gen:api": "openapi-typescript ../quantlab_specs/specs/002-signal-viewer-demo/contracts/openapi.yaml -o src/api/schema.d.ts",
+    "codegen": "openapi-typescript ../quantlab_specs/specs/002-signal-viewer-demo/contracts/openapi.yaml -o src/api/schema.d.ts",
     "lint": "eslint .",
     "format:check": "prettier --check .",
     "test": "vitest run"

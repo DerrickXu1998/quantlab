@@ -1,47 +1,31 @@
 # QuantLab signal viewer demo — Docker tooling.
 # Host prerequisites: Docker (with Compose v2) and GNU make. Nothing else.
+#
+# Repository layout: specs live in quantlab_specs/ (specs only, no code);
+# the runnable demo lives here at the repository root.
 
 .DEFAULT_GOAL := help
 
 COMPOSE := docker compose
 
-.PHONY: help up down build seed logs test smoke hash dump-hash gen-api
+# Service that `make docker-shell` drops you into (override: make docker-shell SERVICE=frontend)
+SERVICE ?= backend
+
+# The OpenAPI contract is authored once under quantlab_specs/. backend/contracts/
+# holds a copy only because the backend image's build context is backend/ and so
+# cannot reach outside it; `make check-contract` guards the two against drift.
+CONTRACT_SRC := quantlab_specs/specs/002-signal-viewer-demo/contracts/openapi.yaml
+CONTRACT_COPY := backend/contracts/openapi.yaml
+
+.PHONY: help up down build seed logs shell docker-shell test smoke hash dump-hash gen-api \
+	check-contract sync-contract
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | sort | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
 
 up: ## Build and start the full stack (seed -> backend -> frontend) with preflight checks
-	@command -v docker >/dev/null 2>&1 || { \
-		echo "ERROR: 'docker' CLI not found. Install Docker Desktop (or Docker Engine) and retry." >&2; exit 1; }
-	@docker info >/dev/null 2>&1 || { \
-		echo "ERROR: Docker daemon is not reachable. Start Docker Desktop (or the docker service) and retry." >&2; exit 1; }
-	@docker compose version >/dev/null 2>&1 || { \
-		echo "ERROR: 'docker compose' (Compose v2) is not available. Upgrade Docker and retry." >&2; exit 1; }
-	@for port in 8000 8080; do \
-		busy=""; \
-		if command -v lsof >/dev/null 2>&1; then \
-			lsof -nP -iTCP:$$port -sTCP:LISTEN >/dev/null 2>&1 && busy=yes; \
-		elif command -v nc >/dev/null 2>&1; then \
-			nc -z 127.0.0.1 $$port >/dev/null 2>&1 && busy=yes; \
-		fi; \
-		if [ -n "$$busy" ]; then \
-			echo "ERROR: host port $$port is already in use. Stop the process bound to it (e.g. 'lsof -nP -iTCP:$$port -sTCP:LISTEN' to find it) and retry 'make up'." >&2; exit 1; \
-		fi; \
-	done
-	$(COMPOSE) up --build -d
-	@echo "Waiting for backend to become healthy..."; \
-	for i in $$(seq 1 90); do \
-		cid=$$($(COMPOSE) ps -q backend 2>/dev/null); \
-		status=$$(docker inspect --format '{{.State.Health.Status}}' $$cid 2>/dev/null || true); \
-		if [ "$$status" = "healthy" ]; then echo "backend is healthy"; break; fi; \
-		if [ $$i -eq 90 ]; then \
-			echo "ERROR: backend did not become healthy in time. Recent backend logs:" >&2; \
-			$(COMPOSE) logs --tail 50 backend >&2; exit 1; \
-		fi; \
-		sleep 2; \
-	done
-	@echo "Stack is up. UI: http://localhost:8080  API: http://localhost:8000"
+	bash scripts/up.sh
 
 down: ## Stop and remove all containers and the quantlab-data volume (clean reseed on next up)
 	$(COMPOSE) down -v
@@ -55,7 +39,12 @@ seed: ## Re-run the one-shot seed service (deletes and regenerates the SQLite DB
 logs: ## Follow service logs
 	$(COMPOSE) logs -f
 
-test: ## Run backend pytest and frontend vitest inside containers (no host toolchain needed)
+docker-shell: ## Open an interactive shell in a running container (SERVICE=backend by default)
+	bash scripts/docker-shell.sh $(SERVICE)
+
+shell: docker-shell ## Alias for docker-shell
+
+test: check-contract ## Run backend pytest and frontend vitest inside containers (no host toolchain needed)
 	$(COMPOSE) build backend
 	$(COMPOSE) run --rm --no-deps backend python -m pytest -q
 	docker build --target build -t quantlab-frontend-test ./frontend
@@ -74,6 +63,18 @@ dump-hash: ## SHA-256 of the ordered dump of every table in the SQLite DB (deter
 
 hash: dump-hash ## Alias for dump-hash
 
+check-contract: ## Fail if backend/contracts/openapi.yaml has drifted from the authored spec
+	@diff -u $(CONTRACT_SRC) $(CONTRACT_COPY) >/dev/null 2>&1 || { \
+		echo "ERROR: $(CONTRACT_COPY) has drifted from the authored contract"; \
+		echo "       $(CONTRACT_SRC)"; \
+		echo "       Run 'make sync-contract' to refresh the in-image copy." >&2; \
+		diff -u $(CONTRACT_SRC) $(CONTRACT_COPY) >&2 || true; exit 1; }
+	@echo "contract copy is in sync with $(CONTRACT_SRC)"
+
+sync-contract: ## Refresh backend/contracts/openapi.yaml from the authored spec
+	cp $(CONTRACT_SRC) $(CONTRACT_COPY)
+	@echo "synced $(CONTRACT_COPY) <- $(CONTRACT_SRC)"
+
 gen-api: ## Regenerate frontend/src/api/schema.d.ts from the OpenAPI contract (node runs in a container)
 	docker run --rm -v "$(CURDIR)":/work -w /work node:22 \
-		npx -y openapi-typescript specs/002-signal-viewer-demo/contracts/openapi.yaml -o frontend/src/api/schema.d.ts
+		npx -y openapi-typescript quantlab_specs/specs/002-signal-viewer-demo/contracts/openapi.yaml -o frontend/src/api/schema.d.ts

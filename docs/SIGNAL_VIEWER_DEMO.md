@@ -22,22 +22,28 @@ make up       # build images, run the one-shot seed, start backend + frontend
 make smoke    # wait for health, assert the DB is seeded and signals exist
 ```
 
+Run these from the repository root. `make up` is safe to re-run — a port that one
+of its own containers already publishes is not treated as a conflict.
+
 Then open the UI at **http://localhost:8080**. The API is served at
-`http://localhost:8000/api/v1` (see `specs/002-signal-viewer-demo/contracts/openapi.yaml`).
+`http://localhost:8000/api/v1` (see `quantlab_specs/specs/002-signal-viewer-demo/contracts/openapi.yaml`).
 
 ## Make targets
 
 | Target          | What it does                                                              |
 | --------------- | ------------------------------------------------------------------------- |
-| `make up`       | Preflight checks (Docker reachable, ports 8000/8080 free), then build + start seed → backend → frontend |
+| `make up`       | Preflight checks (Docker reachable, ports 8000/8080 free of foreign processes), then build + start seed → backend → frontend; waits for the backend healthcheck. Idempotent |
 | `make down`     | Stop and remove all containers and the `quantlab-data` volume             |
 | `make smoke`    | End-to-end check: backend healthy, DB seeded, every starter rule fired, UI returns 200 |
 | `make test`     | Run backend pytest (unit + contract + look-ahead) and frontend vitest inside containers |
 | `make seed`     | Re-run the one-shot seed (deletes and regenerates the SQLite DB)          |
 | `make logs`     | Follow service logs                                                       |
+| `make docker-shell` | Interactive shell inside a running container — `bash` in **backend** by default; `make docker-shell SERVICE=frontend` for the nginx container. Starts the stack first if it is not up. `make shell` is an alias |
 | `make build`    | Build the backend and frontend images                                     |
 | `make dump-hash`| SHA-256 of the ordered dump of every table — two fresh `make up` runs produce the identical hash |
 | `make gen-api`  | Regenerate the frontend's typed API client from the OpenAPI contract      |
+| `make check-contract` | Fail if `backend/contracts/openapi.yaml` has drifted from the authored spec (runs as part of `make test`) |
+| `make sync-contract`  | Refresh `backend/contracts/openapi.yaml` from the authored spec           |
 
 ## What runs
 
@@ -54,7 +60,7 @@ Then open the UI at **http://localhost:8080**. The API is served at
 
 ## Validation
 
-`specs/002-signal-viewer-demo/quickstart.md` contains six runnable scenarios (clean setup,
+`quantlab_specs/specs/002-signal-viewer-demo/quickstart.md` contains six runnable scenarios (clean setup,
 cross-run determinism via `make dump-hash`, dataset coverage, UI/API count consistency,
 re-derivation and look-ahead test suites, and backend-down UI behavior). `make test` runs
 the full backend and frontend suites inside Docker containers.

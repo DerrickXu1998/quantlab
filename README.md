@@ -44,6 +44,23 @@ quantlab run examples/config.example.yaml --out features.parquet
 | **[docs/INDICATORS.md](docs/INDICATORS.md)** | All 92 features, with an opinion on which ones actually earn their place. |
 | **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | Panel shape, plugin contracts, point-in-time enforcement, performance. |
 | **[examples/](examples/)** | Quickstart script, full pipeline config, and a complete third-party plugin. |
+| **[docs/SIGNAL_VIEWER_DEMO.md](docs/SIGNAL_VIEWER_DEMO.md)** | The dockerized signal viewer demo: `make up`, `make docker-shell`, and the rest of the target list. |
+
+## Repository layout
+
+```
+quantlab_specs/     specifications only — no code (Spec Kit root: .specify/ + specs/)
+src/quantlab/       the library
+tests/
+backend/            signal viewer demo — FastAPI, synthetic data, signal plugins
+frontend/           signal viewer demo — TypeScript SPA
+scripts/            up.sh, docker-shell.sh, smoke.sh
+docker-compose.yml  seed -> backend -> frontend
+Makefile            make up / make docker-shell / make test / make smoke
+```
+
+`quantlab_specs/` holds specifications and nothing else; this is enforced by the
+constitution's Repository Structure principle. Run `make up` from the repository root.
 
 ## Four things to know before you build on this
 

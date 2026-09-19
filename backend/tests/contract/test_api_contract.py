@@ -22,17 +22,22 @@ from quantlab.api.app import create_app
 def _resolve_contract_path() -> Path:
     """Locate the authored OpenAPI contract.
 
-    Order: QUANTLAB_CONTRACT_PATH env override -> repo-root specs path (local
-    dev; the authored source of truth) -> the copy bundled in
-    backend/contracts/ (present inside the Docker image, which does not
-    contain specs/).
+    Order: QUANTLAB_CONTRACT_PATH env override -> the authored source of
+    truth under quantlab_specs/specs/ (local dev) -> the copy bundled in
+    backend/contracts/ (present inside the Docker image, whose build context
+    is backend/ and so cannot reach quantlab_specs/).
     """
     candidates = []
     if override := os.environ.get("QUANTLAB_CONTRACT_PATH"):
         candidates.append(Path(override))
     backend_dir = Path(__file__).resolve().parents[2]
     candidates.append(
-        backend_dir.parent / "specs" / "002-signal-viewer-demo" / "contracts" / "openapi.yaml"
+        backend_dir.parent
+        / "quantlab_specs"
+        / "specs"
+        / "002-signal-viewer-demo"
+        / "contracts"
+        / "openapi.yaml"
     )
     candidates.append(backend_dir / "contracts" / "openapi.yaml")
     for candidate in candidates:

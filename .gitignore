@@ -10,3 +10,25 @@ venv/
 *.parquet
 *.duckdb
 .quantlab/
+
+# --- signal viewer demo (frontend, containers, local DB) ---
+*.pyc
+node_modules/
+*.log
+coverage/
+htmlcov/
+.coverage
+.coverage.*
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+quantlab-data/
+.DS_Store
+*.tmp
+*.swp
+.vscode/
+.idea/
+.env*
+!.env.example
+.quantlab/*
