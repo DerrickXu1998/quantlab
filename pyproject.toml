@@ -18,13 +18,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-yahoo   = ["yfinance>=1.7.0", "curl_cffi>=0.7"]
-duckdb  = ["duckdb>=0.10"]
-polars  = ["polars>=1.0"]
-excel   = ["openpyxl>=3.1"]
-plots   = ["matplotlib>=3.8"]
-dev     = ["pytest>=8.0", "pytest-cov", "ruff", "mypy"]
-all     = ["quantlab[yahoo,duckdb,polars,excel,plots]"]
+yahoo    = ["yfinance>=1.7.0", "curl_cffi>=0.7"]
+duckdb   = ["duckdb>=0.10"]
+polars   = ["polars>=1.0"]
+excel    = ["openpyxl>=3.1"]
+plots    = ["matplotlib>=3.8"]
+postgres = ["psycopg[binary]>=3.1"]
+clickhouse = ["clickhouse-connect>=0.7"]
+# The store needs both halves: Postgres catalog + ClickHouse bars.
+store    = ["quantlab[postgres,clickhouse]"]
+dev      = ["pytest>=8.0", "pytest-cov", "ruff", "mypy"]
+all      = ["quantlab[yahoo,duckdb,polars,excel,plots,store]"]
 
 [project.scripts]
 quantlab = "quantlab.cli:main"
@@ -56,6 +60,11 @@ builtin = "quantlab.derived:register_all"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# Migrations ship with the package so `quantlab migrate` works from an
+# installed wheel, not just a source checkout.
+[tool.setuptools.package-data]
+"quantlab.store" = ["migrations/*.sql", "ch_migrations/*.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

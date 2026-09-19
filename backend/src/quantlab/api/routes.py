@@ -1,35 +1,37 @@
 """API routes per contracts/openapi.yaml. Thin handlers only (Constitution I):
-every handler is a storage-repository call; zero analytics here.
+every handler is a storage call; zero analytics here.
+
+Handlers do not know which dataset is behind them. ``app.state.backend`` is
+either the real warehouse (ClickHouse bars + Postgres catalog) or the
+synthetic SQLite demo, chosen once at startup.
 """
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import date
-from pathlib import Path as FsPath
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
 from quantlab.api import schemas
-from quantlab.storage import db, repository
 
 router = APIRouter()
 
-SYMBOL_PATTERN = r"^[A-Z]{2,8}$"
+# Real tickers are not bare uppercase words: quantlab's canonical ids carry an
+# exchange suffix (AAPL.US, HSBA.LON) and some venues use digits or hyphens
+# (BRK-B.US, 0700.HK). The old ^[A-Z]{2,8}$ fitted only the synthetic universe.
+SYMBOL_PATTERN = r"^[A-Z0-9][A-Z0-9._\-]{0,19}$"
+
+
+def backend(request: Request):
+    return request.app.state.backend
 
 
 def require_seeded(request: Request) -> None:
-    """Guard for data routes: 503 until the seed step has completed (FR-003)."""
-    db_path = FsPath(request.app.state.db_path)
-    if db_path.is_file():
-        try:
-            with db.connect(db_path) as conn:
-                if repository.is_seeded(conn):
-                    return
-        except sqlite3.OperationalError:
-            pass  # file exists but schema missing -> treat as unseeded
-    raise HTTPException(status_code=503, detail="database is not seeded yet")
+    """Guard for data routes: 503 until there is data to serve (FR-003)."""
+    has_data, _ = backend(request).health()
+    if not has_data:
+        raise HTTPException(status_code=503, detail="database is not seeded yet")
 
 
 @router.get(
@@ -39,15 +41,8 @@ def require_seeded(request: Request) -> None:
     operation_id="getHealth",
 )
 def get_health(request: Request) -> schemas.Health:
-    db_path = FsPath(request.app.state.db_path)
-    if db_path.is_file():
-        try:
-            with db.connect(db_path) as conn:
-                if repository.is_seeded(conn):
-                    return schemas.Health(seeded=True, signal_count=repository.signal_count(conn))
-        except sqlite3.OperationalError:
-            pass
-    return schemas.Health(seeded=False, signal_count=0)
+    has_data, signal_count = backend(request).health()
+    return schemas.Health(seeded=has_data, signal_count=signal_count)
 
 
 @router.get(
@@ -58,8 +53,7 @@ def get_health(request: Request) -> schemas.Health:
     dependencies=[Depends(require_seeded)],
 )
 def list_instruments(request: Request) -> dict:
-    with db.connect(request.app.state.db_path) as conn:
-        return repository.list_instruments(conn)
+    return backend(request).list_instruments()
 
 
 @router.get(
@@ -77,15 +71,15 @@ def get_prices(
 ) -> dict:
     if start_date is not None and end_date is not None and start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date must be on or before end_date")
-    with db.connect(request.app.state.db_path) as conn:
-        if not repository.instrument_exists(conn, symbol):
-            raise HTTPException(status_code=404, detail=f"unknown symbol: {symbol}")
-        return repository.get_prices(
-            conn,
-            symbol,
-            start=start_date.isoformat() if start_date else None,
-            end=end_date.isoformat() if end_date else None,
-        )
+
+    store = backend(request)
+    if not store.instrument_exists(symbol):
+        raise HTTPException(status_code=404, detail=f"unknown symbol: {symbol}")
+    return store.get_prices(
+        symbol,
+        start_date.isoformat() if start_date else None,
+        end_date.isoformat() if end_date else None,
+    )
 
 
 @router.get(
@@ -108,15 +102,13 @@ def list_signals(
 ) -> dict:
     if start_date is not None and end_date is not None and start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date must be on or before end_date")
-    with db.connect(request.app.state.db_path) as conn:
-        return repository.list_signals(
-            conn,
-            instrument=instrument,
-            signal_type=signal_type,
-            direction=direction,
-            start=start_date.isoformat() if start_date else None,
-            end=end_date.isoformat() if end_date else None,
-            sort=sort,
-            limit=limit,
-            offset=offset,
-        )
+    return backend(request).list_signals(
+        instrument=instrument,
+        signal_type=signal_type,
+        direction=direction,
+        start=start_date.isoformat() if start_date else None,
+        end=end_date.isoformat() if end_date else None,
+        sort=sort,
+        limit=limit,
+        offset=offset,
+    )

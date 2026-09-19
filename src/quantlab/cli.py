@@ -184,6 +184,91 @@ def cmd_doctor(args) -> int:
     return 0
 
 
+def cmd_migrate(args) -> int:
+    from . import store
+
+    with store.session(args.db_url) as conn, store.ch_session(args.ch_url) as client:
+        applied = store.migrate_all(conn, client)
+        for half, versions in applied.items():
+            print(f"{half}: " + (", ".join(versions) if versions else "up to date"))
+        print(f"\ncatalog schema {store.current_version(conn)}")
+        print(f"bars schema    {store.ch_current_version(client)}")
+    return 0
+
+
+def cmd_ingest(args) -> int:
+    from . import store
+
+    if not args.symbols and not args.universe:
+        raise SystemExit("ingest needs symbols or --universe")
+
+    with store.session(args.db_url) as conn, store.ch_session(args.ch_url) as client:
+        if not args.no_migrate:
+            store.migrate_all(conn, client)
+
+        report = store.ingest_prices(
+            conn,
+            client,
+            args.symbols or None,
+            start=args.start,
+            end=args.end,
+            frequency=args.frequency,
+            providers=args.providers,
+            provider_options=_parse_provider_options(args.provider_option),
+            universe=args.universe,
+            universe_params=_parse_kv(args.param),
+            snapshot_date=args.snapshot_date or None,
+            max_workers=args.max_workers,
+        )
+        print(report.summary())
+
+        if args.corporate_actions:
+            symbols = args.symbols or store.list_symbols(conn)
+            actions = store.ingest_corporate_actions(
+                conn, symbols, start=args.start, end=args.end,
+                provider=args.actions_provider,
+            )
+            print(actions.summary())
+
+        if args.optimize:
+            # Pay the ReplacingMergeTree merge now rather than on every read.
+            store.optimize(client)
+
+    # A run that wrote nothing is a failure the shell should see.
+    return 0 if report.status in ("ok", "partial") else 1
+
+
+def cmd_coverage(args) -> int:
+    from . import store
+
+    with store.session(args.db_url) as conn, store.ch_session(args.ch_url) as client:
+        frame = store.coverage(conn, client, frequency=args.frequency)
+        if frame.empty:
+            print("store is empty -- run `quantlab ingest` first")
+            return 0
+        print(f"coverage ({len(frame)} instruments)")
+        print(frame.to_string(index=False))
+        print(f"\ntotal bars: {int(frame['bars'].sum()):,}")
+
+        stats = store.storage_stats(client)
+        if stats is not None and not stats.empty:
+            print("\nstorage (ClickHouse partitions)")
+            print(stats.to_string(index=False))
+
+        stale = store.stale_runs(conn)
+        if not stale.empty:
+            # Bars land in ClickHouse before the run closes in Postgres, so an
+            # interrupted ingest leaves a run open. Those counts are unverified.
+            print(f"\nWARNING: {len(stale)} ingest run(s) never finished")
+            print(stale.to_string(index=False))
+
+        if args.runs:
+            history = store.run_history(conn, limit=args.runs)
+            print("\nrecent ingest runs")
+            print(history.to_string(index=False))
+    return 0
+
+
 def _parse_provider_options(pairs: list[str] | None) -> dict:
     """--provider-option csv:directory=/data -> {"csv": {"directory": "/data"}}"""
     out: dict[str, dict] = {}
@@ -271,6 +356,45 @@ def build_parser() -> argparse.ArgumentParser:
 
     d = sub.add_parser("doctor", help="check plugins, keys and paths")
     d.set_defaults(func=cmd_doctor)
+
+    # -- Postgres system of record ----------------------------------------
+    m = sub.add_parser("migrate", help="apply pending migrations to catalog and bars")
+    m.add_argument("--db-url", default="", help="Postgres catalog; overrides $QUANTLAB_DB_URL")
+    m.add_argument("--ch-url", default="", help="ClickHouse bars; overrides $QUANTLAB_CH_URL")
+    m.set_defaults(func=cmd_migrate)
+
+    i = sub.add_parser("ingest", help="load historical bars into Postgres")
+    i.add_argument("symbols", nargs="*")
+    i.add_argument("--universe", default="")
+    i.add_argument("--param", action="append", help="universe key=value, repeatable")
+    i.add_argument("--start", default="2015-01-01")
+    i.add_argument("--end", default="")
+    i.add_argument("--frequency", default="1d")
+    i.add_argument("--providers", nargs="+", default=["stooq", "yahoo"])
+    i.add_argument("--provider-option", action="append",
+                   help="provider:key=value, repeatable")
+    i.add_argument("--db-url", default="", help="Postgres catalog; overrides $QUANTLAB_DB_URL")
+    i.add_argument("--ch-url", default="", help="ClickHouse bars; overrides $QUANTLAB_CH_URL")
+    i.add_argument("--optimize", action="store_true",
+                   help="force the ClickHouse merge after loading (worth it after a backfill)")
+    i.add_argument("--snapshot-date", default="",
+                   help="universe snapshot date (default: today)")
+    i.add_argument("--max-workers", type=int, default=None)
+    i.add_argument("--no-migrate", action="store_true",
+                   help="skip the automatic migrate step")
+    i.add_argument("--corporate-actions", action="store_true",
+                   help="also pull dividends and splits")
+    i.add_argument("--actions-provider", default="yahoo",
+                   help="provider for corporate actions (default: yahoo)")
+    i.set_defaults(func=cmd_ingest)
+
+    cov = sub.add_parser("coverage", help="what is in the store and where it came from")
+    cov.add_argument("--frequency", default="1d")
+    cov.add_argument("--db-url", default="", help="Postgres catalog; overrides $QUANTLAB_DB_URL")
+    cov.add_argument("--ch-url", default="", help="ClickHouse bars; overrides $QUANTLAB_CH_URL")
+    cov.add_argument("--runs", type=int, default=5,
+                     help="also show the N most recent ingest runs (0 to hide)")
+    cov.set_defaults(func=cmd_coverage)
     return p
 
 

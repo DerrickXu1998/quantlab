@@ -17,7 +17,11 @@ class Instrument(BaseModel):
     symbol: str
     name: str
     currency: str
-    regime_profile: Literal["trending", "mean_reverting", "volatile", "mixed"]
+    # Synthetic-demo only: a generated instrument is built to follow a known
+    # regime, which is what makes the demo assertable. Real ingested
+    # instruments have no such label, so the field is nullable rather than
+    # carrying a fabricated one.
+    regime_profile: Literal["trending", "mean_reverting", "volatile", "mixed"] | None = None
     bar_count: int
     signal_count: int
 

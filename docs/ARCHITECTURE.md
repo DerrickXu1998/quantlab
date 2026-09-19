@@ -148,15 +148,33 @@ sequential.
 
 ## Storage
 
-Parquet, long format. `save_panel(..., partition_by_symbol=True)` writes a Hive-partitioned
-layout that scales to a full universe and lets DuckDB or Polars query it without loading
-everything. Install `quantlab[duckdb]` and point DuckDB at the directory.
+Two stores, split by the shape of the data — see `STORAGE.md` for the full reasoning.
+
+**ClickHouse holds `price_bars`**: append-only, columnar, 10–30x compression, and a `ts`
+column that is a timestamp from day one so intraday needs no migration. Re-ingest is
+idempotent via `ReplacingMergeTree(run_id)`, but reads must go through the
+`price_bars_current` view — the dedup happens at merge time, not at insert.
+
+**Postgres holds the catalog**: instruments, vendor symbol maps, universe snapshots, ingest
+provenance, corporate actions and signals. Small, mutable, relational data that wants
+foreign keys, unique and exclusion constraints, and transactions — none of which ClickHouse
+has. The rule of thumb: bar-level cardinality goes to ClickHouse, anything needing a
+constraint stays in Postgres.
+
+Parquet remains the *derived* tier, not the system of record. `save_panel(...,
+partition_by_symbol=True)` writes a Hive-partitioned layout, and
+`store.panel_for_modelling(...)` materialises one straight out of the warehouse — a pinned
+file a backtest result can be traced back to, which a live query is not.
 
 ## What is deliberately not here
 
 - **No backtester.** Feature generation and strategy simulation are separate concerns and
   conflating them is how look-ahead creeps in. Feed the panel to `vectorbt`, `zipline-reloaded`
   or your own.
-- **No survivorship-bias fix.** There isn't a free one. See the note at the end of
-  `DATA_SOURCES.md` — start snapshotting your universe today.
-- **No intraday.** The free sources cap intraday history at weeks. Not enough to model on.
+- **No retroactive survivorship-bias fix.** There isn't a free one: nobody will sell you the
+  1998 index membership for nothing. What the store does do is snapshot universe membership
+  on every refresh, append-only, so history accumulates from today forward and
+  `load_panel(universe_snapshot=...)` can reconstruct it later. Start ingesting now.
+- **No intraday data yet.** The free sources cap intraday history at weeks, which is not
+  enough to model on. The bar schema is intraday-ready regardless (`ts` is a `DateTime64`),
+  so adding a licensed minute feed is an ingest adapter, not a migration.

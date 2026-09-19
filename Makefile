@@ -17,8 +17,15 @@ SERVICE ?= backend
 CONTRACT_SRC := quantlab_specs/specs/002-signal-viewer-demo/contracts/openapi.yaml
 CONTRACT_COPY := backend/contracts/openapi.yaml
 
+# Symbols for `make ingest` (override: make ingest SYMBOLS="VOD.LON BP.LON")
+SYMBOLS ?= AAPL.US MSFT.US HSBA.LON
+START   ?= 2015-01-01
+END     ?=
+PROVIDERS ?= yahoo stooq
+
 .PHONY: help up down build seed logs shell docker-shell test smoke hash dump-hash gen-api \
-	check-contract sync-contract
+	check-contract sync-contract migrate ingest coverage signals store-test db-shell \
+	ch-shell destroy
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | sort | \
@@ -27,14 +34,45 @@ help: ## Show available targets
 up: ## Build and start the full stack (seed -> backend -> frontend) with preflight checks
 	bash scripts/up.sh
 
-down: ## Stop and remove all containers and the quantlab-data volume (clean reseed on next up)
+down: ## Stop and remove containers, KEEPING ingested data
+	$(COMPOSE) down
+
+destroy: ## DESTRUCTIVE: remove containers AND every volume, including ingested history
+	@echo "This permanently deletes the ClickHouse bars and the Postgres catalog."
+	@printf 'Type "destroy" to confirm: ' && read ans && [ "$$ans" = "destroy" ] || \
+		{ echo "aborted"; exit 1; }
 	$(COMPOSE) down -v
 
 build: ## Build the backend and frontend images
 	$(COMPOSE) build
 
-seed: ## Re-run the one-shot seed service (deletes and regenerates the SQLite DB)
-	$(COMPOSE) run --rm seed
+seed: ## Re-run the synthetic demo seed (SQLite; --profile is a compose-level flag)
+	$(COMPOSE) --profile demo run --rm seed
+
+# --- Historical data warehouse (ClickHouse bars + Postgres catalog) ----------
+
+migrate: ## Apply pending migrations to both the catalog and the bars store
+	$(COMPOSE) run --rm ingest migrate
+
+ingest: ## Ingest real history (override SYMBOLS/START/END/PROVIDERS)
+	$(COMPOSE) run --rm ingest ingest $(SYMBOLS) \
+		--start $(START) $(if $(END),--end $(END),) --providers $(PROVIDERS)
+
+coverage: ## What is in the store, where it came from, and how well it compresses
+	$(COMPOSE) run --rm ingest coverage
+
+signals: ## Recompute signals from warehouse bars into the catalog
+	$(COMPOSE) run --rm backend python -m quantlab.signals.materialize
+
+store-test: ## Run the store test suite against the live stack
+	$(COMPOSE) run --rm --entrypoint python ingest -m pytest tests/test_store.py -q
+
+db-shell: ## psql into the Postgres catalog
+	$(COMPOSE) exec postgres psql -U quantlab -d quantlab
+
+ch-shell: ## clickhouse-client into the bars store
+	$(COMPOSE) exec clickhouse clickhouse-client --user quantlab --password quantlab \
+		--database quantlab
 
 logs: ## Follow service logs
 	$(COMPOSE) logs -f
