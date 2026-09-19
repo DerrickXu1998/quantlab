@@ -12,6 +12,11 @@ dependencies = [
     "pydantic>=2.7",
     "uvicorn>=0.30",
     "numpy>=1.26",
+    # Read access to the warehouse: Postgres catalog + ClickHouse bars. The
+    # API reads both; it never carries the provider stack (that is the ingest
+    # image's job) and so has no pandas, requests or yfinance.
+    "psycopg[binary]>=3.1",
+    "clickhouse-connect>=0.7",
 ]
 
 [project.optional-dependencies]

@@ -1,7 +1,120 @@
 services:
+  # ---------------------------------------------------------------------------
+  # Bars. Append-only, columnar, intraday-ready. Holds price_bars and nothing
+  # else -- identity and provenance live in Postgres, which has the constraints.
+  # ---------------------------------------------------------------------------
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    environment:
+      CLICKHOUSE_USER: quantlab
+      CLICKHOUSE_PASSWORD: quantlab
+      CLICKHOUSE_DB: quantlab
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - quantlab-chdata:/var/lib/clickhouse
+    ports:
+      - "8123:8123"   # HTTP, what clickhouse-connect uses
+      - "9000:9000"   # native protocol, for clickhouse-client
+    ulimits:
+      # ClickHouse opens a lot of files; the Docker default is too low and it
+      # degrades quietly rather than failing loudly.
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      # 127.0.0.1, not localhost: inside the container localhost resolves to
+      # ::1 and the server listens on IPv4, so the probe would never connect.
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Catalog. Instruments, vendor symbol maps, universe snapshots, ingest
+  # provenance, corporate actions. Small, relational, constraint-enforced.
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: quantlab
+      POSTGRES_PASSWORD: quantlab
+      POSTGRES_DB: quantlab
+      # Deterministic collation: index order must not depend on the host locale.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - quantlab-pgdata:/var/lib/postgresql/data
+    ports:
+      # Exposed so a notebook or psql on the host can reach the same database
+      # the stack uses. Credentials are local-development only.
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quantlab -d quantlab"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Schema owner. Runs on every `up`, exits when the database matches the
+  # migrations on disk. Ingest and backend both wait for it.
+  # ---------------------------------------------------------------------------
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.ingest
+    # Shared tag with `ingest`: same Dockerfile, so pin the same image name or
+    # Compose builds two independent copies and `build ingest` silently leaves
+    # this one stale -- which will then apply an out-of-date schema.
+    image: quantlab-ingest:latest
+    command: ["migrate"]
+    environment:
+      QUANTLAB_DB_URL: postgresql://quantlab:quantlab@postgres:5432/quantlab
+      QUANTLAB_CH_URL: clickhouse://quantlab:quantlab@clickhouse:8123/quantlab
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # Historical data ingest. Not part of `up` -- it reaches out to Stooq/Yahoo,
+  # so it runs on demand (`make ingest SYMBOLS="AAPL.US MSFT.US"`).
+  # ---------------------------------------------------------------------------
+  ingest:
+    build:
+      context: .
+      dockerfile: Dockerfile.ingest
+    image: quantlab-ingest:latest   # see the note on `migrate`
+    profiles: ["ingest"]
+    environment:
+      QUANTLAB_DB_URL: postgresql://quantlab:quantlab@postgres:5432/quantlab
+      QUANTLAB_CH_URL: clickhouse://quantlab:quantlab@clickhouse:8123/quantlab
+      QUANTLAB_HOME: /var/lib/quantlab
+      # SEC and other sources want a real contact address; override in .env.
+      QUANTLAB_USER_AGENT: ${QUANTLAB_USER_AGENT:-quantlab/0.1 (research)}
+    volumes:
+      - quantlab-cache:/var/lib/quantlab
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # Synthetic demo seed (SQLite). Kept so `make up` still produces a working
+  # UI with no network access; the real data path is postgres + ingest.
+  # ---------------------------------------------------------------------------
   seed:
     build: ./backend
     command: ["python", "-m", "quantlab.seed"]
+    profiles: ["demo"]
     environment:
       QUANTLAB_DB: /data/quantlab.db
       QUANTLAB_DB_PATH: /data/quantlab.db
@@ -13,6 +126,11 @@ services:
     build: ./backend
     command: ["uvicorn", "quantlab.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
+      # With both URLs set the API serves real ingested history. Unset them
+      # (or run the `demo` profile) to fall back to the synthetic SQLite
+      # dataset, which needs no network and no databases.
+      QUANTLAB_DB_URL: postgresql://quantlab:quantlab@postgres:5432/quantlab
+      QUANTLAB_CH_URL: clickhouse://quantlab:quantlab@clickhouse:8123/quantlab
       QUANTLAB_DB: /data/quantlab.db
       QUANTLAB_DB_PATH: /data/quantlab.db
     volumes:
@@ -20,7 +138,11 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      seed:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      migrate:
         condition: service_completed_successfully
     healthcheck:
       test:
@@ -44,4 +166,7 @@ services:
         condition: service_healthy
 
 volumes:
-  quantlab-data:
+  quantlab-chdata:   # ClickHouse bars
+  quantlab-pgdata:   # Postgres catalog
+  quantlab-cache:    # provider HTTP cache + Parquet exports
+  quantlab-data:     # synthetic demo SQLite

@@ -18,6 +18,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from quantlab.api import routes
 from quantlab.logging import get_logger
+from quantlab.storage import backends
 
 DEFAULT_DB_PATH = "/data/quantlab.db"
 
@@ -28,10 +29,16 @@ def resolve_db_path() -> str:
     return os.environ.get("QUANTLAB_DB") or os.environ.get("QUANTLAB_DB_PATH") or DEFAULT_DB_PATH
 
 
-def create_app(db_path: str | Path | None = None) -> FastAPI:
-    """Build the API app bound to a DB path (defaults to env var / /data)."""
+def create_app(db_path: str | Path | None = None, backend=None) -> FastAPI:
+    """Build the API app.
+
+    The storage backend is chosen once at startup: the real warehouse when
+    QUANTLAB_DB_URL and QUANTLAB_CH_URL are set, otherwise the synthetic
+    SQLite dataset. Tests may inject one explicitly.
+    """
     app = FastAPI(title="QuantLab Signal Viewer API", version="0.1.0")
     app.state.db_path = str(db_path) if db_path is not None else resolve_db_path()
+    app.state.backend = backend or backends.select_backend(app.state.db_path)
     app.include_router(routes.router, prefix="/api/v1")
 
     @app.exception_handler(StarletteHTTPException)
@@ -48,7 +55,10 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         )
         return JSONResponse(status_code=422, content={"detail": detail})
 
-    logger.info("app_created", extra={"db_path": app.state.db_path})
+    logger.info(
+        "app_created",
+        extra={"db_path": app.state.db_path, "backend": app.state.backend.name},
+    )
     return app
 
 

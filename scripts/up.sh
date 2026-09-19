@@ -12,7 +12,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 COMPOSE=(docker compose)
-PORTS=(8000 8080)
+# API, UI, Postgres catalog, ClickHouse HTTP, ClickHouse native.
+PORTS=(8000 8080 5432 8123 9000)
 HEALTH_TRIES="${QUANTLAB_HEALTH_TRIES:-90}"
 HEALTH_INTERVAL="${QUANTLAB_HEALTH_INTERVAL:-2}"
 
@@ -77,3 +78,20 @@ for i in $(seq 1 "$HEALTH_TRIES"); do
 done
 
 echo "Stack is up. UI: http://localhost:8080  API: http://localhost:8000"
+
+# The warehouse starts empty: ingest reaches the network, so it is never part
+# of `up`. Until it runs, the API reports seeded=false and the UI has nothing
+# to draw.
+if ! "${COMPOSE[@]}" run --rm -T ingest coverage 2>/dev/null | grep -q "total bars"; then
+	cat <<'NOTE'
+
+The data warehouse is empty. Load some history:
+
+    make ingest SYMBOLS="AAPL.US MSFT.US HSBA.LON" START=2020-01-01
+    make signals
+
+Or run the synthetic demo dataset instead, which needs no network:
+
+    docker compose --profile demo run --rm seed
+NOTE
+fi
