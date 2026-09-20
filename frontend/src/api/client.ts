@@ -9,6 +9,7 @@ import type {
   RawCatalogModel,
   RunDetailV2,
   RunPerformanceV2,
+  RunListV2,
   RunV2,
   Strategy,
   StrategyList,
@@ -183,8 +184,8 @@ export function createRun(body: RunRequest, signal?: AbortSignal): Promise<Run> 
   return send<Run>('/runs', 'POST', body, signal);
 }
 
-export function listRuns(savedOnly = false): Promise<RunList> {
-  return request<RunList>('/runs', { saved_only: savedOnly ? 'true' : undefined });
+export function listRuns(savedOnly = false): Promise<RunListV2> {
+  return request<RunListV2>('/runs', { saved_only: savedOnly ? 'true' : undefined });
 }
 
 export function getRun(runId: string): Promise<RunDetailV2> {

@@ -25,6 +25,7 @@ import {
   type CatalogModel,
   type RawCatalogModel,
   type RunDetailV2,
+  type RunV2,
   type StrategyRunRequest,
 } from '../api/types';
 
@@ -49,7 +50,7 @@ export interface RunsContextValue {
   modelEntries: ModelEntry[];
 
   // The run history, from the backend.
-  allRuns: Run[];
+  allRuns: RunV2[];
   runsStatus: LoadStatus;
   reloadRuns: () => void;
 
@@ -92,7 +93,7 @@ export function RunsProvider({ children }: { children: ReactNode }) {
   const [modelsStatus, setModelsStatus] = useState<LoadStatus>('loading');
   const [selectedModel, setSelectedModel] = useState<RawCatalogModel | null>(null);
 
-  const [allRuns, setAllRuns] = useState<Run[]>([]);
+  const [allRuns, setAllRuns] = useState<RunV2[]>([]);
   const [runsStatus, setRunsStatus] = useState<LoadStatus>('loading');
   const [runsNonce, setRunsNonce] = useState(0);
 

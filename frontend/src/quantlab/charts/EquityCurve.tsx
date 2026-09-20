@@ -1,5 +1,6 @@
 import { useRef } from 'react';
 import type { EquityPoint } from '../../api/client';
+import { cn } from '../../lib/utils';
 import { formatNumeric } from '../chrome/Numeric';
 import { buildScale, drawDateAxis, drawGrid, drawSeries, token, type Series } from './draw';
 import { useCanvas2d } from './useCanvas2d';
@@ -8,6 +9,15 @@ export interface EquityCurveProps {
   equity: EquityPoint[];
   benchmark?: EquityPoint[];
   height?: number;
+  /**
+   * Grow to fill the parent instead of taking a fixed height.
+   *
+   * A terminal fills its workspace. At a fixed 240px the Overview left a
+   * quarter of the viewport as empty ground below the panels, which on a tool
+   * this dense reads as a rendering fault rather than as breathing room. The
+   * canvas already redraws from a ResizeObserver, so growing costs nothing.
+   */
+  fill?: boolean;
   /** Labels the two lines for anyone who cannot see the colours. */
   strategyLabel?: string;
   benchmarkLabel?: string;
@@ -25,6 +35,7 @@ export function EquityCurve({
   equity,
   benchmark = [],
   height = 240,
+  fill = false,
   strategyLabel = 'Strategy',
   benchmarkLabel = 'Benchmark',
 }: EquityCurveProps) {
@@ -60,7 +71,7 @@ export function EquityCurve({
   const first = equity[0]?.value;
 
   return (
-    <div ref={themeRef} className="flex flex-col gap-2">
+    <div ref={themeRef} className={cn('flex flex-col gap-2', fill && 'min-h-0 flex-1')}>
       <div className="flex items-center gap-4 font-mono text-[10px] uppercase tracking-[0.12em]">
         <span className="flex items-center gap-1.5 text-primary">
           <span aria-hidden="true" className="h-px w-3 bg-primary" />
@@ -74,7 +85,13 @@ export function EquityCurve({
         ) : null}
       </div>
 
-      <div ref={wrapperRef} style={{ height }} className="relative w-full">
+      <div
+        ref={wrapperRef}
+        style={fill ? undefined : { height }}
+        // A floor, so a short viewport shrinks the chart rather than
+        // collapsing it to a hairline.
+        className={cn('relative w-full', fill && 'min-h-[180px] flex-1')}
+      >
         {supported ? (
           <canvas ref={canvasRef} className="block h-full w-full" />
         ) : null}

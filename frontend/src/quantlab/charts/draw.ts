@@ -21,7 +21,18 @@ export interface Scale {
   length: number;
 }
 
-export const PADDING = { top: 10, right: 52, bottom: 20, left: 10 };
+/**
+ * Plot insets. `right` is the value-axis gutter and is sized from the widest
+ * label it has to hold, not guessed: JetBrains Mono advances 0.6em, so a 10px
+ * label is 6px a character, and a seven-figure book renders as `$1,184,633` —
+ * ten characters, 60px — plus the 8px it sits off the plot edge. At 52 the
+ * gutter was two pixels short of a six-figure label and clipped the last digit
+ * off every axis on the Overview.
+ */
+export const PADDING = { top: 10, right: 70, bottom: 20, left: 10 };
+
+/** Gap between the plot's right edge and the start of its axis labels. */
+export const AXIS_LABEL_GAP = 8;
 
 export function buildScale(seriesList: Series[], size: CanvasSize): Scale | null {
   const lengths = seriesList.map((s) => s.points.length);
@@ -83,7 +94,7 @@ export function drawGrid(
     ctx.moveTo(PADDING.left, y);
     ctx.lineTo(size.width - PADDING.right, y);
     ctx.stroke();
-    ctx.fillText(formatValue(value), size.width - PADDING.right + 6, y);
+    ctx.fillText(formatValue(value), size.width - PADDING.right + AXIS_LABEL_GAP, y);
   }
   ctx.restore();
 }

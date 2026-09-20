@@ -165,12 +165,12 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
         <div className="flex items-center gap-2">
           {playing ? (
             <Button type="button" size="sm" onClick={pause}>
-              <Pause size={14} strokeWidth={1.5} aria-hidden="true" />
+              <Pause size={16} strokeWidth={1.5} aria-hidden="true" />
               Pause
             </Button>
           ) : (
             <Button type="button" size="sm" onClick={play} disabled={!run}>
-              <Play size={14} strokeWidth={1.5} aria-hidden="true" />
+              <Play size={16} strokeWidth={1.5} aria-hidden="true" />
               {state.status === 'paused'
                 ? 'Resume'
                 : finished || state.status === 'error'
@@ -185,7 +185,7 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
             onClick={restart}
             disabled={state.status === 'idle'}
           >
-            <RotateCcw size={14} strokeWidth={1.5} aria-hidden="true" />
+            <RotateCcw size={16} strokeWidth={1.5} aria-hidden="true" />
             Reset
           </Button>
           <StatusBadge
