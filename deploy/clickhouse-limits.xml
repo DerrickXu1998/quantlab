@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+<!--
+  ClickHouse sizes its caches and per-query memory ceilings from total host RAM.
+  On an 8 GiB VM shared with Postgres, the API and the ingest jobs, the stock
+  defaults let a single wide query claim memory the rest of the stack needs, and
+  the kernel OOM-killer then picks a victim more or less at random.
+
+  These values keep ClickHouse inside the 2560M container limit set in
+  docker-compose.prod.yml. A query that needs more now fails with a clear
+  MEMORY_LIMIT_EXCEEDED instead of taking the host down with it.
+-->
+<clickhouse>
+    <!-- Hard ceiling for the server process, in bytes. 2 GiB, under the 2.5 GiB
+         container limit so ClickHouse refuses the query before Docker kills it. -->
+    <max_server_memory_usage>2147483648</max_server_memory_usage>
+
+    <!-- Caches, sized for a machine this small (defaults assume far more RAM). -->
+    <mark_cache_size>268435456</mark_cache_size>                  <!-- 256 MiB -->
+    <uncompressed_cache_size>134217728</uncompressed_cache_size>  <!-- 128 MiB -->
+
+    <!-- Two vCPUs. Letting queries fan out wider than the machine only adds
+         context-switching and scheduler noise. -->
+    <max_concurrent_queries>16</max_concurrent_queries>
+
+    <profiles>
+        <default>
+            <max_memory_usage>1610612736</max_memory_usage>   <!-- 1.5 GiB per query -->
+            <max_threads>2</max_threads>
+        </default>
+    </profiles>
+
+    <!-- Bounded internal logging. These tables grow without limit by default and
+         on a single boot disk they eventually become the largest thing on it. -->
+    <query_log>
+        <database>system</database>
+        <table>query_log</table>
+        <ttl>event_date + INTERVAL 14 DAY DELETE</ttl>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+    </query_log>
+    <trace_log remove="1"/>
+    <metric_log remove="1"/>
+    <asynchronous_metric_log remove="1"/>
+</clickhouse>

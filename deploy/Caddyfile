@@ -1,0 +1,34 @@
+# QuantLab edge. One site block, address supplied by the environment:
+#
+#   QUANTLAB_SITE_ADDRESS=quantlab.example.com  -> automatic Let's Encrypt TLS
+#   QUANTLAB_SITE_ADDRESS=:80                   -> plain HTTP (the default)
+#
+# The default exists so the stack is reachable at http://<VM-IP>/ the moment it
+# boots, before any DNS record exists. Point a record at the VM, set the
+# hostname, redeploy, and Caddy provisions a certificate on first request --
+# nothing else changes, because the SPA and API are same-origin either way.
+
+{
+	# ACME registration contact. Let's Encrypt uses it for expiry warnings.
+	email {$QUANTLAB_ACME_EMAIL:admin@localhost}
+}
+
+{$QUANTLAB_SITE_ADDRESS::80} {
+	encode zstd gzip
+
+	# The whole app -- SPA and /api/ alike -- sits behind the frontend's nginx,
+	# which already history-falls-back unknown paths to index.html and proxies
+	# /api/ to the backend. Caddy does not need to know that routing exists;
+	# duplicating it here would mean two places to keep in sync.
+	reverse_proxy frontend:8080 {
+		# Server-Sent Events: GET /api/v1/replay/live/stream holds a response
+		# open indefinitely. Without this Caddy buffers it and the client sees
+		# nothing until the stream ends, which it never does.
+		flush_interval -1
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

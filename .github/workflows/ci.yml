@@ -1,0 +1,103 @@
+# QuantLab CI -- the same checks `make test` runs, in the same containers.
+#
+# Everything runs inside Docker rather than against a runner-installed Python or
+# Node. That is the repository's existing contract ("host prerequisites: Docker
+# and GNU make, nothing else"), and it means a green CI run and a green local
+# `make test` are testing the identical image.
+#
+# `workflow_call` is what lets deploy.yml depend on this file instead of
+# duplicating it, so nothing reaches the VM without these checks passing.
+
+name: ci
+
+on:
+  pull_request:
+  # No `push: [main]` trigger. Merging runs deploy.yml, which calls this file --
+  # a push trigger as well would run every check twice on each merge.
+  workflow_call:
+
+concurrency:
+  # Per branch: a new push supersedes an in-flight run of the same branch.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: openapi contract is in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The backend image's build context is backend/, so it cannot reach the
+      # authored contract in quantlab_specs/. backend/contracts/openapi.yaml is
+      # a copy, and a copy that nothing guards is a copy that drifts.
+      - name: make check-contract
+        run: make check-contract
+
+  backend:
+    name: backend pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Built once here and cached; the deploy workflow rebuilds from the same
+      # cache, so a passing test run makes the subsequent image build nearly free.
+      - name: Build the backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          load: true
+          tags: quantlab-backend:ci
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      # No QUANTLAB_DB_URL / QUANTLAB_CH_URL: the suite runs against the
+      # synthetic SQLite dataset and needs no services. The warehouse tests
+      # (tests/test_store.py) need live Postgres and ClickHouse and run from
+      # `make store-test` against a real stack, not here.
+      - name: pytest
+        run: docker run --rm quantlab-backend:ci python -m pytest -q
+
+  frontend:
+    name: frontend vitest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # --target build is the compile stage, which still has node and the dev
+      # dependencies; the final nginx stage has neither.
+      - name: Build the frontend build stage
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          target: build
+          load: true
+          tags: quantlab-frontend:ci
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+      # Bounded workers, deliberately. Vitest defaults to one worker per CPU,
+      # and twenty parallel jsdom environments on a shared runner starve each
+      # other badly enough that `findBy*` queries time out -- six tests fail at
+      # the default, all of them waitFor timeouts, none of them a real defect.
+      # Capping at two makes the run deterministic AND faster (~30s vs ~97s),
+      # because the contention was costing more than the parallelism bought.
+      # The flakiness is in the tests' reliance on wall-clock timeouts and is
+      # worth fixing at the source; this stops it blocking deploys meanwhile.
+      - name: vitest
+        run: docker run --rm quantlab-frontend:ci npx vitest run --maxWorkers=2 --minWorkers=1
+
+  scripts:
+    name: shellcheck deploy scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # These scripts run as root on the production host and are the hardest
+      # thing in the repository to test any other way.
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck --severity=warning deploy/*.sh scripts/*.sh

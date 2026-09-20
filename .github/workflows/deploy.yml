@@ -1,0 +1,227 @@
+# QuantLab deploy -- GitHub Actions -> Artifact Registry -> single Compute Engine VM.
+#
+# The whole pipeline costs nothing beyond the VM: Actions minutes are free for
+# public repositories (and 2,000/month on the free private tier), and the three
+# images are a few hundred MB in Artifact Registry, under the 0.5 GB free tier
+# for the first repository.
+#
+# Authentication is Workload Identity Federation: the workflow exchanges the
+# OIDC token GitHub mints for this repository for a short-lived Google
+# credential. There is no service-account JSON key in the repository secrets,
+# because there is no key at all -- nothing to rotate and nothing to leak.
+#
+# Required repository VARIABLES (deploy/setup-gcp.sh prints the exact commands):
+#   GCP_PROJECT_ID, GCP_REGION, GCP_ZONE, GCP_INSTANCE, GCP_AR_REPO,
+#   GCP_SERVICE_ACCOUNT, GCP_WORKLOAD_IDENTITY_PROVIDER
+
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      # Documentation and specs cannot change what the images contain, and a
+      # deploy is a stop/start of the API. Skipping them keeps the production
+      # stack still while the specs churn.
+      - '**/*.md'
+      - 'docs/**'
+      - 'quantlab_specs/**'
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: 'Deploy without re-running CI (use only to roll forward past a known-flaky check)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write   # required to mint the OIDC token for federation
+
+concurrency:
+  # One deploy at a time, and never cancel one in flight: a cancelled deploy can
+  # leave the VM mid-`compose up`, with migrate applied and the old backend
+  # still serving.
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  # Nothing reaches the VM without the same checks a pull request gets.
+  test:
+    if: ${{ !inputs.skip_tests }}
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: build and push ${{ matrix.image }}
+    needs: [test]
+    # `needs` on a skipped job would skip this one too, so allow the skipped
+    # case explicitly -- but never a failed or cancelled one.
+    if: ${{ always() && !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - image: quantlab-backend
+            context: ./backend
+            dockerfile: ./backend/Dockerfile
+            cache_scope: backend
+          - image: quantlab-frontend
+            context: ./frontend
+            dockerfile: ./frontend/Dockerfile
+            cache_scope: frontend
+          # The ingest image's build context is the repository root -- it packages
+          # src/quantlab, not backend/src.
+          - image: quantlab-ingest
+            context: .
+            dockerfile: ./Dockerfile.ingest
+            cache_scope: ingest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      # Installs the credential helper Buildx uses to push to *.pkg.dev.
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          # Two tags, two jobs: :<sha> is what the VM actually runs, so every
+          # deploy is pinned to an exact commit and rollback is a tag away;
+          # :latest is for a human pulling the current build by hand.
+          tags: |
+            ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_AR_REPO }}/${{ matrix.image }}:${{ github.sha }}
+            ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_AR_REPO }}/${{ matrix.image }}:latest
+          # Shares the layer cache the CI job populated, so a test run followed
+          # by a deploy builds each image once, not twice.
+          cache-from: type=gha,scope=${{ matrix.cache_scope }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.cache_scope }}
+          provenance: false
+
+  deploy:
+    name: deploy to ${{ vars.GCP_INSTANCE }}
+    needs: [build]
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ steps.address.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Resolve image references
+        id: images
+        run: |
+          base="${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_AR_REPO }}"
+          {
+            echo "backend=${base}/quantlab-backend:${{ github.sha }}"
+            echo "frontend=${base}/quantlab-frontend:${{ github.sha }}"
+            echo "ingest=${base}/quantlab-ingest:${{ github.sha }}"
+          } >> "$GITHUB_OUTPUT"
+
+      # gcloud generates an SSH key on first use and registers it with the
+      # deployer service account's OS Login profile. --tunnel-through-iap means
+      # port 22 is never exposed to the internet; the firewall only admits
+      # IAP's own range.
+      - name: Stage the deploy files on the VM
+        run: |
+          set -euo pipefail
+          stage="quantlab-deploy-${{ github.sha }}"
+          gcloud compute ssh "${{ vars.GCP_INSTANCE }}" \
+            --zone "${{ vars.GCP_ZONE }}" --tunnel-through-iap --quiet \
+            --command "rm -rf \$HOME/${stage} && mkdir -p \$HOME/${stage}"
+          # A path with no leading / or ~ resolves against the remote home
+          # directory, which avoids relying on tilde expansion surviving the
+          # layers of quoting between here and the remote shell.
+          gcloud compute scp --recurse --tunnel-through-iap --quiet \
+            --zone "${{ vars.GCP_ZONE }}" \
+            deploy/docker-compose.prod.yml \
+            deploy/Caddyfile \
+            deploy/clickhouse-limits.xml \
+            deploy/remote-deploy.sh \
+            "${{ vars.GCP_INSTANCE }}:${stage}/"
+
+      - name: Run the deploy
+        run: |
+          set -euo pipefail
+          stage="quantlab-deploy-${{ github.sha }}"
+          gcloud compute ssh "${{ vars.GCP_INSTANCE }}" \
+            --zone "${{ vars.GCP_ZONE }}" --tunnel-through-iap --quiet \
+            --command "sudo bash \$HOME/${stage}/remote-deploy.sh \
+              '${{ steps.images.outputs.backend }}' \
+              '${{ steps.images.outputs.frontend }}' \
+              '${{ steps.images.outputs.ingest }}'"
+
+      - name: Clean up the staging directory
+        if: always()
+        run: |
+          gcloud compute ssh "${{ vars.GCP_INSTANCE }}" \
+            --zone "${{ vars.GCP_ZONE }}" --tunnel-through-iap --quiet \
+            --command "rm -rf \$HOME/quantlab-deploy-${{ github.sha }}" || true
+
+      - name: Resolve the public address
+        id: address
+        run: |
+          set -euo pipefail
+          ip="$(gcloud compute instances describe "${{ vars.GCP_INSTANCE }}" \
+            --zone "${{ vars.GCP_ZONE }}" \
+            --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"
+          echo "url=http://${ip}/" >> "$GITHUB_OUTPUT"
+          echo "ip=${ip}" >> "$GITHUB_OUTPUT"
+
+      # remote-deploy.sh already proved the stack serves itself from inside the
+      # VM. This proves the firewall lets the rest of the world in, which is a
+      # different failure and one that only shows up from outside.
+      - name: Verify from the public internet
+        run: |
+          set -euo pipefail
+          url="${{ steps.address.outputs.url }}"
+          for i in $(seq 1 10); do
+            if curl -fsS --max-time 10 -o /dev/null "${url}"; then
+              echo "public SPA reachable at ${url}"
+              break
+            fi
+            [ "$i" -eq 10 ] && { echo "::error::${url} is not reachable -- check the quantlab-allow-http firewall rule and the instance network tag"; exit 1; }
+            sleep 5
+          done
+          curl -fsS --max-time 10 "${url}api/v1/health"
+
+      # An empty warehouse is a normal state (ingest runs on demand and reaches
+      # the network), so this reports rather than gates. remote-deploy.sh already
+      # hard-fails on the dangerous case: the API silently serving the synthetic
+      # demo dataset instead of the warehouse.
+      - name: Warehouse coverage report
+        continue-on-error: true
+        run: |
+          # No trailing slash: the script appends /api/v1/... to this.
+          BACKEND_URL="http://${{ steps.address.outputs.ip }}" bash scripts/check-warehouse.sh
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Deployed \`${GITHUB_SHA:0:7}\` to ${{ vars.GCP_INSTANCE }}"
+            echo
+            echo "- URL: ${{ steps.address.outputs.url }}"
+            echo "- Images: \`${{ github.sha }}\`"
+            echo
+            echo "Rollback: \`cd /opt/quantlab && sudo cp .env.images.prev .env.images && sudo systemctl restart quantlab\`"
+          } >> "$GITHUB_STEP_SUMMARY"

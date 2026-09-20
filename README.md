@@ -45,6 +45,7 @@ quantlab run examples/config.example.yaml --out features.parquet
 | **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | Panel shape, plugin contracts, point-in-time enforcement, performance. |
 | **[examples/](examples/)** | Quickstart script, full pipeline config, and a complete third-party plugin. |
 | **[docs/SIGNAL_VIEWER_DEMO.md](docs/SIGNAL_VIEWER_DEMO.md)** | The dockerized signal viewer demo: `make up`, `make docker-shell`, and the rest of the target list. |
+| **[docs/DEPLOY.md](docs/DEPLOY.md)** | Running it for real: one Compute Engine VM, images from Artifact Registry, deploys from GitHub Actions. What it costs and how to roll back. |
 
 ## Repository layout
 
