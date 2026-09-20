@@ -11,8 +11,8 @@
 #     docker compose -f docker-compose.prod.yml --env-file .env up -d
 #
 # Memory budget (host has 8 GiB): clickhouse 2.5G + postgres 1G + backend 1G
-# + frontend 128M + caddy 128M leaves ~3 GiB for the kernel page cache and the
-# on-demand ingest container. ClickHouse in particular will happily size its
+# + caddy 128M leaves ~3.4 GiB for the kernel page cache and the on-demand
+# ingest container. ClickHouse in particular will happily size its
 # caches to the whole machine and then be OOM-killed alongside everything else,
 # so the limits below are load-bearing, not decoration.
 
@@ -29,9 +29,17 @@ x-logging: &logging
 services:
   # --------------------------------------------------------------------------
   # Edge. Terminates TLS and is the only service bound to a public port.
-  # QUANTLAB_SITE_ADDRESS drives it: a hostname ("quantlab.example.com") makes
-  # Caddy provision a Let's Encrypt certificate automatically; the default
-  # ":80" serves plain HTTP, which is what you get before DNS exists.
+  #
+  # This VM serves the API only -- the SPA is built and served by Vercel from
+  # the same repository, so shipping a second copy here would be two builds of
+  # one artefact. That makes the browser's request cross-origin, which has two
+  # consequences the same-origin arrangement did not have:
+  #
+  #   1. QUANTLAB_CORS_ORIGINS must list the Vercel origin, or every call is
+  #      blocked by the browser. It is required below, not optional.
+  #   2. QUANTLAB_SITE_ADDRESS must be a real hostname, not an IP. Vercel serves
+  #      the SPA over HTTPS and browsers refuse mixed content, so the API has to
+  #      be HTTPS too -- and no certificate authority issues for a bare IP.
   # --------------------------------------------------------------------------
   caddy:
     image: caddy:2-alpine
@@ -46,8 +54,8 @@ services:
       - "443:443"
       - "443:443/udp"                 # HTTP/3
     depends_on:
-      frontend:
-        condition: service_started
+      backend:
+        condition: service_healthy
     deploy:
       resources:
         limits:
@@ -196,9 +204,12 @@ services:
       QUANTLAB_CH_URL: ${QUANTLAB_CH_URL}
       QUANTLAB_DB: /data/quantlab.db
       QUANTLAB_DB_PATH: /data/quantlab.db
-      # Same-origin behind Caddy -> nginx, so CORS never engages and this stays
-      # empty. Only set it if you move the SPA to its own domain.
-      QUANTLAB_CORS_ORIGINS: ${QUANTLAB_CORS_ORIGINS:-}
+      # Required, and empty counts as missing. The SPA is on Vercel and the API
+      # is here, so every browser call is cross-origin: unset this and the API
+      # answers curl perfectly while the actual app sees nothing but CORS
+      # errors. That failure is invisible from the server side, so it is worth
+      # refusing to start over.
+      QUANTLAB_CORS_ORIGINS: ${QUANTLAB_CORS_ORIGINS:?}
     volumes:
       - quantlab-data:/data
     expose:
@@ -229,20 +240,11 @@ services:
     logging: *logging
     restart: unless-stopped
 
-  frontend:
-    image: ${QUANTLAB_FRONTEND_IMAGE:?set QUANTLAB_FRONTEND_IMAGE in .env}
-    # No published port: Caddy is the only way in from outside.
-    expose:
-      - "8080"
-    depends_on:
-      backend:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          memory: 128M
-    logging: *logging
-    restart: unless-stopped
+  # There is no `frontend` service. The SPA is built from frontend/ and served
+  # by Vercel, which deploys from this same repository on every push; running a
+  # second copy here would be two builds and two deploys of one artefact. The
+  # nginx image and frontend/nginx.conf still exist for local `make up`, where
+  # same-origin keeps development free of CORS entirely.
 
 volumes:
   quantlab-chdata:        # ClickHouse bars
