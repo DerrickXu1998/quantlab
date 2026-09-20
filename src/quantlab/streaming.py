@@ -142,3 +142,34 @@ def create_producer(brokers: str):
         key_serializer=lambda k: k.encode("utf-8") if k is not None else None,
         value_serializer=lambda v: json.dumps(v).encode("utf-8"),
     )
+
+
+def ensure_topic(brokers: str, topic: str) -> None:
+    """Create ``topic`` with a single partition, unless it already exists.
+
+    ``publish_replay`` sorts the whole window into one chronological stream
+    across every symbol, and the backend consumer's per-date flush depends on
+    that order holding. Kafka only orders within a partition, so the replay
+    topic must have exactly one -- a broker that auto-creates with its own
+    default (often 3) would interleave the log and silently shuffle the
+    replay. Creating it here pins the layout at the one moment we know the
+    topic is about to exist.
+
+    Idempotent, and deliberately not corrective: an existing topic is left
+    alone whatever its partition count, because repartitioning would discard
+    published history. The consumer checks the count it actually got and
+    refuses a topic it cannot trust.
+    """
+    from kafka.admin import KafkaAdminClient, NewTopic
+    from kafka.errors import TopicAlreadyExistsError
+
+    admin = KafkaAdminClient(
+        bootstrap_servers=[b.strip() for b in brokers.split(",") if b.strip()]
+    )
+    try:
+        admin.create_topics([NewTopic(name=topic, num_partitions=1, replication_factor=1)])
+        log.info("replay_topic_created topic=%s partitions=1", topic)
+    except TopicAlreadyExistsError:
+        pass
+    finally:
+        admin.close()
