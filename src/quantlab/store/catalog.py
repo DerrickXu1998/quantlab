@@ -411,6 +411,32 @@ def snapshot_members(conn, snapshot_id: int) -> list[int]:
     return [row[0] for row in rows]
 
 
+def real_equity_symbols(
+    securities: Mapping[str, Security],
+    *,
+    with_bars: Sequence[str] | None = None,
+) -> list[str]:
+    """The real instruments eligible for a warehouse universe snapshot.
+
+    Synthetic fixtures and macro pseudo-instruments are warehouse plumbing, not
+    universe members: they are excluded by meta flag or by symbol convention
+    (ZX*, *.BOE). ``with_bars``, when given, further restricts to symbols that
+    actually have bars in the store.
+    """
+    wanted = set(with_bars) if with_bars is not None else None
+    out = []
+    for symbol, sec in securities.items():
+        if wanted is not None and symbol not in wanted:
+            continue
+        meta = dict(sec.meta or {})
+        if meta.get("synthetic") or meta.get("macro"):
+            continue
+        if symbol.startswith("ZX") or symbol.endswith(".BOE"):
+            continue
+        out.append(symbol)
+    return sorted(out)
+
+
 def latest_snapshot(conn, universe: str) -> int | None:
     """Most recent universe snapshot id, or None if that universe has none."""
     row = conn.execute(
@@ -485,7 +511,7 @@ def load_securities(conn, symbols: Sequence[str] | None = None) -> dict[str, Sec
     """Reference data as Security objects, ready for a Context."""
     query = """
         SELECT symbol, name, exchange, country, currency, sector, industry,
-               isin, sedol, cik, company_number, figi, active
+               isin, sedol, cik, company_number, figi, active, meta
           FROM instruments
     """
     params: list = []
@@ -497,7 +523,7 @@ def load_securities(conn, symbols: Sequence[str] | None = None) -> dict[str, Sec
     out: dict[str, Security] = {}
     for row in conn.execute(query, params).fetchall():
         (symbol, name, exchange, country, currency, sector, industry,
-         isin, sedol, cik, company_number, figi, active) = row
+         isin, sedol, cik, company_number, figi, active, meta) = row
         out[symbol] = Security(
             symbol=symbol,
             name=name,
@@ -512,6 +538,7 @@ def load_securities(conn, symbols: Sequence[str] | None = None) -> dict[str, Sec
             company_number=company_number,
             figi=figi,
             active=active,
+            meta=meta or {},
         )
     return out
 

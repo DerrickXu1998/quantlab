@@ -152,6 +152,41 @@ def cmd_universe(args) -> int:
     return 0
 
 
+def cmd_universe_snapshot(args) -> int:
+    """Archive the currently ingested universe as an append-only snapshot.
+
+    Membership is every real equity instrument that has bars in the store --
+    synthetic fixtures (ZX*) and macro pseudo-instruments (*.BOE) are excluded.
+    """
+    from . import store
+
+    with store.session(args.db_url) as conn, store.ch_session(args.ch_url) as client:
+        if not args.no_migrate:
+            store.migrate(conn)
+
+        have_bars = set(store.coverage(conn, client)["symbol"])
+        securities = store.load_securities(conn)
+        symbols = store.real_equity_symbols(securities, with_bars=sorted(have_bars))
+        if not symbols:
+            print("nothing to snapshot: no real instruments with bars", file=sys.stderr)
+            return 1
+
+        ids = store.instrument_ids(conn, symbols)
+        snapshot_id = store.snapshot_universe(
+            conn,
+            args.name,
+            symbols,
+            ids,
+            snapshot_date=args.snapshot_date or None,
+            source="warehouse",
+        )
+        conn.commit()
+
+        members = store.snapshot_members(conn, snapshot_id)
+        print(f"snapshot {snapshot_id}: {args.name}, {len(members)} members")
+    return 0
+
+
 def cmd_doctor(args) -> int:
     """Check the environment: plugins loaded, keys present, sources reachable."""
     from .config import settings
@@ -462,6 +497,19 @@ def build_parser() -> argparse.ArgumentParser:
     u.add_argument("--out", default="")
     u.add_argument("--tail", type=int, default=25)
     u.set_defaults(func=cmd_universe)
+
+    us = sub.add_parser(
+        "universe-snapshot",
+        help="archive the currently ingested universe as an append-only snapshot",
+    )
+    us.add_argument("name", help="snapshot universe name, e.g. liquid-500-ftse-core")
+    us.add_argument("--snapshot-date", default="",
+                    help="snapshot date (default: today); an existing (name, date) is left untouched")
+    us.add_argument("--db-url", default="", help="Postgres catalog; overrides $QUANTLAB_DB_URL")
+    us.add_argument("--ch-url", default="", help="ClickHouse bars; overrides $QUANTLAB_CH_URL")
+    us.add_argument("--no-migrate", action="store_true",
+                    help="skip the automatic migrate step")
+    us.set_defaults(func=cmd_universe_snapshot)
 
     d = sub.add_parser("doctor", help="check plugins, keys and paths")
     d.set_defaults(func=cmd_doctor)

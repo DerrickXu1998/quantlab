@@ -35,17 +35,23 @@ LSE_REPORTS_PAGE = "https://www.londonstockexchange.com/reports?tab=instruments"
 # A pragmatic, hand-maintained fallback: large and mid-cap London lines that
 # every free source covers. Not the full universe -- see the module docstring.
 FTSE_CORE = [
-    "AAL", "ABF", "ADM", "AHT", "ANTO", "AUTO", "AV", "AZN", "BA", "BARC",
-    "BATS", "BDEV", "BEZ", "BKG", "BNZL", "BP", "BRBY", "BT.A", "CCH", "CNA",
+    "AAL", "ABF", "ADM", "ANTO", "AUTO", "AV", "AZN", "BA", "BARC",
+    "BATS", "BEZ", "BKG", "BNZL", "BP", "BRBY", "BT.A", "BTRW", "CCH", "CNA",
     "CPG", "CRDA", "CTEC", "DCC", "DGE", "DPLM", "EDV", "ENT", "EXPN", "FCIT",
-    "FRAS", "FRES", "GLEN", "GSK", "HIK", "HLMA", "HLN", "HSBA", "HSX", "HWDN",
+    "FRAS", "FRES", "GAW", "GLEN", "GSK", "HIK", "HLMA", "HLN", "HSBA", "HSX", "HWDN",
     "IAG", "ICG", "IHG", "III", "IMB", "IMI", "INF", "ITRK", "JD", "KGF",
     "LAND", "LGEN", "LLOY", "LMP", "LSEG", "MKS", "MNDI", "MNG", "MRO", "NG",
-    "NWG", "NXT", "PHNX", "PRU", "PSH", "PSN", "PSON", "REL", "RIO", "RKT",
-    "RMV", "RR", "RTO", "SBRY", "SDR", "SGE", "SGRO", "SHEL", "SMDS", "SMIN",
-    "SMT", "SN", "SPX", "SSE", "STAN", "SVT", "TSCO", "TW", "ULVR", "UTG",
+    "NWG", "NXT", "PRU", "PSH", "PSN", "PSON", "REL", "RIO", "RKT",
+    "RMV", "RR", "RTO", "SBRY", "SDLF", "SDR", "SGE", "SGRO", "SHEL", "SMIN",
+    "SMT", "SN", "SPX", "SSE", "STAN", "STJ", "SVT", "TSCO", "TW", "ULVR", "UTG",
     "UU", "VOD", "WEIR", "WPP", "WTB",
 ]
+# Refreshed 2026-09:
+#   BDEV -> BTRW  Barratt became Barratt Redrow after the Redrow merger
+#   PHNX -> SDLF  Phoenix Group renamed to Standard Life plc (ticker SDLF) in Mar 2026
+#   SMDS dropped  DS Smith was acquired by International Paper
+#   AHT  dropped  Ashtead moved its primary listing to NYSE; the London line is gone
+# GAW and STJ added to keep the list at 95 liquid names.
 
 
 @universe("lse")

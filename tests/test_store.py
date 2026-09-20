@@ -131,6 +131,29 @@ def test_partition_chunks_respect_the_default_cap():
     )
 
 
+def test_real_equity_symbols_excludes_fixtures_and_macro():
+    """Synthetic ZX* and BoE pseudo-instruments are warehouse plumbing, not
+    universe members -- by meta flag or by symbol convention."""
+    securities = {
+        "AAPL.US": Security(symbol="AAPL.US", currency=Currency.USD),
+        "HSBA.LON": Security(symbol="HSBA.LON", currency=Currency.GBX),
+        "ZX1.US": Security(symbol="ZX1.US", currency=Currency.USD),
+        "OLD2.US": Security(symbol="OLD2.US", currency=Currency.USD, meta={"synthetic": True}),
+        "GBPUSD.BOE": Security(symbol="GBPUSD.BOE", currency=Currency.GBP, meta={"macro": True}),
+        "BANKRATE.BOE": Security(symbol="BANKRATE.BOE", currency=Currency.GBP),
+    }
+    assert catalog.real_equity_symbols(securities) == ["AAPL.US", "HSBA.LON"]
+
+
+def test_real_equity_symbols_restricts_to_symbols_with_bars():
+    securities = {
+        "AAPL.US": Security(symbol="AAPL.US", currency=Currency.USD),
+        "DEAD.US": Security(symbol="DEAD.US", currency=Currency.USD),
+    }
+    assert catalog.real_equity_symbols(securities, with_bars=["AAPL.US"]) == ["AAPL.US"]
+    assert catalog.real_equity_symbols(securities, with_bars=[]) == []
+
+
 # ---------------------------------------------------------------------------
 # Live database round-trips
 # ---------------------------------------------------------------------------
@@ -542,6 +565,108 @@ def test_map_identifiers_records_figi_symbol_map_and_meta(store_conn, unique_sym
         ).fetchall()
         store_conn.commit()
         assert len(rows) in (0, 3)  # symbol_map rows cascade away with them
+
+
+@needs_store
+def test_real_universe_snapshot_round_trip(store_conn):
+    """The member selection the `universe-snapshot` CLI uses: meta-flagged
+    synthetic/macro rows must be excluded, the snapshot must record exactly
+    the real instruments."""
+    tag = uuid.uuid4().hex[:6].upper()
+    symbols = {
+        f"TST{tag}A.US": Security(symbol=f"TST{tag}A.US", currency=Currency.USD),
+        f"TST{tag}B.US": Security(symbol=f"TST{tag}B.US", currency=Currency.USD,
+                                  meta={"synthetic": True}),
+        f"TST{tag}C.BOE": Security(symbol=f"TST{tag}C.BOE", currency=Currency.GBP,
+                                   meta={"macro": True}),
+    }
+    ids = catalog.ensure_instruments(store_conn, symbols)
+    universe = f"test-{uuid.uuid4().hex[:8]}"
+    try:
+        securities = catalog.load_securities(store_conn, list(symbols))
+        assert securities[f"TST{tag}B.US"].meta.get("synthetic"), "load_securities must carry meta"
+        members = catalog.real_equity_symbols(securities)
+        assert members == [f"TST{tag}A.US"]
+
+        snapshot_id = catalog.snapshot_universe(
+            store_conn, universe, members, ids, snapshot_date=dt.date(2026, 5, 5)
+        )
+        store_conn.commit()
+
+        row = store_conn.execute(
+            "SELECT member_count FROM universe_snapshots WHERE snapshot_id = %s",
+            (snapshot_id,),
+        ).fetchone()
+        assert row[0] == 1
+        assert catalog.snapshot_members(store_conn, snapshot_id) == [ids[f"TST{tag}A.US"]]
+    finally:
+        # universe_members is append-only by trigger, so test teardown has to
+        # step around it explicitly -- the trigger also fires on cascade.
+        store_conn.execute("SET LOCAL session_replication_role = replica")
+        store_conn.execute(
+            "DELETE FROM universe_snapshots WHERE universe = %s", (universe,)
+        )
+        store_conn.execute(
+            "DELETE FROM instruments WHERE symbol = ANY(%s)", (list(symbols),)
+        )
+        store_conn.commit()
+
+
+@needs_store
+def test_fundamentals_point_in_time_round_trip(store_conn, unique_symbol):
+    """The 004 schema: a fact is visible from filed_at onwards, a restatement
+    is a new row (never an edit), and re-inserting the same filing is a no-op."""
+    sec = Security(symbol=unique_symbol, currency=Currency.USD)
+    ids = catalog.ensure_instruments(store_conn, {unique_symbol: sec})
+    iid = ids[unique_symbol]
+    run_id = catalog.start_run(store_conn, source="test", kind="fundamentals",
+                               symbols_requested=1)
+    store_conn.commit()
+
+    insert = """
+        INSERT INTO fundamentals (
+            instrument_id, provider, taxonomy, tag, concept, unit,
+            period_start, period_end, filed_at, value, accession, run_id
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT DO NOTHING
+    """
+    original = (iid, "sec_edgar", "us-gaap", "Revenues", "revenue", "USD",
+                dt.date(2025, 1, 1), dt.date(2025, 12, 31), dt.date(2026, 2, 20),
+                100.0, "0000000000-26-000001", run_id)
+    restated = (iid, "sec_edgar", "us-gaap", "Revenues", "revenue", "USD",
+                dt.date(2025, 1, 1), dt.date(2025, 12, 31), dt.date(2026, 6, 1),
+                95.0, "0000000000-26-000099", run_id)
+
+    try:
+        as_of = """
+            SELECT value FROM fundamentals
+             WHERE instrument_id = %s AND concept = 'revenue' AND filed_at <= %s
+             ORDER BY filed_at DESC LIMIT 1
+        """
+        store_conn.execute(insert, original)
+        store_conn.execute(insert, original)  # same filing re-pulled: no-op
+        store_conn.commit()
+
+        assert store_conn.execute(
+            "SELECT count(*) FROM fundamentals WHERE instrument_id = %s", (iid,)
+        ).fetchone()[0] == 1, "re-insert of the same filing must be idempotent"
+        # Before the filing date the market knew nothing.
+        assert store_conn.execute(as_of, (iid, dt.date(2026, 2, 19))).fetchone() is None
+        assert store_conn.execute(as_of, (iid, dt.date(2026, 2, 20))).fetchone()[0] == 100.0
+
+        store_conn.execute(insert, restated)
+        store_conn.commit()
+        # The restatement is a new row with a later filed_at: history is kept,
+        # and the as-of read sees the right value on each side of it.
+        assert store_conn.execute(as_of, (iid, dt.date(2026, 3, 1))).fetchone()[0] == 100.0
+        assert store_conn.execute(as_of, (iid, dt.date(2026, 6, 1))).fetchone()[0] == 95.0
+    finally:
+        # instruments cascades to fundamentals; the run goes only after.
+        store_conn.execute(
+            "DELETE FROM instruments WHERE instrument_id = %s", (iid,)
+        )
+        store_conn.execute("DELETE FROM ingest_runs WHERE run_id = %s", (run_id,))
+        store_conn.commit()
 
 
 def _cleanup_bars(client, instrument_id: int) -> None:

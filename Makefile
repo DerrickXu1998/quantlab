@@ -24,7 +24,7 @@ END     ?=
 PROVIDERS ?= yahoo stooq
 
 .PHONY: help up down build seed logs shell docker-shell test smoke check-warehouse hash dump-hash gen-api \
-	check-contract sync-contract migrate ingest seed-warehouse ingest-macro map-identifiers coverage signals store-test \
+	check-contract sync-contract migrate ingest seed-warehouse ingest-macro map-identifiers universe-snapshot coverage signals store-test \
 	replay-publish db-shell ch-shell destroy
 
 help: ## Show available targets
@@ -77,6 +77,13 @@ MAP_ALL ?=
 map-identifiers: ## Map warehouse instruments to OpenFIGI identifiers (override MAP_LIMIT/MAP_ALL=--all)
 	$(COMPOSE) run --rm ingest map-identifiers \
 		$(if $(MAP_LIMIT),--limit $(MAP_LIMIT),) $(MAP_ALL)
+
+# Archive the current ingested universe (real instruments with bars; synthetic
+# ZX* and macro *.BOE excluded) into the append-only snapshot tables.
+SNAPSHOT_NAME ?= liquid-500-ftse-core
+
+universe-snapshot: ## Snapshot the current ingested universe (override SNAPSHOT_NAME)
+	$(COMPOSE) run --rm ingest universe-snapshot $(SNAPSHOT_NAME)
 
 coverage: ## What is in the store, where it came from, and how well it compresses
 	$(COMPOSE) run --rm ingest coverage

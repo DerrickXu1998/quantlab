@@ -95,6 +95,9 @@ domain and unambiguously safe commercially.
   issuers — a handful of dual-listings.
 - **Note**: `efts.sec.gov` (full-text search) is undocumented by the SEC. Its stability and
   rate policy are **unverified**; do not build a pipeline on it.
+- **Storage**: facts land in the Postgres `fundamentals` table (migration 004) — one row per
+  (instrument, taxonomy, tag, unit, period, filing), point-in-time by `filed_at`. The ingest
+  jobs are not built yet (needs `SEC_USER_AGENT`); the schema is ready for them.
 
 ### Companies House (UK) — `quantlab.providers.companies_house`
 
@@ -116,6 +119,11 @@ most "free financial data" lists.
 - **Licence**: Crown copyright, normally Open Government Licence. The download page itself
   only says "provided free of charge and is not supported" — **confirm before commercial
   use (unverified).**
+- **Storage**: parsed iXBRL facts share the `fundamentals` table with SEC data
+  (`provider='companies_house'`), keyed by `company_number` via
+  `instruments.company_number` — no ticker bridge table is needed. `filed_at` is the
+  filing-history date, the only honest point-in-time anchor the API gives. Ingest jobs
+  pending an API key.
 
 ---
 
@@ -220,7 +228,10 @@ measuring the performance of companies that survived — which is not a real str
 is no free fix. Partial mitigations: SEC `company_tickers.json` history, Companies House
 dissolved-company records, and archiving your own universe snapshots from day one.
 `quantlab universe <name> --out snapshot.csv` on a daily schedule costs nothing and in
-three years you will have something no free source sells.
+three years you will have something no free source sells. For the warehouse itself,
+`make universe-snapshot` (`quantlab universe-snapshot <name>`) archives the currently
+ingested universe — every real instrument with bars, excluding synthetic and macro
+pseudo-instruments — into the append-only `universe_snapshots`/`universe_members` tables.
 
 ---
 
