@@ -33,20 +33,39 @@ fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 [ -n "$AR_REGION" ] || fail "set AR_REGION to your Artifact Registry region, e.g. AR_REGION=europe-west2"
 
 # ---------------------------------------------------------------------------
-# Docker Engine + Compose v2, from Docker's repository rather than Debian's.
-# Debian's docker.io package has no compose plugin, which is the only thing
-# this host actually needs.
+# Docker Engine + Compose v2, from Docker's own repository rather than the
+# distribution's: the packaged docker.io has no compose plugin, which is the one
+# thing this host actually needs.
+#
+# Debian and Ubuntu are both supported and they are NOT interchangeable here --
+# Docker publishes a separate suite per distribution, and pointing Ubuntu at the
+# Debian repository produces a release file that does not exist ("noble" is not
+# a Debian codename) and an apt update that fails with a 404.
 # ---------------------------------------------------------------------------
+. /etc/os-release
+DISTRO_ID="${ID:-debian}"
+DISTRO_CODENAME="${VERSION_CODENAME:-}"
+
+case "$DISTRO_ID" in
+	debian | ubuntu) ;;
+	*) fail "unsupported distribution '$DISTRO_ID' -- this script handles debian and ubuntu" ;;
+esac
+[ -n "$DISTRO_CODENAME" ] || fail "could not read VERSION_CODENAME from /etc/os-release"
+
+# The -minimal cloud images ship almost nothing, so do not assume any of these.
+# openssl generates the database passwords; cron runs the weekly image prune.
+log "installing base packages"
+apt-get update -qq
+apt-get install -y -qq ca-certificates curl gnupg openssl cron
+
 if ! command -v docker >/dev/null 2>&1; then
-	log "installing Docker Engine and the Compose plugin"
-	apt-get update -qq
-	apt-get install -y -qq ca-certificates curl gnupg
+	log "installing Docker Engine and the Compose plugin (${DISTRO_ID}/${DISTRO_CODENAME})"
 	install -m 0755 -d /etc/apt/keyrings
-	curl -fsSL https://download.docker.com/linux/debian/gpg |
+	curl -fsSL "https://download.docker.com/linux/${DISTRO_ID}/gpg" |
 		gpg --dearmor -o /etc/apt/keyrings/docker.gpg
 	chmod a+r /etc/apt/keyrings/docker.gpg
-	printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian %s stable\n' \
-		"$(dpkg --print-architecture)" "$(. /etc/os-release && echo "$VERSION_CODENAME")" \
+	printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/%s %s stable\n' \
+		"$(dpkg --print-architecture)" "$DISTRO_ID" "$DISTRO_CODENAME" \
 		>/etc/apt/sources.list.d/docker.list
 	apt-get update -qq
 	apt-get install -y -qq docker-ce docker-ce-cli containerd.io \
@@ -72,8 +91,24 @@ fi
 # present its token. Configured for root and for the deploying user, because
 # whichever of them runs `docker compose pull` needs it.
 # ---------------------------------------------------------------------------
+# The -minimal images do not ship the SDK, so install it rather than failing.
+# It is worth the disk: `gcloud auth configure-docker` installs a credential
+# helper that mints a fresh token from the metadata server on every pull. The
+# alternative -- `docker login` with an access token -- expires after an hour
+# and would break the next unattended restart.
+if ! command -v gcloud >/dev/null 2>&1; then
+	log "installing the Google Cloud CLI (absent on -minimal images)"
+	curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg |
+		gpg --dearmor -o /etc/apt/keyrings/cloud.google.gpg
+	chmod a+r /etc/apt/keyrings/cloud.google.gpg
+	echo "deb [signed-by=/etc/apt/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+		>/etc/apt/sources.list.d/google-cloud-sdk.list
+	apt-get update -qq
+	apt-get install -y -qq google-cloud-cli
+fi
+
 log "configuring Docker for ${AR_REGION}-docker.pkg.dev"
-command -v gcloud >/dev/null 2>&1 || fail "gcloud not found -- use a Google-provided Debian image, or install the SDK"
+command -v gcloud >/dev/null 2>&1 || fail "gcloud is still not on PATH after installing google-cloud-cli"
 gcloud auth configure-docker "${AR_REGION}-docker.pkg.dev" --quiet
 if [ "$DEPLOY_USER" != "root" ]; then
 	sudo -u "$DEPLOY_USER" gcloud auth configure-docker "${AR_REGION}-docker.pkg.dev" --quiet
