@@ -40,6 +40,7 @@ from .catalog import (
     map_vendor_symbols,
     real_equity_symbols,
     record_cik_mappings,
+    record_company_number_mappings,
     record_figi_mappings,
     record_rejects,
     run_history,
@@ -69,9 +70,11 @@ from .conn import (
 )
 from .identifiers import MapReport, map_identifiers
 from .fundamentals import (
+    ChMapReport,
     flatten_companyfacts,
     ingest_ch_fundamentals,
     ingest_sec_fundamentals,
+    map_ch_companies,
     map_sec_tickers,
     write_fundamentals,
 )
@@ -93,6 +96,7 @@ from .reader import coverage, load_panel, panel_for_modelling
 __all__ = [
     "CH_ENV_VAR",
     "CH_MIGRATIONS_DIR",
+    "ChMapReport",
     "DEFAULT_CH_URL",
     "DEFAULT_DSN",
     "ENV_VAR",
@@ -127,6 +131,7 @@ __all__ = [
     "load_bars",
     "load_panel",
     "load_securities",
+    "map_ch_companies",
     "map_identifiers",
     "map_sec_tickers",
     "map_vendor_symbols",
@@ -137,6 +142,7 @@ __all__ = [
     "ping",
     "real_equity_symbols",
     "record_cik_mappings",
+    "record_company_number_mappings",
     "record_figi_mappings",
     "record_rejects",
     "run_history",

@@ -297,6 +297,157 @@ def test_parse_ixbrl_period_end():
 
 
 # ---------------------------------------------------------------------------
+# Companies House name -> company_number matching
+# ---------------------------------------------------------------------------
+
+
+def test_ch_search_name_strips_bloomberg_decorations():
+    from quantlab.store.fundamentals import ch_search_name
+
+    assert ch_search_name("BERKELEY GROUP HOLDINGS/THE") == "BERKELEY GROUP HOLDINGS"
+    assert ch_search_name("COCA-COLA HBC AG-DI") == "COCA-COLA HBC AG"
+    assert ch_search_name("SHELL PLC") == "SHELL PLC"
+    assert ch_search_name("  3i   Group  plc ") == "3i Group plc"
+    assert ch_search_name("") == ""
+
+
+def test_normalize_company_name_strips_legal_forms_and_punctuation():
+    from quantlab.store.fundamentals import normalize_company_name
+
+    assert normalize_company_name("SHELL PLC") == "SHELL"
+    assert normalize_company_name("AstraZeneca plc") == "ASTRAZENECA"
+    assert normalize_company_name("Marks & Spencer Group plc") == "MARKS AND SPENCER GROUP"
+    assert normalize_company_name("Marks and Spencer Group PLC") == "MARKS AND SPENCER GROUP"
+    assert normalize_company_name("J Sainsbury plc") == "J SAINSBURY"
+    assert normalize_company_name("THE BERKELEY GROUP HOLDINGS PLC") == "BERKELEY GROUP HOLDINGS"
+    assert normalize_company_name("Britvic Limited") == "BRITVIC"
+    # CH registers some legal forms with dots: "BP P.L.C." must collapse to BP.
+    assert normalize_company_name("BP P.L.C.") == "BP"
+    assert normalize_company_name("BRITISH AMERICAN TOBACCO P.L.C.") == "BRITISH AMERICAN TOBACCO"
+    # The weak tier drops HOLDINGS/GROUP as well.
+    assert normalize_company_name("THE BERKELEY GROUP HOLDINGS PLC", strip_weak=True) == "BERKELEY"
+    assert normalize_company_name("Berkeley Group plc", strip_weak=True) == "BERKELEY"
+    # A legal form alone is never stripped to nothing.
+    assert normalize_company_name("LTD") == "LTD"
+
+
+def _ch_item(title, number, status="active"):
+    return {"title": title, "company_number": number, "company_status": status}
+
+
+def test_match_ch_company_exact_and_suffix_stripped():
+    from quantlab.store.fundamentals import match_ch_company
+
+    item, how = match_ch_company("SHELL PLC", [_ch_item("SHELL PLC", "04366849")])
+    assert how == "exact" and item["company_number"] == "04366849"
+
+    # Query without the legal form still matches the CH title that carries it.
+    item, how = match_ch_company("AstraZeneca", [_ch_item("ASTRAZENECA PLC", "02723534")])
+    assert how == "exact" and item["company_number"] == "02723534"
+
+    # A leading THE difference is still an exact-tier match.
+    item, how = match_ch_company(
+        "BERKELEY GROUP HOLDINGS", [_ch_item("THE BERKELEY GROUP HOLDINGS PLC", "05172586")]
+    )
+    assert how == "exact" and item["company_number"] == "05172586"
+
+
+def test_match_ch_company_ambiguous_multi_hits_are_skipped():
+    from quantlab.store.fundamentals import match_ch_company
+
+    results = [
+        _ch_item("PHOENIX GROUP HOLDINGS PLC", "11111111"),
+        _ch_item("PHOENIX GROUP HOLDINGS", "22222222"),
+    ]
+    item, how = match_ch_company("Phoenix Group Holdings", results)
+    assert item is None and how == "ambiguous"
+
+    # A weak-tier name hit with several active candidates is not good enough.
+    results = [
+        _ch_item("BERKELEY GROUP PLC", "33333333"),
+        _ch_item("BERKELEY HOLDINGS LTD", "44444444"),
+    ]
+    item, how = match_ch_company("Berkeley", results)
+    assert item is None and how == "ambiguous"
+
+
+def test_match_ch_company_skips_inactive_and_accepts_single_active_weak_hit():
+    from quantlab.store.fundamentals import match_ch_company
+
+    # Only dissolved namesakes: never a match.
+    item, how = match_ch_company("GONE PLC", [_ch_item("GONE PLC", "55555555", "dissolved")])
+    assert item is None and how == "no-active"
+
+    assert match_ch_company("NOT THERE", []) == (None, "no-results")
+
+    # One active candidate whose name matches only after dropping HOLDINGS/GROUP.
+    item, how = match_ch_company(
+        "ACME", [_ch_item("ACME GROUP PLC", "66666666"), _ch_item("ACME LTD", "77777777", "dissolved")]
+    )
+    assert how == "weak" and item["company_number"] == "66666666"
+
+    # No overlap at all.
+    item, how = match_ch_company("SAINSBURY", [_ch_item("TESCO PLC", "00445790")])
+    assert item is None and how == "no-match"
+
+
+def test_map_ch_companies_matches_flags_ambiguous_and_resumes(monkeypatch):
+    from quantlab.store import fundamentals as fundamentals_mod
+    from quantlab.store.fundamentals import map_ch_companies
+
+    class StubCH:
+        def search(self, query, limit=5):
+            return {
+                "SHELL PLC": [_ch_item("SHELL PLC", "04366849")],
+                "SPLIT PLC": [_ch_item("SPLIT PLC", "00000001"), _ch_item("SPLIT PLC", "00000002")],
+                "GONE PLC": [_ch_item("GONE PLC", "00000003", "dissolved")],
+            }.get(query, [])
+
+    rows = [
+        # symbol, name, company_number, meta
+        ("SHEL.LON", "", "", {"openfigi": {"name": "SHELL PLC"}}),
+        ("SPLT.LON", "", "", {"openfigi": {"name": "SPLIT PLC"}}),       # ambiguous
+        ("DEAD.LON", "", "", {"openfigi": {"name": "GONE PLC"}}),        # inactive only
+        ("NONAME.LON", "", "", {}),                                      # nothing to search with
+        ("DONE.LON", "", "00000006", {}),                                # already mapped
+        ("AAPL.US", "", "", {"openfigi": {"name": "APPLE INC"}}),        # not a UK line
+        ("GBPUSD.BOE", "", "", {"macro": True}),                         # pseudo-instrument
+    ]
+
+    class FakeResult:
+        def fetchall(self):
+            return rows
+
+    class FakeConn:
+        def execute(self, query, params=None):
+            return FakeResult()
+
+        def commit(self):
+            pass
+
+    recorded: dict[str, str] = {}
+    monkeypatch.setattr(
+        fundamentals_mod.catalog, "instrument_ids",
+        lambda conn, syms: {s: i for i, s in enumerate(syms)},
+    )
+    monkeypatch.setattr(
+        fundamentals_mod.catalog, "record_company_number_mappings",
+        lambda conn, m, ids, source, names=None: recorded.update(m) or len(m),
+    )
+
+    report = map_ch_companies(FakeConn(), provider=StubCH())
+
+    assert report.candidates == 4  # .LON, non-pseudo, missing company_number
+    assert recorded == {"SHEL.LON": "04366849"}
+    assert report.mapped == 1
+    assert report.matched_names == {"SHEL.LON": "SHELL PLC"}
+    assert report.ambiguous == ["SPLT.LON"]
+    assert sorted(report.unresolved) == ["DEAD.LON", "NONAME.LON"]
+    assert report.status == "partial"
+    assert report.source == "companies_house"
+
+
+# ---------------------------------------------------------------------------
 # Live database round-trips (providers stubbed; the store is real)
 # ---------------------------------------------------------------------------
 
@@ -341,7 +492,9 @@ def test_map_sec_tickers_round_trip(store_conn):
 
     class StubSec:
         def ticker_to_cik(self):
-            return {symbol.rsplit(".", 1)[0]: 320193}
+            # A CIK no real instrument carries: the real bindings live in the
+            # same symbol_map exclusion domain (source, vendor_symbol).
+            return {symbol.rsplit(".", 1)[0]: 4242424242}
 
     try:
         report = map_sec_tickers(store_conn, [symbol], provider=StubSec())
@@ -351,13 +504,13 @@ def test_map_sec_tickers_round_trip(store_conn):
             "SELECT cik, meta->'sec_edgar'->>'cik' FROM instruments WHERE symbol = %s",
             (symbol,),
         ).fetchone()
-        assert row == ("0000320193", "320193")
+        assert row == ("4242424242", "4242424242")
         binding = store_conn.execute(
             "SELECT vendor_symbol FROM symbol_map"
             " WHERE instrument_id = %s AND source = 'sec_edgar'",
             (instrument_id,),
         ).fetchone()
-        assert binding == ("0000320193",)
+        assert binding == ("4242424242",)
     finally:
         # symbol_map cascades with the instrument.
         store_conn.execute("DELETE FROM instruments WHERE instrument_id = %s", (instrument_id,))
@@ -426,9 +579,72 @@ def test_sec_fundamentals_round_trip_is_idempotent_and_point_in_time(store_conn)
 
 
 @needs_store
-def test_ch_fundamentals_round_trip(store_conn):
-    from types import SimpleNamespace
+def test_map_ch_companies_round_trip(store_conn):
+    from quantlab.store.fundamentals import map_ch_companies
 
+    symbol = f"ZW{uuid.uuid4().hex[:6].upper()}.LON"
+    # A company number no real instrument carries: the real bindings live in
+    # the same symbol_map exclusion domain (source, vendor_symbol).
+    number = "FC042424"
+    ids = store.ensure_instruments(
+        store_conn,
+        {symbol: Security(symbol=symbol, country="GB", currency=Currency.GBX,
+                          meta={"openfigi": {"name": "SHELL PLC"}})},
+    )
+    store_conn.commit()
+    instrument_id = ids[symbol]
+
+    class StubCH:
+        def search(self, query, limit=5):
+            assert query == "SHELL PLC"
+            return [{"title": "SHELL PLC", "company_number": number,
+                     "company_status": "active"}]
+
+    try:
+        report = map_ch_companies(store_conn, [symbol], provider=StubCH())
+        assert report.mapped == 1 and report.unresolved == [] and report.ambiguous == []
+
+        row = store_conn.execute(
+            "SELECT company_number, meta->'companies_house'->>'company_name'"
+            " FROM instruments WHERE symbol = %s",
+            (symbol,),
+        ).fetchone()
+        assert row == (number, "SHELL PLC")
+        binding = store_conn.execute(
+            "SELECT vendor_symbol FROM symbol_map"
+            " WHERE instrument_id = %s AND source = 'companies_house'",
+            (instrument_id,),
+        ).fetchone()
+        assert binding == (number,)
+
+        # A re-run sees the binding and does not call the provider again.
+        class ExplodingCH:
+            def search(self, query, limit=5):
+                raise AssertionError("only-missing must skip bound instruments")
+
+        again = map_ch_companies(store_conn, [symbol], provider=ExplodingCH())
+        assert again.candidates == 0
+
+        # The mapping never overwrites an existing company_number.
+        class OtherCH:
+            def search(self, query, limit=5):
+                return [{"title": "SHELL PLC", "company_number": "FC999999",
+                         "company_status": "active"}]
+
+        third = map_ch_companies(store_conn, [symbol], provider=OtherCH(), only_missing=False)
+        assert third.mapped == 1
+        kept = store_conn.execute(
+            "SELECT company_number FROM instruments WHERE symbol = %s", (symbol,)
+        ).fetchone()
+        assert kept == (number,)
+    finally:
+        # symbol_map cascades with the instrument.
+        store_conn.execute("DELETE FROM instruments WHERE instrument_id = %s", (instrument_id,))
+        store_conn.commit()
+
+
+@needs_store
+def test_ch_fundamentals_round_trip(store_conn):
     from quantlab.store.fundamentals import ingest_ch_fundamentals
 
     symbol = f"ZV{uuid.uuid4().hex[:6].upper()}.LON"
@@ -442,8 +658,9 @@ def test_ch_fundamentals_round_trip(store_conn):
     instrument_id = ids[symbol]
 
     class StubCH:
-        def __init__(self):
-            self.client = SimpleNamespace(get=lambda url, **kw: IXBRL_DOC.encode())
+        def xhtml_content(self, document_metadata_url):
+            assert document_metadata_url == "https://documents/abc"
+            return IXBRL_DOC.encode()
 
         def filing_history(self, company_number, category="accounts", limit=50):
             assert company_number == number

@@ -246,6 +246,9 @@ def test_gbx_instrument_records_both_currencies(store_conn):
     ).fetchone()
     assert row == ("GBP", "GBX")
 
+    store_conn.execute("DELETE FROM instruments WHERE symbol = %s", (symbol,))
+    store_conn.commit()
+
 
 @needs_store
 def test_universe_members_are_append_only(store_conn, unique_symbol):

@@ -25,7 +25,7 @@ PROVIDERS ?= yahoo stooq
 
 .PHONY: help up down build seed logs shell docker-shell test smoke check-warehouse hash dump-hash gen-api \
 	check-contract sync-contract migrate ingest seed-warehouse ingest-macro ingest-fred map-identifiers \
-	map-sec-tickers ingest-sec-fundamentals ingest-ch-fundamentals universe-snapshot coverage signals \
+	map-sec-tickers map-ch-companies ingest-sec-fundamentals ingest-ch-fundamentals universe-snapshot coverage signals \
 	store-test replay-publish db-shell ch-shell destroy
 
 help: ## Show available targets
@@ -92,6 +92,14 @@ ingest-sec-fundamentals: ## Ingest SEC companyfacts into fundamentals (needs SEC
 		$(if $(SEC_LIMIT),--limit $(SEC_LIMIT),) $(SEC_ALL)
 
 CH_LIMIT ?=
+
+# Companies House bridge: search /search/companies per .LON instrument using
+# the OpenFIGI name, accept only high-confidence matches (exact normalized
+# name, or a single active candidate). Ambiguous hits are reported, never
+# written. 600 req / 5 min budget; cached 30 days, so re-runs are free.
+map-ch-companies: ## Bind Companies House company numbers to .LON instruments (needs COMPANIES_HOUSE_API_KEY; MAP_LIMIT/MAP_ALL=--all)
+	$(COMPOSE) run --rm ingest map-ch-companies \
+		$(if $(MAP_LIMIT),--limit $(MAP_LIMIT),) $(MAP_ALL)
 
 ingest-ch-fundamentals: ## Ingest Companies House accounts into fundamentals (needs COMPANIES_HOUSE_API_KEY; CH_LIMIT)
 	$(COMPOSE) run --rm ingest ingest-ch-fundamentals \

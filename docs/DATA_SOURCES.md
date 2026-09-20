@@ -121,6 +121,13 @@ most "free financial data" lists.
 - **Honest limitations**, because they shape what you can build:
   - Many LSE issuers are incorporated in Jersey, Guernsey, Ireland or the Isle of Man and
     are simply not in Companies House.
+  - **Most large PLCs file their accounts at CH as scanned PDFs, not iXBRL** — verified
+    across the FTSE core in 2026-09: every mapped FTSE-100 name's filing history is
+    100% `application/pdf`. iXBRL coverage is concentrated in smaller companies filing
+    via accounting software. The ingest checks the document metadata's resource list and
+    skips PDF-only filings (logged per company), so `ingest-ch-fundamentals` yields
+    facts only where iXBRL actually exists. UK large-cap fundamentals effectively need a
+    different source (or PDF extraction, deferred).
   - Accounts follow a statutory calendar, not a market reporting calendar. They lag and are
     coarser than US quarterly filings.
   - **Nothing in the data carries a ticker.** You build the company-number → SEDOL/ISIN →
@@ -132,6 +139,21 @@ most "free financial data" lists.
   (`provider='companies_house'`), keyed by `company_number` via
   `instruments.company_number` — no ticker bridge table is needed. `filed_at` is the
   filing-history date, the only honest point-in-time anchor the API gives.
+- **The ticker bridge exists**: `make map-ch-companies` (`quantlab map-ch-companies
+  [--limit N] [--all]`) searches `/search/companies` once per `.LON` instrument using the
+  OpenFIGI name recorded by `make map-identifiers` (Bloomberg decorations like `/THE` and
+  `-DI` are stripped first), so **run `map-identifiers` before `map-ch-companies`**.
+  Matching is deliberately conservative: both sides are normalized (case, punctuation —
+  including CH's dotted "P.L.C." form — a leading THE, trailing PLC/LIMITED/LTD legal
+  forms), and a match is accepted only as an exact normalized-name hit on a single
+  **active** company, or a HOLDINGS/GROUP-stripped hit when the search returned exactly
+  one active candidate. Ambiguous multi-hits go to the report's review list and are never
+  written; an existing `company_number` is never overwritten. Search responses are cached
+  30 days, so re-runs are free. Known gaps beyond the Jersey/Guernsey/IoM/Ireland
+  incorporation hole (Glencore, WPP, Pershing Square…): instruments with no recorded name
+  at all are skipped, and vendor-name abbreviations ("SAINSBURY (J) PLC", "SCOTTISH
+  MORTGAGE INV TR PLC", truncated "INTERCONTINENTAL HOTELS GROU") do not match the
+  registered title — those land in the unresolved list for manual mapping.
   `make ingest-ch-fundamentals` (`quantlab ingest-ch-fundamentals [--limit N]`, needs
   `COMPANIES_HOUSE_API_KEY` in `.env`) walks each company's filing history and parses
   every accounts document for the `UK_TAGS` concepts. Two documented gaps: `unit` stays

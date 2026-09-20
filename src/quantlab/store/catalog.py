@@ -267,6 +267,64 @@ def record_cik_mappings(
     return len(rows)
 
 
+def record_company_number_mappings(
+    conn,
+    mappings: Mapping[str, str],
+    ids: Mapping[str, int],
+    *,
+    source: str = "companies_house",
+    names: Mapping[str, str] | None = None,
+) -> int:
+    """Record symbol -> Companies House company-number matches.
+
+    Mirrors ``record_cik_mappings``: the number lands in the two places join
+    paths already read -- the ``instruments.company_number`` column and a
+    ``symbol_map`` row under ``source='companies_house'`` -- and the matched
+    CH title folds into ``meta['companies_house']``. Stricter than the CIK
+    variant on purpose: an existing company_number is never overwritten, not
+    just never blanked -- a wrong CH binding is worse than a missing one.
+    """
+    names = names or {}
+    rows = []
+    number_by_symbol: dict[str, str] = {}
+    for symbol, number in mappings.items():
+        if symbol not in ids or not str(number).strip():
+            continue
+        number_by_symbol[symbol] = str(number)
+        rows.append(
+            {
+                "symbol": symbol,
+                "company_number": str(number),
+                "meta": json.dumps(
+                    {
+                        source: {
+                            "company_number": str(number),
+                            "company_name": str(names.get(symbol, "")),
+                            "mapped_at": dt.date.today().isoformat(),
+                        }
+                    },
+                    sort_keys=True,
+                ),
+            }
+        )
+    if not rows:
+        return 0
+
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            UPDATE instruments SET
+                company_number = COALESCE(NULLIF(instruments.company_number, ''),
+                                          NULLIF(%(company_number)s, '')),
+                meta = instruments.meta || %(meta)s::jsonb
+            WHERE symbol = %(symbol)s
+            """,
+            rows,
+        )
+    map_vendor_symbols(conn, source, number_by_symbol, ids)
+    return len(rows)
+
+
 # ---------------------------------------------------------------------------
 # Provenance
 # ---------------------------------------------------------------------------

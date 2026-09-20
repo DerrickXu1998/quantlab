@@ -9,6 +9,10 @@ which unit, which period, what value, and when the market could first know it
                                ``symbol_map`` row (source='sec_edgar').
   * ``ingest_sec_fundamentals`` companyfacts per CIK-bound instrument,
                                flattened one row per XBRL fact.
+  * ``map_ch_companies``       .LON instrument name -> Companies House
+                               company_number via ``/search/companies``,
+                               written to ``instruments.company_number`` plus
+                               a ``symbol_map`` row (source='companies_house').
   * ``ingest_ch_fundamentals`` filing history + iXBRL accounts per
                                ``instruments.company_number``.
 
@@ -24,6 +28,8 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import re
+from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
 from ..providers.companies_house import UK_TAGS, parse_ixbrl_facts, parse_ixbrl_period_end
@@ -359,6 +365,230 @@ def ingest_sec_fundamentals(
 
 
 # ---------------------------------------------------------------------------
+# Companies House: name -> company_number mapping
+# ---------------------------------------------------------------------------
+
+_LEGAL_SUFFIXES = ("PUBLIC LIMITED COMPANY", "PLC", "LIMITED", "LTD", "LLP", "LP")
+_WEAK_TOKENS = {"HOLDINGS", "HOLDING", "GROUP"}
+
+
+def ch_search_name(raw: str) -> str:
+    """Best-effort Companies House search string for a vendor name.
+
+    OpenFIGI names are Bloomberg-style and carry decorations Companies House
+    never uses: a trailing "/THE" (the article moved to the end) and a "-DI"
+    depositary-interest marker. Both are dropped; the legal-form suffix stays
+    in the query because CH's own titles carry it ("SHELL PLC").
+    """
+    name = re.sub(r"\s+", " ", str(raw or "")).strip()
+    name = re.sub(r"/THE$", "", name, flags=re.IGNORECASE).strip()
+    name = re.sub(r"-DI$", "", name, flags=re.IGNORECASE).strip()
+    return name
+
+
+def normalize_company_name(name: str, *, strip_weak: bool = False) -> str:
+    """Comparison key for company names.
+
+    Upper-cased, ampersands spelled out, punctuation removed (dots/commas/
+    apostrophes deleted outright, so "P.L.C." collapses to "PLC"), a leading
+    "THE" and trailing legal forms (PLC/LIMITED/LTD/LLP/LP) removed. With
+    ``strip_weak`` the filler words HOLDINGS/GROUP go too -- the second-tier
+    key, trusted only when a search returns a single active candidate.
+    """
+    text = str(name or "").upper().replace("&", " AND ")
+    text = re.sub(r"[.,']+", "", text)
+    tokens = re.sub(r"[^A-Z0-9 ]+", " ", text).split()
+    if tokens and tokens[0] == "THE":
+        tokens = tokens[1:]
+    changed = True
+    while changed:
+        changed = False
+        for suffix in _LEGAL_SUFFIXES:
+            parts = suffix.split()
+            if len(tokens) > len(parts) and tokens[-len(parts):] == parts:
+                tokens = tokens[: -len(parts)]
+                changed = True
+    if strip_weak:
+        tokens = [t for t in tokens if t not in _WEAK_TOKENS]
+    return " ".join(tokens)
+
+
+def match_ch_company(
+    query: str, results: Sequence[Mapping[str, Any]]
+) -> tuple[Mapping[str, Any] | None, str]:
+    """Pick the Companies House entry for a cleaned query name, conservatively.
+
+    Returns ``(item, how)`` with ``how`` "exact" or "weak" on a match, and
+    ``(None, status)`` otherwise. Only active companies are eligible -- a
+    dissolved namesake never satisfies the query. "exact" is one active result
+    whose normalized title equals the normalized query; "weak" additionally
+    drops HOLDINGS/GROUP and is accepted only when the search produced a
+    single active candidate at all. Two plausible live candidates return
+    "ambiguous": the instrument goes to the review list instead of guessing.
+    """
+    if not normalize_company_name(query):
+        return None, "no-name"
+    active = [
+        r
+        for r in results
+        if str(r.get("company_status", "")).lower() == "active" and r.get("company_number")
+    ]
+    if not active:
+        return None, "no-results" if not results else "no-active"
+
+    key = normalize_company_name(query)
+    exact = [r for r in active if normalize_company_name(str(r.get("title", ""))) == key]
+    if len(exact) == 1:
+        return exact[0], "exact"
+    if len(exact) > 1:
+        return None, "ambiguous"
+
+    weak_key = normalize_company_name(query, strip_weak=True)
+    weak = [
+        r
+        for r in active
+        if normalize_company_name(str(r.get("title", "")), strip_weak=True) == weak_key
+    ]
+    if len(weak) == 1 and len(active) == 1:
+        return weak[0], "weak"
+    return None, "ambiguous" if weak else "no-match"
+
+
+@dataclass
+class ChMapReport(MapReport):
+    """MapReport plus the review list and the titles actually bound."""
+
+    source: str = SOURCE_CH
+    ambiguous: list[str] = field(default_factory=list)
+    matched_names: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def status(self) -> str:
+        if self.candidates and not self.mapped:
+            return "failed"
+        return "partial" if (self.unresolved or self.ambiguous) else "ok"
+
+    def summary(self) -> str:
+        lines = [
+            f"map-ch-companies: {self.status} (source {self.source})",
+            f"  candidates {self.candidates}",
+            f"  mapped     {self.mapped}",
+        ]
+        for symbol, title in list(self.matched_names.items())[:10]:
+            lines.append(f"    {symbol} -> {title}")
+        if len(self.matched_names) > 10:
+            lines.append(f"    (+{len(self.matched_names) - 10} more)")
+        if self.ambiguous:
+            shown = ", ".join(self.ambiguous[:10])
+            more = f" (+{len(self.ambiguous) - 10} more)" if len(self.ambiguous) > 10 else ""
+            lines.append(f"  ambiguous (review list, nothing written) {shown}{more}")
+        if self.unresolved:
+            shown = ", ".join(self.unresolved[:10])
+            more = f" (+{len(self.unresolved) - 10} more)" if len(self.unresolved) > 10 else ""
+            lines.append(f"  unresolved {shown}{more}")
+        return "\n".join(lines)
+
+
+def _ch_map_candidates(
+    conn, symbols: Sequence[str] | None = None, *, only_missing: bool
+) -> list[tuple[str, str]]:
+    """(symbol, search name) for .LON instruments: real equities only.
+
+    The search string comes from the OpenFIGI name when present
+    (map-identifiers ran first and its names are reliable), falling back to
+    the instrument's own name. Neither means no API call: the symbol is
+    reported as unresolved instead of sending a bare ticker to CH.
+    """
+    query = "SELECT symbol, name, company_number, meta FROM instruments"
+    params: list = []
+    if symbols:
+        query += " WHERE symbol = ANY(%s)"
+        params.append(list(symbols))
+    query += " ORDER BY symbol"
+    rows = conn.execute(query, params).fetchall()
+    out = []
+    for symbol, name, company_number, meta in rows:
+        if not symbol.endswith(".LON") or _is_pseudo(meta):
+            continue
+        if only_missing and company_number:
+            continue
+        figi_name = ((meta or {}).get("openfigi") or {}).get("name") or ""
+        out.append((symbol, ch_search_name(figi_name or name or "")))
+    return out
+
+
+def map_ch_companies(
+    conn,
+    symbols: Sequence[str] | None = None,
+    *,
+    provider=None,
+    limit: int | None = None,
+    only_missing: bool = True,
+) -> ChMapReport:
+    """Bind Companies House company numbers to catalog .LON instruments.
+
+    One ``/search/companies`` call per candidate (600 req / 5 min budget; the
+    HTTP cache makes a re-run free for 30 days). Only high-confidence matches
+    are written -- see :func:`match_ch_company`; ambiguous multi-hits land in
+    ``report.ambiguous`` for manual review and are never guessed. An existing
+    ``company_number`` is never overwritten, so the mapping is the resume
+    state. Commits once at the end, like :func:`map_sec_tickers`.
+    """
+    if provider is None:
+        from ..providers.companies_house import CompaniesHouseProvider
+
+        provider = CompaniesHouseProvider()
+        # Fail before any searching when the key is missing.
+        provider._require_key()
+
+    candidates = _ch_map_candidates(conn, symbols, only_missing=only_missing)
+    if limit:
+        candidates = candidates[:limit]
+    report = ChMapReport(candidates=len(candidates))
+    if not candidates:
+        log.info("map-ch-companies: nothing to do")
+        return report
+
+    mappings: dict[str, str] = {}
+    names: dict[str, str] = {}
+    for symbol, query in candidates:
+        if not query:
+            log.info("map-ch-companies: %s has no name to search with", symbol)
+            report.unresolved.append(symbol)
+            continue
+        try:
+            results = provider.search(query, limit=10)
+        except Exception as exc:
+            log.warning("map-ch-companies: search for %s (%r) failed: %s", symbol, query, exc)
+            report.unresolved.append(symbol)
+            continue
+        item, how = match_ch_company(query, results)
+        if item is None:
+            (report.ambiguous if how == "ambiguous" else report.unresolved).append(symbol)
+            log.info("map-ch-companies: %s (%r) -> %s", symbol, query, how)
+            continue
+        number, title = str(item["company_number"]), str(item.get("title") or "")
+        mappings[symbol] = number
+        names[symbol] = title
+        report.matched_names[symbol] = title
+        log.info("map-ch-companies: %s -> %s (%s, %s)", symbol, title, number, how)
+
+    ids = catalog.instrument_ids(conn, list(mappings))
+    report.mapped = catalog.record_company_number_mappings(
+        conn, mappings, ids, source=SOURCE_CH, names=names
+    )
+    conn.commit()
+
+    log.info(
+        "map-ch-companies: %d matched, %d ambiguous, %d unmatched",
+        report.mapped,
+        len(report.ambiguous),
+        len(report.unresolved),
+    )
+    return report
+
+
+# ---------------------------------------------------------------------------
 # Companies House: filing history + iXBRL accounts
 # ---------------------------------------------------------------------------
 
@@ -378,6 +608,8 @@ def ingest_ch_fundamentals(
     Per company: the filing history supplies the point-in-time anchor
     (``date`` -> filed_at) and the filing identity (``transaction_id`` ->
     accession); each accounts document is parsed for the UK_TAGS concepts.
+    PDF-only filings (most large PLCs file scanned accounts at CH) are skipped
+    via the document metadata's resource list, never retried.
 
     Two honest gaps in what the REST API gives us, both recorded in ``meta``:
 
@@ -432,17 +664,22 @@ def ingest_ch_fundamentals(
             missing.append(symbol)
             continue
         company_rows = 0
+        pdf_only = 0
         for _, item in history.iterrows():
-            doc = (item.get("links") or {}).get("document_metadata")
+            links = item.get("links")
+            doc = links.get("document_metadata") if isinstance(links, Mapping) else None
             filed_at = _as_date(item.get("date"))
             if not doc or filed_at is None:
                 continue
             try:
-                content = provider.client.get(
-                    f"{doc}/content", ttl=-1, headers={"Accept": "application/xhtml+xml"}
-                )
+                content = provider.xhtml_content(doc)
             except Exception as exc:
                 log.debug("companies_house: document fetch failed for %s: %s", symbol, exc)
+                continue
+            if content is None:
+                # PDF-only filing: most large PLCs file scanned accounts at
+                # CH, so there is no iXBRL to parse. Not an error, just a gap.
+                pdf_only += 1
                 continue
             text = content.decode("utf-8", errors="replace")
             facts = parse_ixbrl_facts(text, concepts)
@@ -477,7 +714,10 @@ def ingest_ch_fundamentals(
                 company_rows += 1
         ok += 1
         if company_rows == 0:
-            log.info("companies_house: no parseable accounts for %s (%s)", symbol, number)
+            log.info(
+                "companies_house: no parseable accounts for %s (%s): %d filings PDF-only",
+                symbol, number, pdf_only,
+            )
         if (i + 1) % chunk_size == 0:
             flush()
             log.info("companies_house: %d/%d companies, %d rows so far", i + 1, len(candidates), written)

@@ -96,6 +96,24 @@ class CompaniesHouseProvider(DataProvider):
         self._require_key()
         return self.client.get_json(f"{API_BASE}/company/{company_number}", ttl=7 * 86400)
 
+    # Document formats we can parse iXBRL facts from, in preference order.
+    XHTML_FORMATS = ("application/xhtml+xml", "application/xml", "text/html")
+
+    def xhtml_content(self, document_metadata_url: str) -> bytes | None:
+        """The accounts document as XHTML/iXBRL, or None when it is PDF-only.
+
+        Most large PLCs file their accounts at Companies House as scanned
+        PDFs -- iXBRL coverage is concentrated in smaller companies filing via
+        accounting software. The document metadata lists the available formats
+        up front, so checking it first costs one cacheable request and avoids
+        a 406 retried four times.
+        """
+        resources = (self.client.get_json(document_metadata_url, ttl=86400).get("resources") or {})
+        fmt = next((f for f in self.XHTML_FORMATS if f in resources), None)
+        if fmt is None:
+            return None
+        return self.client.get(f"{document_metadata_url}/content", ttl=-1, headers={"Accept": fmt})
+
     def filing_history(self, company_number: str, category: str = "accounts", limit: int = 50) -> pd.DataFrame:
         """Filing history -- the source of point-in-time filing dates for the UK."""
         self._require_key()
@@ -150,13 +168,16 @@ class CompaniesHouseProvider(DataProvider):
                 log.warning("companies_house: filing history for %s failed: %s", symbol, exc)
                 continue
             for _, item in history.iterrows():
-                doc = (item.get("links") or {}).get("document_metadata")
+                links = item.get("links")
+                doc = links.get("document_metadata") if isinstance(links, dict) else None
                 if not doc:
                     continue
                 try:
-                    content = self.client.get(f"{doc}/content", ttl=-1, headers={"Accept": "application/xhtml+xml"})
+                    content = self.xhtml_content(doc)
                 except Exception as exc:
                     log.debug("companies_house: document fetch failed: %s", exc)
+                    continue
+                if content is None:
                     continue
                 values = parse_ixbrl(content.decode("utf-8", errors="replace"), concepts)
                 if values:

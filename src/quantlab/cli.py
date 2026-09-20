@@ -385,6 +385,30 @@ def cmd_ingest_sec_fundamentals(args) -> int:
     return 0 if report.status in ("ok", "partial") else 1
 
 
+def cmd_map_ch_companies(args) -> int:
+    """Bind Companies House company numbers to catalog .LON instruments."""
+    from . import store
+    from .schema import ProviderError
+
+    # Catalog-only: company_number bindings live in Postgres, no bars involved.
+    with store.session(args.db_url) as conn:
+        if not args.no_migrate:
+            store.migrate(conn)
+
+        try:
+            report = store.map_ch_companies(
+                conn,
+                limit=args.limit,
+                only_missing=args.only_missing,
+            )
+        except (ValueError, ProviderError) as exc:
+            # CompaniesHouseProvider raises ProviderError without a key.
+            raise SystemExit(str(exc)) from exc
+        print(report.summary())
+
+    return 0 if report.status in ("ok", "partial") else 1
+
+
 def cmd_ingest_ch_fundamentals(args) -> int:
     from . import store
     from .schema import ProviderError
@@ -709,6 +733,22 @@ def build_parser() -> argparse.ArgumentParser:
     isf.add_argument("--no-migrate", action="store_true",
                      help="skip the automatic migrate step")
     isf.set_defaults(func=cmd_ingest_sec_fundamentals)
+
+    mcc = sub.add_parser(
+        "map-ch-companies",
+        help="bind Companies House company numbers to catalog .LON instruments "
+             "via /search/companies (needs COMPANIES_HOUSE_API_KEY; conservative matching)",
+    )
+    mcc.add_argument("--limit", type=int, default=None,
+                     help="map at most N instruments this run")
+    mcc.add_argument("--only-missing", dest="only_missing", action="store_true", default=True,
+                     help="only instruments without a company_number yet (default; resumes)")
+    mcc.add_argument("--all", dest="only_missing", action="store_false",
+                     help="re-map every .LON instrument, keeping existing company_numbers")
+    mcc.add_argument("--db-url", default="", help="Postgres catalog; overrides $QUANTLAB_DB_URL")
+    mcc.add_argument("--no-migrate", action="store_true",
+                     help="skip the automatic migrate step")
+    mcc.set_defaults(func=cmd_map_ch_companies)
 
     ich = sub.add_parser(
         "ingest-ch-fundamentals",
