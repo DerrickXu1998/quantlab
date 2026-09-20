@@ -121,7 +121,11 @@ export function OverviewView() {
         </Panel>
       </CascadeItem>
 
-      <div className="min-w-0 overflow-y-auto">
+      {/* A flex column, not a plain block: the panels below stretch to the
+          bottom of the workspace. Left to their natural height they ended a
+          quarter of the way up the viewport, and a terminal with a band of
+          empty ground under its instruments reads as broken, not as airy. */}
+      <div className="flex min-h-0 min-w-0 flex-col overflow-y-auto">
         {runsStatus === 'loading' ? (
           <EmptyState icon={Hourglass} title="Loading…" role="status" />
         ) : allRuns.length === 0 ? (
@@ -156,8 +160,8 @@ export function OverviewView() {
               <PortfolioSummary run={run} performance={performance.performance} />
             </CascadeItem>
 
-            <div className="grid grid-cols-1 gap-px bg-border xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
-              <CascadeItem index={2} className="relative bg-background">
+            <div className="grid min-h-0 flex-1 grid-cols-1 gap-px bg-border xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
+              <CascadeItem index={2} className="relative flex min-h-0 flex-col bg-background">
                 {/* Deliberately crossing the panel's top edge. */}
                 <FloatingChips>
                   <Chip label="Bars" title="Sessions marked in the reported window">
@@ -183,24 +187,35 @@ export function OverviewView() {
                     />
                   </Chip>
                 </FloatingChips>
-                <Panel title="Equity curve" className="border-0">
+                <Panel
+                  title="Equity curve"
+                  className="flex min-h-0 flex-1 flex-col border-0"
+                  bodyClassName="flex min-h-0 flex-1 flex-col p-3"
+                >
                   <StatRow metrics={performance.performance.metrics} />
-                  <div className="mt-6">
+                  <div className="mt-6 flex min-h-0 flex-1 flex-col">
                     <EquityCurve
+                      fill
                       equity={performance.performance.equity}
                       benchmark={performance.performance.benchmark}
                       benchmarkLabel="Buy & hold"
                     />
                   </div>
-                  <Assumptions assumptions={performance.performance.assumptions} />
+                  {/* Closed here: the curve is the subject of this screen, and
+                      nine lines of prose under it turned the chart into a
+                      band. The count in the summary still says they exist. */}
+                  <Assumptions
+                    assumptions={performance.performance.assumptions}
+                    defaultOpen={false}
+                  />
                 </Panel>
               </CascadeItem>
 
-              <CascadeItem index={3} className="bg-background">
+              <CascadeItem index={3} className="flex min-h-0 flex-col bg-background">
                 <Panel
                   title="Open positions"
-                  className="border-0"
-                  bodyClassName="p-0"
+                  className="flex min-h-0 flex-1 flex-col border-0"
+                  bodyClassName="min-h-0 flex-1 overflow-y-auto p-0"
                   simulated="The live column re-marks against the simulated feed."
                 >
                   <PositionsTable trades={performance.performance.trades} />

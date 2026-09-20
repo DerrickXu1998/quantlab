@@ -27,6 +27,7 @@ import {
   type Draft,
   type DraftComponent,
 } from './strategyModel';
+import { StrategyStatusBadge, executedStrategyNames, statusOf } from './StrategyStatus';
 import { useStrategyLibrary } from './useStrategyLibrary';
 
 const MICRO = 'font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground';
@@ -58,9 +59,14 @@ const ROLE_ORDER: StrategyRole[] = ['entry', 'exit', 'filter'];
  * around it.
  */
 export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) {
-  const { catalog, modelsStatus, activeRun, inFlight, runError, startStrategyRun, cancel } =
+  const { catalog, modelsStatus, activeRun, inFlight, runError, startStrategyRun, cancel, allRuns } =
     useRuns();
   const library = useStrategyLibrary();
+
+  // Which strategies have actually been executed. Derived from the run
+  // history rather than stored on the strategy, so deleting a run takes the
+  // badge back down with it instead of leaving a claim nothing supports.
+  const runNames = useMemo(() => executedStrategyNames(allRuns), [allRuns]);
   const templates = useStrategyTemplates();
 
   const [draft, setDraft] = useState<Draft>(() => emptyDraft());
@@ -168,7 +174,96 @@ export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) 
       className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto p-4 xl:grid-cols-[minmax(0,380px)_minmax(0,1fr)]"
     >
       <div className="space-y-4">
-        <Panel title="Signal catalogue" bodyClassName="max-h-[60vh] overflow-y-auto">
+        <Panel
+          title="Your strategies"
+          actions={
+            <span className={MICRO}>
+              <span className="tabular-nums">{library.items.length}</span> saved
+            </span>
+          }
+          bodyClassName="space-y-2"
+        >
+          {library.status === 'loading' ? (
+            <EmptyState icon={Hourglass} title="Loading…" role="status" />
+          ) : library.status === 'error' ? (
+            <EmptyState
+              testId="library-error"
+              icon={ServerCrash}
+              tone="error"
+              title="Could not load your strategies"
+              detail={library.error ?? undefined}
+              action={
+                <Button type="button" size="sm" variant="outline" onClick={library.reload}>
+                  Try again
+                </Button>
+              }
+            />
+          ) : library.items.length === 0 ? (
+            <EmptyState
+              testId="library-empty"
+              icon={BookMarked}
+              title="Nothing saved yet"
+              detail="Assemble a strategy on the right — or load a template — and press Save. Saved strategies are private to your account."
+            />
+          ) : (
+            <ul className="divide-y divide-border" data-testid="strategy-library">
+              {library.items.map((strategy) => (
+                <li key={strategy.id} className="flex items-center gap-2 py-1.5">
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 text-left"
+                    aria-current={draft.id === strategy.id ? 'true' : undefined}
+                    onClick={() => {
+                      setDraft(specToDraft(strategy, catalog));
+                      setServerWarnings(strategy.warnings ?? []);
+                      setNotice(`Loaded "${strategy.name}".`);
+                    }}
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className="min-w-0 flex-1 truncate font-mono text-[11px]">
+                        {strategy.name}
+                      </span>
+                      <StrategyStatusBadge status={statusOf(strategy.name, runNames)} />
+                    </span>
+                    <span className="block text-[10px] text-muted-foreground">
+                      <span className="tabular-nums">{strategy.components.length}</span> components ·{' '}
+                      {strategy.entry_logic} in / {strategy.exit_logic} out
+                    </span>
+                  </button>
+                  {armedDelete === strategy.id ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="border-destructive/50 text-destructive"
+                      onClick={async () => {
+                        setArmedDelete(null);
+                        await library.remove(strategy.id);
+                        setDraft((current) =>
+                          current.id === strategy.id ? { ...current, id: null } : current,
+                        );
+                      }}
+                    >
+                      Confirm
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      aria-label={`Delete strategy ${strategy.name}`}
+                      onClick={() => setArmedDelete(strategy.id)}
+                    >
+                      Delete
+                    </Button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
+
+        <Panel title="Signal catalogue" bodyClassName="max-h-[52vh] overflow-y-auto">
           {modelsStatus === 'loading' ? (
             <EmptyState icon={Hourglass} title="Loading the registry…" role="status" />
           ) : (
@@ -239,90 +334,6 @@ export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) 
                 ))}
               </ul>
             </>
-          )}
-        </Panel>
-
-        <Panel
-          title="Your strategies"
-          actions={
-            <span className={MICRO}>
-              <span className="tabular-nums">{library.items.length}</span> saved
-            </span>
-          }
-          bodyClassName="space-y-2"
-        >
-          {library.status === 'loading' ? (
-            <EmptyState icon={Hourglass} title="Loading…" role="status" />
-          ) : library.status === 'error' ? (
-            <EmptyState
-              testId="library-error"
-              icon={ServerCrash}
-              tone="error"
-              title="Could not load your strategies"
-              detail={library.error ?? undefined}
-              action={
-                <Button type="button" size="sm" variant="outline" onClick={library.reload}>
-                  Try again
-                </Button>
-              }
-            />
-          ) : library.items.length === 0 ? (
-            <EmptyState
-              testId="library-empty"
-              icon={BookMarked}
-              title="Nothing saved yet"
-              detail="Assemble a strategy on the right — or load a template — and press Save. Saved strategies are private to your account."
-            />
-          ) : (
-            <ul className="divide-y divide-border" data-testid="strategy-library">
-              {library.items.map((strategy) => (
-                <li key={strategy.id} className="flex items-center gap-2 py-1.5">
-                  <button
-                    type="button"
-                    className="min-w-0 flex-1 text-left"
-                    aria-current={draft.id === strategy.id ? 'true' : undefined}
-                    onClick={() => {
-                      setDraft(specToDraft(strategy, catalog));
-                      setServerWarnings(strategy.warnings ?? []);
-                      setNotice(`Loaded "${strategy.name}".`);
-                    }}
-                  >
-                    <span className="block truncate font-mono text-[11px]">{strategy.name}</span>
-                    <span className="block text-[10px] text-muted-foreground">
-                      <span className="tabular-nums">{strategy.components.length}</span> components ·{' '}
-                      {strategy.entry_logic} in / {strategy.exit_logic} out
-                    </span>
-                  </button>
-                  {armedDelete === strategy.id ? (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="border-destructive/50 text-destructive"
-                      onClick={async () => {
-                        setArmedDelete(null);
-                        await library.remove(strategy.id);
-                        setDraft((current) =>
-                          current.id === strategy.id ? { ...current, id: null } : current,
-                        );
-                      }}
-                    >
-                      Confirm
-                    </Button>
-                  ) : (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      aria-label={`Delete strategy ${strategy.name}`}
-                      onClick={() => setArmedDelete(strategy.id)}
-                    >
-                      Delete
-                    </Button>
-                  )}
-                </li>
-              ))}
-            </ul>
           )}
         </Panel>
       </div>

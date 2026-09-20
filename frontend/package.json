@@ -11,7 +11,8 @@
     "codegen": "openapi-typescript ../quantlab_specs/specs/006-warehouse-experiments/contracts/openapi.yaml -o src/api/schema.d.ts",
     "lint": "eslint .",
     "format:check": "prettier --check .",
-    "test": "vitest run"
+    "test": "vitest run && node scripts/design-audit.mjs",
+    "design:audit": "node scripts/design-audit.mjs"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.1.0",

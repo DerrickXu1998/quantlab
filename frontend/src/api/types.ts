@@ -294,6 +294,13 @@ export type RunV2 = Run & {
   execution_summary?: ExecutionSummary | null;
 };
 
+/**
+ * A run list carries the same additions as a run detail: the server serialises
+ * one `Run` model for both. Typed separately from the generated `RunList`
+ * because the generator still reflects the pre-strategy contract.
+ */
+export type RunListV2 = { total: number; items: RunV2[] };
+
 /** The same additions on the detail read, which carries the signal list too. */
 export type RunDetailV2 = RunDetail & Omit<RunV2, keyof Run>;
 
