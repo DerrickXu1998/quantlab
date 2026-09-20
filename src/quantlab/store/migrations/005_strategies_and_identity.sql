@@ -1,5 +1,13 @@
--- 004_strategies_and_identity.sql -- accounts, saved strategies, and the
+-- 005_strategies_and_identity.sql -- accounts, saved strategies, and the
 -- columns a run needs now that a strategy is more than one rule.
+--
+-- Numbered 005, not 004: the fundamentals schema landed as 004 on a parallel
+-- branch. Both applied fine (migrations run in filename order) but two files
+-- sharing a number means the number no longer says which came first. A
+-- database that already applied this under `004_strategies_and_identity`
+-- needs its tracking row renamed rather than a re-run:
+--     UPDATE schema_migrations SET version = '005_strategies_and_identity'
+--      WHERE version = '004_strategies_and_identity';
 --
 -- Three things arrive together because they are one change: a run belongs to
 -- somebody, that somebody can save the strategy that produced it, and the run

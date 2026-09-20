@@ -72,6 +72,38 @@ One number, three filing dates. A naive join on `period_end` picks an arbitrary
 one of these, and if it picks the 2026 row it has used a document from 2026 to
 trade in 2024.
 
+### The failure, demonstrated
+
+This is not hypothetical. Both queries below were run against the warehouse,
+asking the same question — *what were Caterpillar's figures on 2024-06-30?*
+
+**The rule (`filed_at <= as_of`):**
+
+| concept | value | period_end | filed_at | days stale |
+|---|---|---|---|---|
+| revenue | 15,799,000,000 | 2024-03-31 | 2024-05-01 | 60 |
+| net_income | 2,854,000,000 | 2024-03-31 | 2024-05-01 | 60 |
+
+Correct. On 30 June the newest *knowable* figures are Q1's, filed 1 May. Q2
+ended that very day and was not filed until August, so a 60-day-stale Q1 number
+is genuinely the best anyone had.
+
+**The naive join (`period_end <= as_of`, ignoring `filed_at`):**
+
+| concept | value | period_end | filed_at | filed **after** the as-of date by |
+|---|---|---|---|---|
+| net_income | 5,535,000,000 | 2024-06-30 | 2025-08-06 | **402 days** |
+| revenue | 16,689,000,000 | 2024-06-30 | **2026-03-26** | **634 days** |
+
+The second query trades 30 June 2024 on a document that did not exist until
+March 2026. It looks entirely reasonable — the period ends on or before the
+as-of date, which is the check most people would write — and it is wrong by
+nearly two years. Nothing in the output announces this; the only column that
+reveals it is `filed_at`, which the query never consults.
+
+That is the whole argument for the rule, and for the inspector in §6 that shows
+`filed_at` next to every value.
+
 This is also why the *median lag from `period_end` to `filed_at` is 303–395
 days* across the main concepts. That statistic is not "companies file late"; it
 is "most rows are comparatives." A 40-day lag is the original filing. Anything
