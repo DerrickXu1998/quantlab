@@ -83,7 +83,11 @@ The levers, cheapest effort first:
 
 ### 1. GCP side (once, from your laptop or Cloud Shell)
 
+No `gcloud` installed? [Cloud Shell](https://shell.cloud.google.com) has it,
+already authenticated as you, with nothing to install:
+
 ```bash
+git clone https://github.com/DerrickXu1998/quantlab.git && cd quantlab
 PROJECT_ID=your-project ZONE=europe-west2-c bash deploy/setup-gcp.sh
 ```
 
@@ -95,6 +99,19 @@ snapshots. It is idempotent — re-run it after changing anything.
 
 It finishes by printing the `gh variable set` commands to run. They are
 repository **variables**, not secrets: none of the values are sensitive.
+
+> **There is no service-account key to create, store or paste anywhere.** The
+> pipeline authenticates by federating the OIDC token GitHub mints for this
+> repository, which Google exchanges for a credential that expires in minutes.
+> That is the entire point of the Workload Identity Federation setup: nothing to
+> rotate, nothing to leak, nothing to hand to anyone.
+>
+> If `google-github-actions/auth` reports *"must specify exactly one of
+> workload_identity_provider or credentials_json"*, it is not asking for a key.
+> It means `vars.GCP_WORKLOAD_IDENTITY_PROVIDER` interpolated to an empty string
+> because the variable is unset — i.e. this step has not been run yet. The
+> `repository is configured` preflight job reports that in plain terms before
+> the build starts.
 
 ### 2. VM side (once, on the VM)
 
@@ -215,6 +232,7 @@ psql "postgresql://quantlab:<password-from-/opt/quantlab/.env>@localhost:5432/qu
 | Symptom | Where to look |
 |---|---|
 | Deploy fails at "waiting for the backend healthcheck" | `make prod-logs SERVICE=backend`. A failed migration shows in the `migrate` service; the old backend is still serving, so the site is up. |
+| `auth failed: must specify exactly one of "workload_identity_provider" or "credentials_json"` | The repository variables are unset, so the action received an empty string. It is **not** asking for a service-account key — there isn't one. Run `deploy/setup-gcp.sh` and set the variables it prints. |
 | Deploy passes, site unreachable from outside | The firewall rule or the instance's network tag. `gcloud compute instances describe <vm> --format='value(tags.items)'` should list `quantlab`. |
 | API works in curl, SPA shows no data | CORS. The browser console will say the origin is not allowed. `QUANTLAB_CORS_ORIGINS` must list the SPA's exact origin — scheme included, no trailing slash, no wildcard. A Vercel preview URL will not match your production entry. |
 | Browser blocks the API call as "mixed content" | The SPA is on HTTPS and `QUANTLAB_SITE_ADDRESS` is still `:80`. Set a real hostname and point `VITE_API_BASE_URL` at `https://`. |
