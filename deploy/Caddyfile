@@ -10,10 +10,19 @@
 # a hostname rather than the VM's IP -- no certificate authority will issue for
 # a bare address.
 
-{
-	# ACME registration contact. Let's Encrypt uses it for expiry warnings.
-	email {$QUANTLAB_ACME_EMAIL:admin@localhost}
-}
+# No global `email` block. Let's Encrypt treats the ACME account address as
+# optional, and Caddy registers happily without one -- you forgo expiry
+# reminders, which matter little when renewal is automatic and unattended.
+#
+# The alternative was a placeholder default, and `admin@localhost` is not a
+# deliverable address: Let's Encrypt rejects it and certificate issuance fails
+# outright. A broken default is worse than no default.
+#
+# To receive expiry mail, add a global block above this one:
+#
+#     {
+#         email you@example.com
+#     }
 
 {$QUANTLAB_SITE_ADDRESS::80} {
 	encode zstd gzip

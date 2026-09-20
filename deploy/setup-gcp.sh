@@ -27,6 +27,9 @@ ZONE="${ZONE:-}"
 
 # --- what you can leave alone -------------------------------------------------
 INSTANCE="${INSTANCE:-quantlab}"
+# deploy/docker-compose.prod.yml sizes the stack for 8 GiB. Changing this
+# without retuning those limits will get containers OOM-killed.
+MACHINE_TYPE="${MACHINE_TYPE:-e2-standard-2}"
 REGION="${REGION:-${ZONE%-*}}"          # europe-west2-c -> europe-west2
 AR_REPO="${AR_REPO:-quantlab}"
 GITHUB_REPO="${GITHUB_REPO:-DerrickXu1998/quantlab}"
@@ -35,6 +38,7 @@ PROVIDER_ID="${PROVIDER_ID:-github-oidc}"
 VM_SA_ID="${VM_SA_ID:-quantlab-vm}"
 DEPLOYER_SA_ID="${DEPLOYER_SA_ID:-quantlab-deployer}"
 NETWORK_TAG="${NETWORK_TAG:-quantlab}"
+STATIC_IP_NAME="${STATIC_IP_NAME:-quantlab-api}"
 
 log() { printf '\n=== %s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -177,6 +181,37 @@ ok_if_exists gcloud compute firewall-rules create "quantlab-allow-ssh-iap" \
 if gcloud compute instances describe "$INSTANCE" --zone "$ZONE" >/dev/null 2>&1; then
 	log "configuring instance ${INSTANCE}"
 
+	# Reserve the external IP BEFORE anything stops the instance. A default VM
+	# gets an *ephemeral* address, which is released on stop and replaced on
+	# start -- so the resize below would silently move the API to a new IP and
+	# break the DNS record pointing at it. Promoting the address it already has
+	# keeps the current value and costs the same as any other static IP.
+	current_ip="$(gcloud compute instances describe "$INSTANCE" --zone "$ZONE" \
+		--format='value(networkInterfaces[0].accessConfigs[0].natIP)' 2>/dev/null || true)"
+	ip_kind="$(gcloud compute addresses list --filter="address=${current_ip}" \
+		--format='value(addressType)' 2>/dev/null | head -1)"
+
+	if [ -n "$current_ip" ] && [ -z "$ip_kind" ]; then
+		log "reserving ${current_ip} as a static address (it is currently ephemeral)"
+		ok_if_exists gcloud compute addresses create "${STATIC_IP_NAME}" \
+			--addresses="$current_ip" --region="$REGION" \
+			--description="QuantLab API, promoted from ephemeral"
+	else
+		printf '  external IP %s is already reserved (%s)\n' "${current_ip:-none}" "${ip_kind:-unknown}"
+	fi
+
+	# Not disks[0]: an instance with a data disk attached may list it first, and
+	# measuring the wrong disk would be silently useless.
+	#
+	# `describe` has no --filter (that is a `list` flag, and passing it here is a
+	# usage error, not an empty result), so the boot flag is selected after the
+	# fact. || true because this is advisory: a failure here must not abort a
+	# setup run that has already created real resources.
+	BOOT_DISK_NAME="$(gcloud compute instances describe "$INSTANCE" --zone "$ZONE" \
+		--flatten="disks[]" \
+		--format="value(disks.boot, disks.source.basename())" 2>/dev/null |
+		awk -F'\t' '$1 == "True" { print $2; exit }' || true)"
+
 	# OS Login is what makes the deployer SA's IAM roles grant SSH access;
 	# without it the VM expects keys in project metadata instead.
 	gcloud compute instances add-metadata "$INSTANCE" --zone "$ZONE" \
@@ -187,17 +222,53 @@ if gcloud compute instances describe "$INSTANCE" --zone "$ZONE" >/dev/null 2>&1;
 
 	current_sa="$(gcloud compute instances describe "$INSTANCE" --zone "$ZONE" \
 		--format='value(serviceAccounts[0].email)')"
-	if [ "$current_sa" != "$VM_SA" ]; then
-		# Changing the attached service account requires the instance to be
-		# TERMINATED. Nothing is lost -- the disk and volumes persist.
-		log "attaching ${VM_SA} to ${INSTANCE} (requires a stop/start)"
+	current_type="$(gcloud compute instances describe "$INSTANCE" --zone "$ZONE" \
+		--format='value(machineType.basename())')"
+
+	# Both of these need the instance TERMINATED, so they share one stop/start
+	# rather than costing two. Nothing is lost: disks and their data persist.
+	needs_stop="no"
+	[ "$current_sa" != "$VM_SA" ] && needs_stop="yes"
+	[ "$current_type" != "$MACHINE_TYPE" ] && needs_stop="yes"
+
+	if [ "$needs_stop" = "yes" ]; then
+		log "stopping ${INSTANCE} to reconfigure it"
 		gcloud compute instances stop "$INSTANCE" --zone "$ZONE"
-		gcloud compute instances set-service-account "$INSTANCE" --zone "$ZONE" \
-			--service-account="$VM_SA" \
-			--scopes=https://www.googleapis.com/auth/cloud-platform
+
+		if [ "$current_type" != "$MACHINE_TYPE" ]; then
+			# The stock scopes leave cloud-platform disabled, and access scopes
+			# gate API calls independently of IAM: without this the VM cannot
+			# pull from Artifact Registry however many roles its account holds.
+			log "resizing ${current_type} -> ${MACHINE_TYPE}"
+			gcloud compute instances set-machine-type "$INSTANCE" --zone "$ZONE" \
+				--machine-type="$MACHINE_TYPE"
+		fi
+
+		if [ "$current_sa" != "$VM_SA" ]; then
+			log "attaching ${VM_SA}"
+			gcloud compute instances set-service-account "$INSTANCE" --zone "$ZONE" \
+				--service-account="$VM_SA" \
+				--scopes=https://www.googleapis.com/auth/cloud-platform
+		fi
+
 		gcloud compute instances start "$INSTANCE" --zone "$ZONE"
 	else
-		printf '  service account already attached\n'
+		printf '  already %s with %s attached\n' "$MACHINE_TYPE" "$VM_SA"
+	fi
+
+	# The compose memory limits assume 8 GiB. Warn rather than fail: someone may
+	# have deliberately chosen a smaller box and retuned them.
+	case "$MACHINE_TYPE" in
+		e2-standard-2 | e2-standard-4 | e2-standard-8 | n2-standard-*) ;;
+		*) printf '\n  WARNING: deploy/docker-compose.prod.yml sizes the stack for 8 GiB.\n           %s may not have that; retune the limits or the stack will be OOM-killed.\n' "$MACHINE_TYPE" ;;
+	esac
+
+	# A 30 GiB boot disk fills quickly: three image versions, ClickHouse parts
+	# and its logs all live there unless something else is mounted.
+	boot_gb="$(gcloud compute disks describe "$BOOT_DISK_NAME" --zone "$ZONE" \
+		--format='value(sizeGb)' 2>/dev/null || echo "")"
+	if [ -n "$boot_gb" ] && [ "$boot_gb" -lt 50 ]; then
+		printf '\n  NOTE: the boot disk is %sGB. ClickHouse data, Postgres and every pulled\n        image share it. Grow it, or mount a data disk at /var/lib/docker.\n' "$boot_gb"
 	fi
 else
 	log "instance ${INSTANCE} not found in ${ZONE} -- skipping instance configuration"
@@ -230,17 +301,23 @@ ok_if_exists gcloud compute resource-policies create snapshot-schedule quantlab-
 	--description="QuantLab boot disk, daily at 03:00 UTC, kept 14 days"
 
 if gcloud compute instances describe "$INSTANCE" --zone "$ZONE" >/dev/null 2>&1; then
-	BOOT_DISK="$(gcloud compute instances describe "$INSTANCE" --zone "$ZONE" \
-		--format='value(disks[0].source.basename())')"
-	# Attaching a policy that is already attached is an error, not a no-op.
-	if ! gcloud compute disks describe "$BOOT_DISK" --zone "$ZONE" \
-		--format='value(resourcePolicies)' | grep -q quantlab-daily; then
-		gcloud compute disks add-resource-policies "$BOOT_DISK" --zone "$ZONE" \
-			--resource-policies=quantlab-daily >/dev/null
-		printf '  attached to disk %s\n' "$BOOT_DISK"
-	else
-		printf '  already attached to disk %s\n' "$BOOT_DISK"
-	fi
+	# Every attached disk, not just the boot one: a data disk holding the
+	# ClickHouse volume is the disk you would most regret losing.
+	DISKS="$(gcloud compute instances describe "$INSTANCE" --zone "$ZONE" \
+		--flatten="disks[]" --format="value(disks.source.basename())" 2>/dev/null)"
+	for disk in $DISKS; do
+		[ -n "$disk" ] || continue
+		# Attaching a policy that is already attached is an error, not a no-op.
+		if gcloud compute disks describe "$disk" --zone "$ZONE" \
+			--format='value(resourcePolicies)' 2>/dev/null | grep -q quantlab-daily; then
+			printf '  already attached to disk %s\n' "$disk"
+		else
+			gcloud compute disks add-resource-policies "$disk" --zone "$ZONE" \
+				--resource-policies=quantlab-daily >/dev/null 2>&1 &&
+				printf '  attached to disk %s\n' "$disk" ||
+				printf '  could not attach to disk %s (it may already have a schedule)\n' "$disk"
+		fi
+	done
 fi
 
 # --- What to paste into GitHub ------------------------------------------------
