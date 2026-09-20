@@ -158,3 +158,55 @@ the panel to who was actually in the universe on that date.
 For reproducibility, `store.panel_for_modelling(...)` materialises a panel to
 Parquet. ClickHouse is fast enough to model against directly, but a pinned file
 is an artefact a backtest result can be traced back to; a live query is not.
+
+## Connection reuse
+
+Both halves of the warehouse are reached through bounded, per-process pools
+(feature 007). They replaced per-request connections, which were the right trade
+for one long-lived container beside its databases and the wrong one on a platform
+that runs several instances: connection cost was paid per request, and total demand
+grew with instance count against a fixed database budget.
+
+Measured in the backend container against the local stack:
+
+| Store | Connect + query | Query on a reused connection | Avoidable per request |
+|---|---:|---:|---:|
+| Postgres | 10.02 ms | 0.16 ms | 9.86 ms — 62x the query |
+| ClickHouse | 7.74 ms | 0.98 ms | 6.76 ms — 7x the query |
+
+The catalog's `max_connections` is 100. FastAPI runs this project's synchronous
+handlers on a thread pool, so one instance could hold as many connections as it had
+busy threads; three or four instances exhausted the budget, and the symptom was a
+refusal on a request that was otherwise valid.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `QUANTLAB_PG_POOL_MAX` | 5 | Catalog connections per instance |
+| `QUANTLAB_CH_POOL_MAX` | 5 | Bar-store clients per instance |
+| `QUANTLAB_POOL_TIMEOUT` | 10.0 | Seconds a request waits before failing |
+
+The default of 5 is well below the thread-pool size on purpose: the ceiling, not the
+thread count, should be what bounds connections. With a 100-connection budget it
+supports a dozen instances with headroom for migrations and ad-hoc sessions. A bad
+value falls back to the default with a logged warning rather than refusing to start
+— these are tuning knobs, not correctness settings.
+
+**Postgres uses `psycopg_pool`, ClickHouse uses a pool written here.** That asymmetry
+is deliberate and worth knowing before changing either:
+
+- `psycopg_pool.ConnectionPool` already commits on clean exit, rolls back on error,
+  and resets session state when a connection is returned. Reimplementing that is how
+  a half-finished transaction leaks into somebody else's request. It also does the
+  liveness check (`check=ConnectionPool.check_connection`) that makes a database
+  restart heal without an API restart.
+- `clickhouse-connect` ships no pool. Its clients already share a urllib3
+  `PoolManager`, so sockets and TLS *are* reused — but that manager is `block=False`
+  and bounds nothing, and the remaining cost is `Client` construction. Critically, a
+  `Client` carries no lock and exposes mutable per-instance state (`database`), so it
+  **cannot be shared between threads**. One shared client would be a data race; a
+  bounded pool of clients is what is left.
+
+Both pools are created lazily on first use, never at construction, so the
+application still starts with every database unreachable and the synthetic demo path
+needs no driver at all.
+

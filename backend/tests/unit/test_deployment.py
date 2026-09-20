@@ -11,16 +11,24 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from quantlab.api.app import create_app
 
 DOCKERFILE = Path(__file__).resolve().parents[2] / "Dockerfile"
 
+# The image does not copy its own Dockerfile, so these two assertions can only
+# run from a source checkout. Skipping beats a false failure inside the image.
+needs_dockerfile = pytest.mark.skipif(
+    not DOCKERFILE.is_file(), reason="Dockerfile is not present inside the built image"
+)
+
 
 # --- $PORT -----------------------------------------------------------------
 
 
+@needs_dockerfile
 def test_the_image_honours_an_injected_port():
     """Cloud Run, Fly and Render all inject $PORT and health-check it. A
     hardcoded --port means the revision never goes live."""
@@ -38,6 +46,7 @@ def test_the_image_honours_an_injected_port():
     )
 
 
+@needs_dockerfile
 def test_the_image_still_has_a_default_port():
     """Compose does not set $PORT, so the default keeps local dev working."""
     cmd = next(line for line in DOCKERFILE.read_text().splitlines() if line.startswith("CMD"))

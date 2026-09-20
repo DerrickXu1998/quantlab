@@ -459,6 +459,9 @@ every deploy; `BACKEND_URL` and `EXPECT_DATASET` make it work against any enviro
 | `QUANTLAB_DB_URL` | Postgres catalog. With `QUANTLAB_CH_URL`, selects the warehouse |
 | `QUANTLAB_CH_URL` | ClickHouse bar store |
 | `QUANTLAB_DB` / `QUANTLAB_DB_PATH` | SQLite demo path (default `/data/quantlab.db`) |
+| `QUANTLAB_PG_POOL_MAX` | Catalog connections held per instance (default 5) |
+| `QUANTLAB_CH_POOL_MAX` | Bar-store clients held per instance (default 5) |
+| `QUANTLAB_POOL_TIMEOUT` | Seconds a request waits for a connection (default 10.0) |
 | `QUANTLAB_KAFKA_BROKERS` | Live replay bus. Unset → live endpoint 503s, nothing else changes |
 | `QUANTLAB_KAFKA_TOPIC` | Default `quantlab.bars` |
 | `QUANTLAB_OFFLINE=1` | Any cache miss raises instead of hitting the network. The test suite runs under this |

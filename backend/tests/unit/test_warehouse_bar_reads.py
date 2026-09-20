@@ -27,14 +27,29 @@ class _FakeClient:
         self._rows = rows
         self.queries: list[str] = []
         self.closed = False
+        self.released = 0
+
+    fail = False
 
     def query(self, sql, parameters=None):
         self.queries.append(sql)
         self.parameters = parameters
+        if self.fail:
+            raise RuntimeError("bar store query failed")
         return _Result(self._rows)
 
     def close(self):
         self.closed = True
+
+    # Warehouse.bars() is a context manager since feature 007 -- the client is
+    # checked out of a pool and returned on every exit path, rather than
+    # constructed and closed per request.
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.released += 1
+        return False
 
 
 class _FakeCursor:
@@ -122,9 +137,25 @@ def test_unknown_symbols_yield_nothing_rather_than_querying_bars():
     assert wh.client.queries == [], "should not reach the bar store for unknown symbols"
 
 
-def test_client_is_closed_even_though_rows_were_returned(wh):
+def test_the_client_is_released_even_though_rows_were_returned(wh):
+    """Was: asserted the client is *closed* after a read. Since feature 007 it
+    is checked out of a pool and *returned* -- closing it is precisely the
+    behaviour that was removed. The invariant that matters is unchanged: a read
+    must not leak the client, however the read ends."""
     warehouse.load_bars_for(wh, ["AAPL.US"], "2024-03-01", "2024-03-31")
-    assert wh.client.closed
+
+    assert wh.client.released == 1
+    assert not wh.client.closed, "a pooled client is returned for reuse, not closed"
+
+
+def test_the_client_is_released_when_a_read_fails(wh):
+    """The exit path that leaks a connection is the one nobody tests."""
+    wh.client.fail = True
+
+    with pytest.raises(RuntimeError):
+        warehouse.load_bars_for(wh, ["AAPL.US"], "2024-03-01", "2024-03-31")
+
+    assert wh.client.released == 1
 
 
 def test_earliest_bar_dates_maps_back_to_symbols():

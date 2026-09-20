@@ -11,10 +11,14 @@ No pandas here either -- the backend serves JSON, and raw rows are cheaper.
 from __future__ import annotations
 
 import os
+import threading
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
+
+from quantlab.storage.pool import ClientPool, pool_config
 
 DB_URL_ENV = "QUANTLAB_DB_URL"
 CH_URL_ENV = "QUANTLAB_CH_URL"
@@ -50,29 +54,98 @@ def ch_settings(url: str = "") -> dict[str, Any]:
 
 @dataclass
 class Warehouse:
-    """A paired Postgres + ClickHouse connection.
+    """A paired Postgres + ClickHouse connection, both pooled.
 
-    Connections are opened per request rather than pooled. At this traffic
-    level that is the right trade: no stale-connection handling, no pool
-    exhaustion, and a database restart cannot wedge the API.
+    Connections were previously opened per request. That was the right trade
+    for one long-lived process beside its databases, but it inverts on a
+    platform running several instances: connection cost is paid per request
+    (measured at 9.86 ms for Postgres and 6.76 ms for ClickHouse, against
+    queries costing 0.16 ms and 0.98 ms), and total demand grows with instance
+    count against a fixed database budget. See feature 007.
+
+    Both pools are created lazily on first use, never at construction, so
+    building a Warehouse still touches no network and the application starts
+    with every database unreachable.
     """
 
     dsn: str
     ch: dict[str, Any]
+    _catalog_pool: Any = field(default=None, init=False, repr=False, compare=False)
+    _bars_pool: ClientPool | None = field(default=None, init=False, repr=False, compare=False)
+    _lock: threading.Lock = field(
+        default_factory=threading.Lock, init=False, repr=False, compare=False
+    )
 
     @classmethod
     def from_env(cls) -> Warehouse:
         return cls(dsn=pg_dsn(), ch=ch_settings())
 
-    def catalog(self):
-        import psycopg
+    def _ensure_catalog_pool(self):
+        # psycopg_pool rather than a hand-rolled one: its connection() context
+        # manager commits on clean exit, rolls back on error, and resets session
+        # state before returning the connection. Reimplementing that is how a
+        # half-finished transaction leaks into somebody else's request.
+        if self._catalog_pool is None:
+            with self._lock:
+                if self._catalog_pool is None:
+                    from psycopg_pool import ConnectionPool
 
-        return psycopg.connect(self.dsn)
+                    config = pool_config()
+                    self._catalog_pool = ConnectionPool(
+                        self.dsn,
+                        min_size=0,
+                        max_size=config.pg_max,
+                        timeout=config.timeout,
+                        # Discard a connection that died while parked -- an idle
+                        # timeout, or a database restart -- rather than serve it.
+                        check=ConnectionPool.check_connection,
+                        open=False,
+                    )
+                    self._catalog_pool.open()
+        return self._catalog_pool
 
-    def bars(self):
-        import clickhouse_connect
+    def _ensure_bars_pool(self) -> ClientPool:
+        if self._bars_pool is None:
+            with self._lock:
+                if self._bars_pool is None:
+                    import clickhouse_connect
 
-        return clickhouse_connect.get_client(**self.ch)
+                    config = pool_config()
+
+                    def factory():
+                        return clickhouse_connect.get_client(**self.ch)
+
+                    self._bars_pool = ClientPool(
+                        factory, max_size=config.ch_max, timeout=config.timeout
+                    )
+        return self._bars_pool
+
+    @contextmanager
+    def catalog(self) -> Iterator[Any]:
+        """Check out a catalog connection; returned on every exit path."""
+        with self._ensure_catalog_pool().connection() as conn:
+            yield conn
+
+    @contextmanager
+    def bars(self) -> Iterator[Any]:
+        """Check out a bar-store client; returned on every exit path.
+
+        A pool of clients rather than one shared client: clickhouse_connect's
+        Client carries no lock and mutable per-instance state, so sharing it
+        across the API's handler threads would be a data race.
+        """
+        with self._ensure_bars_pool().acquire() as client:
+            yield client
+
+    def close(self) -> None:
+        """Release both pools. Idempotent; used at shutdown and in tests."""
+        with self._lock:
+            if self._catalog_pool is not None:
+                self._catalog_pool.close()
+                self._catalog_pool = None
+            if self._bars_pool is not None:
+                self._bars_pool.close()
+                self._bars_pool = None
 
 
 # ---------------------------------------------------------------------------
@@ -83,16 +156,11 @@ class Warehouse:
 def health(wh: Warehouse) -> tuple[bool, int]:
     """(has_data, signal_count). 'Seeded' means at least one bar is present."""
     try:
-        client = wh.bars()
+        with wh.bars() as client:
+            rows = client.query(f"SELECT count() FROM {BARS_VIEW}").result_rows
+            bars = int(rows[0][0]) if rows else 0
     except Exception:
         return False, 0
-    try:
-        rows = client.query(f"SELECT count() FROM {BARS_VIEW}").result_rows
-        bars = int(rows[0][0]) if rows else 0
-    except Exception:
-        return False, 0
-    finally:
-        client.close()
 
     if bars == 0:
         return False, 0
@@ -132,13 +200,10 @@ def list_instruments(wh: Warehouse) -> dict:
     if not rows:
         return {"total": 0, "items": []}
 
-    client = wh.bars()
-    try:
+    with wh.bars() as client:
         counts_rows = client.query(
             f"SELECT instrument_id, count() FROM {BARS_VIEW} GROUP BY instrument_id"
         ).result_rows
-    finally:
-        client.close()
     bar_counts = {int(iid): int(n) for iid, n in counts_rows}
 
     items = [
@@ -181,8 +246,7 @@ def get_prices(
         clauses.append("ts <= %(end)s")
         params["end"] = f"{end} 23:59:59"
 
-    client = wh.bars()
-    try:
+    with wh.bars() as client:
         rows = client.query(
             f"""
             SELECT ts, open, high, low, close, volume
@@ -192,8 +256,6 @@ def get_prices(
             """,
             parameters=params,
         ).result_rows
-    finally:
-        client.close()
 
     items = [
         {
@@ -321,8 +383,7 @@ def iter_symbol_bars(
     if not instruments:
         return
 
-    client = wh.bars()
-    try:
+    with wh.bars() as client:
         for instrument_id, symbol in instruments:
             rows = client.query(
                 f"""
@@ -345,8 +406,6 @@ def iter_symbol_bars(
                 for ts, o, h, lo, c, v in rows
             ]
             yield symbol, int(instrument_id), bars
-    finally:
-        client.close()
 
 
 # ---------------------------------------------------------------------------
@@ -391,8 +450,7 @@ def load_bars_for(
         return {}
     by_id = {instrument_id: symbol for symbol, instrument_id in ids.items()}
 
-    client = wh.bars()
-    try:
+    with wh.bars() as client:
         rows = client.query(
             f"""
             SELECT instrument_id, ts, open, high, low, close, volume
@@ -409,8 +467,6 @@ def load_bars_for(
                 "end": f"{end} 23:59:59",
             },
         ).result_rows
-    finally:
-        client.close()
 
     out: dict[str, list[Bar]] = {}
     for instrument_id, ts, o, h, lo, c, v in rows:
@@ -430,8 +486,7 @@ def earliest_bar_dates(
         return {}
     by_id = {instrument_id: symbol for symbol, instrument_id in ids.items()}
 
-    client = wh.bars()
-    try:
+    with wh.bars() as client:
         rows = client.query(
             f"""
             SELECT instrument_id, min(ts)
@@ -441,8 +496,6 @@ def earliest_bar_dates(
             """,
             parameters={"ids": tuple(by_id), "frequency": frequency},
         ).result_rows
-    finally:
-        client.close()
 
     return {by_id[int(iid)]: ts.date().isoformat() for iid, ts in rows}
 
@@ -462,8 +515,7 @@ def ingest_run_ids(
     if not ids:
         return []
 
-    client = wh.bars()
-    try:
+    with wh.bars() as client:
         rows = client.query(
             f"""
             SELECT DISTINCT run_id
@@ -480,8 +532,6 @@ def ingest_run_ids(
                 "end": f"{end} 23:59:59",
             },
         ).result_rows
-    finally:
-        client.close()
     return [int(run_id) for (run_id,) in rows]
 
 

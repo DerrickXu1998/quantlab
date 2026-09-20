@@ -76,10 +76,39 @@ def sqlite_store(tmp_path):
 
 @pytest.fixture()
 def postgres_store():
+    """A Postgres store that leaves the catalog as it found it.
+
+    Without this the suite passes exactly once per database: every test here
+    uses a fixed run_id, so a second run collides on experiment_runs_pkey. The
+    SQLite fixture gets isolation free from tmp_path; Postgres is shared and
+    has to clean up after itself.
+
+    Rows are identified by diffing against what existed before, rather than by
+    a hardcoded list, so a test that invents a new id is still cleaned up.
+    """
     if not os.environ.get("QUANTLAB_DB_URL"):
         pytest.skip("no catalog configured; the demo path must not need one")
     pytest.importorskip("psycopg")
-    yield experiments.PostgresExperimentStore()
+    import psycopg
+
+    dsn = os.environ["QUANTLAB_DB_URL"]
+
+    def existing_ids() -> set[str]:
+        with psycopg.connect(dsn) as conn:
+            return {row[0] for row in conn.execute("SELECT run_id FROM experiment_runs")}
+
+    def drop(ids: set[str]) -> None:
+        if not ids:
+            return
+        with psycopg.connect(dsn) as conn:
+            conn.execute("DELETE FROM experiment_runs WHERE run_id = ANY(%s)", (list(ids),))
+            conn.commit()
+
+    before = existing_ids()
+    try:
+        yield experiments.PostgresExperimentStore()
+    finally:
+        drop(existing_ids() - before)
 
 
 @pytest.fixture(params=["sqlite", "postgres"])
@@ -114,8 +143,14 @@ def test_lists_runs_newest_first(store):
     store.save_run(_make_result("run-b"))
 
     listed = store.list_runs()
-    assert listed["total"] == 2
-    assert {item["id"] for item in listed["items"]} == {"run-a", "run-b"}
+    ids = [item["id"] for item in listed["items"]]
+    # Asserted as "contains, in this order" rather than "equals": the Postgres
+    # catalog is shared and may already hold real runs. Demanding exclusive
+    # ownership of the table is what made this suite pass only against an
+    # empty database.
+    assert {"run-a", "run-b"} <= set(ids)
+    assert listed["total"] >= 2
+    assert ids.index("run-b") < ids.index("run-a"), "newest first"
 
 
 def test_saved_only_returns_named_runs(store):
@@ -124,8 +159,10 @@ def test_saved_only_returns_named_runs(store):
     store.set_run_name("named", "worth keeping")
 
     saved = store.list_runs(saved_only=True)
-    assert [item["id"] for item in saved["items"]] == ["named"]
-    assert saved["items"][0]["name"] == "worth keeping"
+    ids = [item["id"] for item in saved["items"]]
+    assert "named" in ids
+    assert "unnamed" not in ids, "an unnamed run is not a saved experiment"
+    assert next(i for i in saved["items"] if i["id"] == "named")["name"] == "worth keeping"
 
 
 def test_naming_an_unknown_run_reports_failure(store):
