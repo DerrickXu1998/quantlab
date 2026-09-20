@@ -3,6 +3,7 @@ import { navigate } from '../chrome/router';
 import { Button } from './ui/button';
 import { Card, CardHeader, CardTitle } from './ui/card';
 import { EmptyResults } from './ui/empty-state';
+import { ScrollRegion } from './ui/layout';
 import { Numeric } from './ui/numeric';
 import { StatusBadge, type StatusTone } from './ui/status-badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
@@ -58,8 +59,11 @@ export function SignalTable({
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
   return (
-    <Card className="signal-table overflow-hidden">
-      <CardHeader className="signal-table-header">
+    // Fills the (resizable) dock cell it is given: the count and the pager stay
+    // put and only the rows scroll, so the panel's bottom edge is a scroll edge
+    // rather than a line through the middle of a row.
+    <Card className="signal-table flex min-h-0 flex-1 flex-col overflow-hidden">
+      <CardHeader className="signal-table-header shrink-0">
         <CardTitle>
           <span data-testid="signal-count">
             <Numeric value={total} format="integer" />
@@ -72,68 +76,70 @@ export function SignalTable({
         <EmptyResults />
       ) : (
         <>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Symbol</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>Rule</TableHead>
-                <TableHead>Direction</TableHead>
-                <TableHead>Trigger values</TableHead>
-                <TableHead>
-                  <span className="sr-only">Actions</span>
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {signals.map((signal) => (
-                <TableRow
-                  key={signal.id}
-                  className={
-                    signal.id === selectedId
-                      ? 'selected cursor-pointer bg-accent'
-                      : 'cursor-pointer hover:bg-accent/50'
-                  }
-                  onClick={() => onSelect(signal)}
-                >
-                  <TableCell className="font-mono text-xs">{signal.symbol}</TableCell>
-                  <TableCell className="font-mono text-xs tabular-nums">{signal.date}</TableCell>
-                  <TableCell className="text-xs">
-                    {signal.rule_name} v{signal.rule_version}
-                  </TableCell>
-                  <TableCell>
-                    <StatusBadge
-                      tone={DIRECTION_TONE[signal.direction] ?? 'idle'}
-                      className={`badge badge-${signal.direction}`}
-                    >
-                      {signal.direction}
-                    </StatusBadge>
-                  </TableCell>
-                  <TableCell className="trigger-values font-mono text-xs text-muted-foreground">
-                    {formatTriggerValues(signal.trigger_values)}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      title={`Re-run ${signal.rule_name} with these parameters`}
-                      onClick={(event) => {
-                        // The row click selects the signal; the button navigates.
-                        event.stopPropagation();
-                        navigate('strategies', rerunParams(signal));
-                      }}
-                    >
-                      Re-run
-                    </Button>
-                  </TableCell>
+          <ScrollRegion testId="signal-rows">
+            <Table>
+              <TableHeader className="sticky top-0 z-10 bg-card">
+                <TableRow>
+                  <TableHead>Symbol</TableHead>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Rule</TableHead>
+                  <TableHead>Direction</TableHead>
+                  <TableHead>Trigger values</TableHead>
+                  <TableHead>
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {signals.map((signal) => (
+                  <TableRow
+                    key={signal.id}
+                    className={
+                      signal.id === selectedId
+                        ? 'selected cursor-pointer bg-accent'
+                        : 'cursor-pointer hover:bg-accent/50'
+                    }
+                    onClick={() => onSelect(signal)}
+                  >
+                    <TableCell className="font-mono text-xs">{signal.symbol}</TableCell>
+                    <TableCell className="font-mono text-xs tabular-nums">{signal.date}</TableCell>
+                    <TableCell className="text-xs">
+                      {signal.rule_name} v{signal.rule_version}
+                    </TableCell>
+                    <TableCell>
+                      <StatusBadge
+                        tone={DIRECTION_TONE[signal.direction] ?? 'idle'}
+                        className={`badge badge-${signal.direction}`}
+                      >
+                        {signal.direction}
+                      </StatusBadge>
+                    </TableCell>
+                    <TableCell className="trigger-values font-mono text-xs text-muted-foreground">
+                      {formatTriggerValues(signal.trigger_values)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        title={`Re-run ${signal.rule_name} with these parameters`}
+                        onClick={(event) => {
+                          // The row click selects the signal; the button navigates.
+                          event.stopPropagation();
+                          navigate('strategies', rerunParams(signal));
+                        }}
+                      >
+                        Re-run
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </ScrollRegion>
 
           <nav
-            className="pagination flex items-center gap-4 border-t border-border px-3 py-2 text-xs"
+            className="pagination flex shrink-0 items-center gap-4 border-t border-border px-3 py-2 text-xs"
             aria-label="Pagination"
           >
             <Button

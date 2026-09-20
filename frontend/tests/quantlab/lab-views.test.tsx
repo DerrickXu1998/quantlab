@@ -276,3 +276,123 @@ describe('Market destination handoffs', () => {
     expect(within(daily).getByTestId('price-chart')).toBeInTheDocument();
   });
 });
+
+/**
+ * Fitting, as a behaviour.
+ *
+ * Every fault these cover was invisible in the source and obvious in a
+ * browser: an order book sliced through its last bid, a price panel stopping
+ * 380px short of the bottom of the viewport, a row with its price against one
+ * edge of the screen and its size against the other. jsdom has no layout, so
+ * these assert the contract the layout primitives encode — the flex, scroll
+ * and measure classes that decide whether a boundary is a scroll edge or a
+ * half-rendered number.
+ */
+describe('workspace fitting', () => {
+  const hasAll = (element: Element | null | undefined, ...classes: string[]) =>
+    classes.filter((name) => !element?.classList.contains(name));
+
+  it('scrolls the order book rather than clipping it mid-row', async () => {
+    renderWithFeed(<ExecutionView instruments={instruments} feedError={null} />);
+    const book = await screen.findByTestId('order-book');
+
+    const region = book.parentElement;
+    expect(region).toHaveClass('overflow-y-auto');
+    // min-h-0 is the part everyone forgets: without it the overflow escapes
+    // the box instead of scrolling inside it.
+    expect(hasAll(region, 'min-h-0', 'flex-1')).toEqual([]);
+
+    // min-h-full, never h-full — the book spreads into a tall panel and
+    // scrolls out of a short one, and either way no row is sliced.
+    expect(book).toHaveClass('min-h-full');
+    expect(book).not.toHaveClass('h-full');
+  });
+
+  it('holds the book to a reading measure instead of the full panel width', async () => {
+    renderWithFeed(<ExecutionView instruments={instruments} feedError={null} />);
+    const book = await screen.findByTestId('order-book');
+
+    const measure = book.firstElementChild;
+    expect(measure).toHaveClass('mx-auto');
+    expect(measure?.className).toMatch(/max-w-\[\d/);
+    // Everything is inside it, so no level's price and size can end up at
+    // opposite edges of a 1120px panel.
+    expect(measure?.contains(screen.getByTestId('order-book-spread'))).toBe(true);
+    // One depth bar per level: every one of the twenty is inside the measure.
+    expect(measure?.querySelectorAll('[aria-hidden="true"]').length).toBe(20);
+  });
+
+  it('fills every execution panel so no cell leaves a band of bare background', async () => {
+    renderWithFeed(<ExecutionView instruments={instruments} feedError={null} />);
+    await screen.findByTestId('order-book');
+
+    for (const name of ['Order ticket', 'Recent fills', 'Positions']) {
+      const panel = screen.getByRole('region', { name });
+      expect(hasAll(panel, 'flex', 'min-h-0', 'flex-1', 'flex-col')).toEqual([]);
+    }
+  });
+
+  it('keeps the fills and positions absences compact, so the book takes the slack', async () => {
+    renderWithFeed(<ExecutionView instruments={instruments} feedError={null} />);
+    await screen.findByTestId('order-book');
+
+    // Still explained, just not a 180px band of nothing.
+    expect(screen.getByTestId('fills-empty')).toHaveTextContent(/no fills yet/i);
+    expect(screen.getByTestId('fills-empty')).toHaveClass('py-6');
+    expect(screen.getByTestId('execution-positions-empty')).toHaveClass('py-6');
+  });
+
+  it('makes the market workspace a fill column and grows the chart into it', async () => {
+    renderWithFeed(<IndicatorsView instruments={instruments} feedError={null} />);
+    const panel = await screen.findByRole('region', { name: /intraday/i });
+
+    const workspace = screen.getByTestId('market-workspace');
+    expect(hasAll(workspace, 'min-h-0', 'flex-1', 'overflow-y-auto')).toEqual([]);
+    expect(hasAll(panel, 'flex', 'min-h-0', 'flex-1', 'flex-col')).toEqual([]);
+
+    // The chart grows through PriceChart's own `fill` prop now, rather than a
+    // wrapper reaching through its DOM with arbitrary variants. Assert the
+    // shape that produces: the canvas wrapper is a growing flex child with a
+    // floor, and carries no inline pixel height to fight.
+    const summary = within(panel).getByTestId('price-chart-summary');
+    const wrapper = summary.parentElement as HTMLElement;
+    expect(hasAll(wrapper, 'min-h-[220px]', 'flex-1')).toEqual([]);
+    expect(wrapper.style.height).toBe('');
+
+    const column = wrapper.parentElement;
+    expect(hasAll(column, 'flex', 'min-h-0', 'flex-1', 'flex-col')).toEqual([]);
+  });
+
+  it('gives the chart the space a toggled-off indicator is not using', async () => {
+    const user = userEvent.setup();
+    renderWithFeed(<IndicatorsView instruments={instruments} feedError={null} />);
+    const panel = await screen.findByRole('region', { name: /intraday/i });
+    const cell = panel.parentElement;
+
+    // With every indicator off there is no void below the chart: the chart is
+    // the one thing in the column that grows.
+    expect(hasAll(cell, 'flex-1', 'flex', 'flex-col')).toEqual([]);
+
+    await user.click(screen.getByRole('button', { name: /^RSI 14/ }));
+    const rsi = screen.getByRole('region', { name: /^RSI \(14\)/ });
+
+    // The sub-panel takes its own height and no more; the chart keeps the rest.
+    expect(rsi.parentElement).toHaveClass('shrink-0');
+    expect(hasAll(cell, 'flex-1')).toEqual([]);
+  });
+
+  it('fills the instrument rail and lets a name read at 240px', async () => {
+    renderWithFeed(<IndicatorsView instruments={instruments} feedError={null} />);
+    await screen.findByRole('region', { name: /intraday/i });
+
+    const rail = screen.getByRole('region', { name: 'Instruments' });
+    expect(hasAll(rail, 'flex', 'min-h-0', 'flex-1', 'flex-col')).toEqual([]);
+
+    const row = within(rail).getByRole('button', { name: /ZZTRND/ });
+    // Two lines: identifiers over movement. On one line the name was the only
+    // non-numeric thing competing for 240px, and it always lost.
+    expect(row).toHaveClass('flex-col');
+    expect(row).toHaveAttribute('title', 'Trend Co');
+    expect(row).toHaveTextContent('Trend Co');
+  });
+});

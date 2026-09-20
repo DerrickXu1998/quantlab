@@ -101,3 +101,40 @@ describe('SignalTable re-run handoff', () => {
     expect(props.onSelect).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The table lives in a dock panel the user can resize to any height, so where
+ * its boundary falls is not something the component gets to assume.
+ */
+describe('SignalTable fitting', () => {
+  it('scrolls its rows and keeps the count and the pager in view', () => {
+    renderTable();
+
+    const rows = screen.getByTestId('signal-rows');
+    expect(rows.className).toContain('overflow-y-auto');
+    // The floor that lets the region shrink far enough for the scroll to
+    // engage; without it the panel edge cuts through a row instead.
+    expect(rows.className).toContain('min-h-0');
+
+    // The two things that must never scroll away: how many signals there are,
+    // and the way to the next page.
+    expect(rows).not.toContainElement(screen.getByTestId('signal-count'));
+    expect(rows).not.toContainElement(screen.getByRole('navigation', { name: /pagination/i }));
+    expect(rows.querySelectorAll('tbody tr')).toHaveLength(2);
+  });
+
+  it('fills the cell it is given rather than taking its natural height', () => {
+    const { container } = render(
+      <SignalTable
+        signals={[makeSignal()]}
+        total={1}
+        page={0}
+        pageSize={50}
+        onPageChange={vi.fn()}
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(container.firstElementChild!.className).toContain('flex-1');
+    expect(container.firstElementChild!.className).toContain('min-h-0');
+  });
+});

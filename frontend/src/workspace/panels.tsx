@@ -1,4 +1,4 @@
-import type { FunctionComponent } from 'react';
+import type { FunctionComponent, ReactNode } from 'react';
 import { ChartLine, FlaskConical, Hourglass } from 'lucide-react';
 import { CandlestickChart } from '../components/CandlestickChart';
 import { ModelList } from '../components/ModelList';
@@ -7,8 +7,27 @@ import { RunResultsView } from '../components/RunResultsView';
 import { SignalFilters } from '../components/SignalFilters';
 import { SignalTable } from '../components/SignalTable';
 import { BackendUnavailable, EmptyState, Loading } from '../components/ui/empty-state';
+import { FillColumn, ScrollRegion } from '../components/ui/layout';
 import { useRuns } from '../runs/RunsContext';
 import { PAGE_SIZE, useWorkspace } from './WorkspaceContext';
+
+/**
+ * The shape every dock panel's content takes.
+ *
+ * A dock cell is whatever height the user last dragged it to, so panel content
+ * cannot take its natural height and it cannot be allowed to run past the
+ * boundary either — that is how the signal table ended up sliced through its
+ * second row. `FillColumn` takes the cell, `ScrollRegion` turns its bottom edge
+ * into a scroll edge, and `min-h-0` inside both is what lets the region shrink
+ * far enough to actually scroll.
+ */
+function PanelBody({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <FillColumn className="h-full">
+      <ScrollRegion className={className}>{children}</ScrollRegion>
+    </FillColumn>
+  );
+}
 
 /**
  * Panel ids are a compatibility surface: they are the only content identity a
@@ -30,14 +49,14 @@ function FiltersPanel() {
   const { instruments, filters, changeFilters } = useWorkspace();
   const { models } = useRuns();
   return (
-    <div className="h-full overflow-auto p-3">
+    <PanelBody className="p-3">
       <SignalFilters
         instruments={instruments}
         ruleNames={models.map((model) => model.name)}
         value={filters}
         onChange={changeFilters}
       />
-    </div>
+    </PanelBody>
   );
 }
 
@@ -46,7 +65,7 @@ function SignalsPanel() {
     useWorkspace();
 
   return (
-    <div className="h-full overflow-auto p-3">
+    <FillColumn className="h-full p-3">
       {status === 'loading' && <Loading />}
       {status === 'error' && <BackendUnavailable message={errorMessage} />}
       {status === 'ready' && (
@@ -60,7 +79,7 @@ function SignalsPanel() {
           onSelect={setSelected}
         />
       )}
-    </div>
+    </FillColumn>
   );
 }
 
@@ -72,6 +91,7 @@ function ChartPanel() {
   if (!selected) {
     return (
       <EmptyState
+        className="h-full"
         icon={ChartLine}
         title="No signal selected"
         detail="Select a signal to see its price history."
@@ -98,7 +118,7 @@ function ChartPanel() {
 function CatalogPanel() {
   const { modelEntries, selectedModel, selectModel } = useRuns();
   return (
-    <div className="h-full overflow-auto">
+    <PanelBody>
       <ModelList
         entries={modelEntries}
         selected={selectedModel?.name ?? null}
@@ -106,7 +126,7 @@ function CatalogPanel() {
           selectModel(modelEntries.find((entry) => entry.model.name === name)?.model ?? null)
         }
       />
-    </div>
+    </PanelBody>
   );
 }
 
@@ -117,6 +137,7 @@ function RunPanel() {
   if (!selectedModel) {
     return (
       <EmptyState
+        className="h-full"
         icon={FlaskConical}
         title="No model selected"
         detail="Select a model to configure a run."
@@ -125,7 +146,7 @@ function RunPanel() {
   }
 
   return (
-    <div className="h-full overflow-auto p-3">
+    <PanelBody className="p-3">
       <h3 className="mb-3 font-display text-sm tracking-[-0.02em]">
         {selectedModel.name}{' '}
         <span className="font-mono text-muted-foreground">v{selectedModel.version}</span>
@@ -142,7 +163,7 @@ function RunPanel() {
           {runError}
         </p>
       ) : null}
-    </div>
+    </PanelBody>
   );
 }
 
@@ -152,6 +173,7 @@ function ResultsPanel() {
   if (!activeRun) {
     return (
       <EmptyState
+        className="h-full"
         icon={FlaskConical}
         title="No run yet"
         detail="Configure a model and run it to see results here."
@@ -160,9 +182,9 @@ function ResultsPanel() {
   }
 
   return (
-    <div className="h-full p-3">
+    <PanelBody className="p-3">
       <RunResultsView run={activeRun} />
-    </div>
+    </PanelBody>
   );
 }
 

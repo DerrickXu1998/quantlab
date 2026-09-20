@@ -36,7 +36,11 @@ export function SignalFilters({ instruments, ruleNames, value, onChange }: Signa
 
   return (
     <form
-      className="signal-filters mb-4 flex flex-wrap items-end gap-4 rounded-sm border border-border bg-card p-4"
+      // A grid, not a wrapping row: a <select> sizes itself to its widest
+      // option, so the instrument picker was 400px wide and pushed the form to
+      // three ragged rows that changed count with the viewport. Equal auto-fit
+      // columns wrap predictably and leave no void under the form.
+      className="signal-filters grid grid-cols-[repeat(auto-fit,minmax(11rem,1fr))] items-end gap-3 rounded-sm border border-border bg-card p-3"
       onSubmit={(event) => event.preventDefault()}
     >
       <Label>
@@ -64,8 +68,10 @@ export function SignalFilters({ instruments, ruleNames, value, onChange }: Signa
       </Label>
 
       <fieldset className="direction-toggle rounded-sm border border-border px-3 py-2">
-        <legend className="px-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Direction</legend>
-        <div className="flex items-center gap-3 text-sm text-foreground">
+        <legend className="px-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+          Direction
+        </legend>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-foreground">
           <label className="inline-flex items-center gap-1.5">
             <input
               type="radio"

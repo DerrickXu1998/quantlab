@@ -87,7 +87,7 @@ export interface FakeDockviewApi {
   removePanel: ReturnType<typeof vi.fn>;
   getPanel: ReturnType<typeof vi.fn>;
   onDidLayoutChange: (cb: () => void) => { dispose(): void };
-  panels: { id: string }[];
+  panels: { id: string; api: { setSize: ReturnType<typeof vi.fn> } }[];
   _fireLayoutChange(): void;
 }
 
@@ -105,7 +105,7 @@ export function resetDockviewMock() {
 function createFakeDockviewApi(): FakeDockviewApi {
   const layoutChange = makeEmitter<void>();
   // Starts empty, as real dockview does: panels exist only once added.
-  const panels: { id: string }[] = [];
+  const panels: { id: string; api: { setSize: ReturnType<typeof vi.fn> } }[] = [];
 
   const api: FakeDockviewApi = {
     toJSON: vi.fn(() => ({ grid: { root: {} }, panels: {} })),
@@ -114,8 +114,10 @@ function createFakeDockviewApi(): FakeDockviewApi {
     }),
     clear: vi.fn(),
     addPanel: vi.fn((options: { id: string }) => {
-      panels.push({ id: options.id });
-      return { id: options.id };
+      // Real panels carry their own api; the layout builder uses setSize on it.
+      const panel = { id: options.id, api: { setSize: vi.fn() } };
+      panels.push(panel);
+      return panel;
     }),
     addFloatingGroup: vi.fn(),
     removePanel: vi.fn((panel: { id: string }) => {

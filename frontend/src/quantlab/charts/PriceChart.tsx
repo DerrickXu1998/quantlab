@@ -1,4 +1,5 @@
 import { useRef } from 'react';
+import { cn } from '../../lib/utils';
 import { formatNumeric } from '../chrome/Numeric';
 import type { BollingerBand } from '../data/indicators';
 import { buildScale, drawDateAxis, drawGrid, drawSeries, token, type Series } from './draw';
@@ -11,6 +12,15 @@ export interface PriceChartProps {
   bands?: BollingerBand[] | null;
   vwap?: (number | null)[] | null;
   height?: number;
+  /**
+   * Grow to fill the parent instead of taking a fixed pixel height.
+   *
+   * The same prop `EquityCurve` carries, and for the same reason: a terminal
+   * fills its workspace. Pinned at 320px this chart left roughly 380px of dead
+   * ground under the Market destination. The canvas already redraws from a
+   * ResizeObserver, so growing costs nothing.
+   */
+  fill?: boolean;
 }
 
 /**
@@ -20,7 +30,13 @@ export interface PriceChartProps {
  * one, leaving the accent for the price itself — the same colour grammar as
  * the equity curve, where the benchmark is the dashed line.
  */
-export function PriceChart({ series, bands = null, vwap = null, height = 320 }: PriceChartProps) {
+export function PriceChart({
+  series,
+  bands = null,
+  vwap = null,
+  height = 320,
+  fill = false,
+}: PriceChartProps) {
   const themeRef = useRef<HTMLDivElement | null>(null);
 
   const { wrapperRef, canvasRef, supported } = useCanvas2d(
@@ -70,8 +86,14 @@ export function PriceChart({ series, bands = null, vwap = null, height = 320 }: 
   const last = series[series.length - 1];
 
   return (
-    <div ref={themeRef}>
-      <div ref={wrapperRef} style={{ height }} className="relative w-full">
+    <div ref={themeRef} className={cn(fill && 'flex min-h-0 flex-1 flex-col')}>
+      <div
+        ref={wrapperRef}
+        style={fill ? undefined : { height }}
+        // A floor, so a short viewport or several open sub-panels shrink the
+        // chart rather than collapsing it to a hairline.
+        className={cn('relative w-full', fill && 'min-h-[220px] flex-1')}
+      >
         {supported ? <canvas ref={canvasRef} className="block h-full w-full" /> : null}
         <p data-testid="price-chart-summary" className="sr-only">
           {series.length} ticks, last at {formatNumeric(last ?? 0, 'price')}.
