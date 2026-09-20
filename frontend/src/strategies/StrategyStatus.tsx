@@ -1,60 +1,14 @@
-import { StatusBadge } from '../components/ui/status-badge';
+import { LifecycleBadge, type Lifecycle } from '../components/ui/lifecycle';
 
 /**
- * Where a strategy sits in its lifecycle.
+ * A strategy's place in its lifecycle, and the badge for it.
  *
- * Three states, in increasing order of consequence: it has been measured
- * against history, it is trading notional money forward, it is trading real
- * money. `draft` is the fourth, and is simply "none of those yet".
+ * The vocabulary, the presentation and — critically — the rule that LIVE and
+ * PAPER never render as reachable in a build with no broker all live in
+ * `components/ui/lifecycle`. This module is the strategy-shaped view of it:
+ * how a *saved strategy* earns its state from the run history.
  */
-export type StrategyStatus = 'draft' | 'backtest' | 'paper' | 'live';
-
-/**
- * QuantLab executes backtests. It has no paper-trading engine and no broker
- * connection, so no strategy in this build can honestly be either of the top
- * two — and the badge says so rather than going quiet about it.
- *
- * This is the one place in the app where a decorative choice would be a
- * genuine hazard. A LIVE chip is the single most consequential label a trading
- * surface can show: it asserts that real money is moving. Rendering one
- * because it looks right on a dark terminal would be the same class of
- * mistake as flashing a losing position lime — a pixel that contradicts the
- * state of the book. The rest of the surface is already careful about this
- * (`SIM` in the nav, `SIMULATED` on invented numbers, `DEMO DATA` by the
- * dataset), and this follows the same rule.
- *
- * So `paper` and `live` are implemented, styled and ready for the day there is
- * an execution backend behind them; until then nothing returns them, and the
- * catalogue renders them plainly off.
- */
-const PRESENTATION: Record<
-  StrategyStatus,
-  { label: string; tone: 'idle' | 'active' | 'good' | 'disabled'; title: string }
-> = {
-  draft: {
-    label: 'Draft',
-    tone: 'idle',
-    title: 'Saved, but never run. Run it to see how it behaved over history.',
-  },
-  backtest: {
-    label: 'Backtest',
-    tone: 'good',
-    title: 'Measured against stored history. No money, real or notional, has moved.',
-  },
-  paper: {
-    label: 'Paper',
-    tone: 'active',
-    title: 'Trading notional money against a forward feed.',
-  },
-  live: {
-    label: 'Live',
-    tone: 'active',
-    title: 'Trading real money through a broker.',
-  },
-};
-
-/** Statuses this build can actually reach. */
-export const SUPPORTED_STATUSES: readonly StrategyStatus[] = ['draft', 'backtest'];
+export type StrategyStatus = Lifecycle;
 
 export function StrategyStatusBadge({
   status,
@@ -63,22 +17,7 @@ export function StrategyStatusBadge({
   status: StrategyStatus;
   testId?: string;
 }) {
-  const { label, tone, title } = PRESENTATION[status];
-  const reachable = SUPPORTED_STATUSES.includes(status);
-
-  return (
-    <StatusBadge
-      tone={reachable ? tone : 'disabled'}
-      testId={testId}
-      title={
-        reachable
-          ? title
-          : `${title} QuantLab has no execution backend, so no strategy reaches this state.`
-      }
-    >
-      {label}
-    </StatusBadge>
-  );
+  return <LifecycleBadge state={status} testId={testId} />;
 }
 
 /**

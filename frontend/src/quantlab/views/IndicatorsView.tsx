@@ -4,6 +4,7 @@ import { getPrices, type Instrument, type PriceBar } from '../../api/client';
 import { navigate } from '../../chrome/router';
 import { CandlestickChart } from '../../components/CandlestickChart';
 import { Button } from '../../components/ui/button';
+import { FillColumn, ScrollRegion } from '../../components/ui/layout';
 import { StatusBadge } from '../../components/ui/status-badge';
 import { MacdChart } from '../charts/MacdChart';
 import { PriceChart } from '../charts/PriceChart';
@@ -95,10 +96,14 @@ function ToggleChip({
 
 function WarmingUp({ needed, have }: { needed: number; have: number }) {
   return (
+    // Compact, and sized like the chart it stands in for: at the default
+    // padding a warming-up sub-panel was taller than the price chart above it,
+    // which inverts the hierarchy for the half-minute it takes to fill.
     <EmptyState
       icon={Activity}
       title={`Warming up — ${Math.max(0, needed - have)} more ticks`}
       role="status"
+      className="py-6"
     />
   );
 }
@@ -164,14 +169,17 @@ export function IndicatorsView({
   }
 
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)]">
-      <CascadeItem index={0} className="hidden border-r border-border lg:block">
-        <Panel title="Instruments" className="border-0" bodyClassName="p-0">
+    <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[240px_minmax(0,1fr)]">
+      <CascadeItem index={0} className="hidden min-h-0 border-r border-border lg:flex lg:flex-col">
+        <Panel title="Instruments" fill scroll className="border-0" bodyClassName="p-0">
           <WatchlistRail instruments={instruments} selected={selected} onSelect={setSelected} error={feedError} />
         </Panel>
       </CascadeItem>
 
-      <div className="min-w-0 overflow-y-auto p-4">
+      {/* A workspace, not a page. The chart takes the height the toggled-off
+          sub-panels are not using, and this column only scrolls once RSI and
+          MACD are both on and genuinely do not fit. */}
+      <ScrollRegion testId="market-workspace" className="flex min-w-0 flex-col gap-4 p-4">
         {instruments.length === 0 ? (
           <EmptyState
             testId="indicators-empty"
@@ -188,7 +196,7 @@ export function IndicatorsView({
           />
         ) : (
           <>
-            <CascadeItem index={1} className="relative">
+            <CascadeItem index={1} className="relative flex min-h-[18rem] flex-1 flex-col">
               {mode === 'ticks' ? (
                 <FloatingChips>
                   <ToggleChip
@@ -243,6 +251,7 @@ export function IndicatorsView({
               ) : null}
 
               <Panel
+                fill
                 title={mode === 'daily' ? `${selected} — daily history` : `${selected} — intraday`}
                 className="border-0 pt-2"
                 simulated={mode === 'ticks' ? SIM_CHART : undefined}
@@ -282,18 +291,21 @@ export function IndicatorsView({
               >
                 {mode === 'daily' ? (
                   dailyBars && dailyBars.length > 0 ? (
-                    <CandlestickChart bars={dailyBars} autoSize />
+                    // Already `h-full`; it just needs a column that fills.
+                    <FillColumn>
+                      <CandlestickChart bars={dailyBars} autoSize />
+                    </FillColumn>
                   ) : (
                     <EmptyState icon={Activity} title="Loading history…" role="status" />
                   )
                 ) : (
-                  <PriceChart series={series} bands={bands} vwap={vwapSeries} />
+                  <PriceChart fill series={series} bands={bands} vwap={vwapSeries} />
                 )}
               </Panel>
             </CascadeItem>
 
             {mode === 'ticks' && active.has('rsi') && rsiSeries ? (
-              <CascadeItem index={2} className="mt-4">
+              <CascadeItem index={2} className="shrink-0">
                 <Panel
                   title={`RSI (${RSI_PERIOD})`}
                   bodyClassName="p-0"
@@ -315,7 +327,7 @@ export function IndicatorsView({
             ) : null}
 
             {mode === 'ticks' && active.has('macd') && macdResult ? (
-              <CascadeItem index={3} className="mt-4">
+              <CascadeItem index={3} className="shrink-0">
                 <Panel
                   title={`MACD (${MACD_FAST}, ${MACD_SLOW}, ${MACD_SIGNAL})`}
                   bodyClassName="p-0"
@@ -337,13 +349,13 @@ export function IndicatorsView({
             ) : null}
 
             {mode === 'ticks' && active.has('vwap') ? (
-              <p className="mt-4 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+              <p className="shrink-0 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
                 {SIM_VWAP}
               </p>
             ) : null}
           </>
         )}
-      </div>
+      </ScrollRegion>
     </div>
   );
 }

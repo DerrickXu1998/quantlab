@@ -1,7 +1,16 @@
-import { Hourglass, Pause, Play, RotateCcw, ServerCrash, TriangleAlert } from 'lucide-react';
-import { useState } from 'react';
+import {
+  ChartLine,
+  Hourglass,
+  Pause,
+  Play,
+  RotateCcw,
+  ServerCrash,
+  TriangleAlert,
+} from 'lucide-react';
+import { useState, type ReactNode } from 'react';
 import type { Run } from '../../api/client';
 import { Button } from '../../components/ui/button';
+import { ButtonGroup, FillColumn, StatGrid } from '../../components/ui/layout';
 import { EmptyState } from '../chrome/EmptyState';
 import { Numeric } from '../chrome/Numeric';
 import { Panel } from '../chrome/Panel';
@@ -45,49 +54,46 @@ function progressPercent(current: string | null, run: Run): number | null {
   return Math.min(100, Math.max(0, ((now - start) / (end - start)) * 100));
 }
 
+function BookStat({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+        {label}
+      </span>
+      <span className="text-sm">{children}</span>
+    </div>
+  );
+}
+
+/**
+ * The book's five figures.
+ *
+ * `StatGrid` rather than a five-column grid: across a 1100px panel the fixed
+ * columns were 220px each and every label sat a hand's width from its number.
+ * The grid packs them at a readable density and wraps instead of stretching.
+ */
 function BookStats({ state }: { state: ReturnType<typeof useReplay>['state'] }) {
   const now = state.equityNow;
   return (
-    <dl data-testid="replay-stats" className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-5">
-      <div>
-        <dt className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-          Date
-        </dt>
-        <dd className="font-mono text-sm tabular-nums">{state.currentDate ?? '—'}</dd>
-      </div>
-      <div>
-        <dt className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-          Equity
-        </dt>
-        <dd className="text-sm">
+    <div data-testid="replay-stats">
+      <StatGrid min="8rem">
+        <BookStat label="Date">
+          <span className="font-mono tabular-nums">{state.currentDate ?? '—'}</span>
+        </BookStat>
+        <BookStat label="Equity">
           <Numeric value={now?.equity ?? null} format="currency" />
-        </dd>
-      </div>
-      <div>
-        <dt className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-          Cash
-        </dt>
-        <dd className="text-sm">
+        </BookStat>
+        <BookStat label="Cash">
           <Numeric value={now?.cash ?? null} format="currency" />
-        </dd>
-      </div>
-      <div>
-        <dt className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-          Open positions
-        </dt>
-        <dd className="text-sm">
+        </BookStat>
+        <BookStat label="Open positions">
           <Numeric value={now?.positions ?? null} format="integer" />
-        </dd>
-      </div>
-      <div>
-        <dt className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-          Realized P&amp;L
-        </dt>
-        <dd className="text-sm">
+        </BookStat>
+        <BookStat label="Realized P&L">
           <Numeric value={now?.realizedPnl ?? null} format="signedPrice" tone="signed" />
-        </dd>
-      </div>
-    </dl>
+        </BookStat>
+      </StatGrid>
+    </div>
   );
 }
 
@@ -106,6 +112,7 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
   if (completed.length === 0) {
     return (
       <EmptyState
+        className="min-h-0 flex-1"
         testId="replay-no-runs"
         icon={Hourglass}
         title="No completed runs"
@@ -121,9 +128,12 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
   return (
     <div
       data-testid="replay-panel"
-      className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto p-4 lg:grid-cols-[280px_minmax(0,1fr)]"
+      // Two filling columns on a desktop; stacked and scrolled below that. The
+      // grid's single row takes the workspace height, so both columns are as
+      // tall as the screen and neither leaves a band of dead ground beneath it.
+      className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto p-4 lg:grid-cols-[300px_minmax(0,1fr)] lg:overflow-hidden"
     >
-      <Panel title="Replay" className="h-fit" bodyClassName="flex flex-col gap-4 p-3">
+      <Panel title="Replay" fill scroll bodyClassName="flex flex-col gap-4 p-3">
         <label className="flex flex-col gap-1.5">
           <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
             Run
@@ -142,11 +152,16 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
           </select>
         </label>
 
-        <fieldset className="flex flex-col gap-1.5">
+        <fieldset
+          className="flex flex-col gap-1.5"
+          title="Applies from the next play; a running stream keeps its pace."
+        >
           <legend className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
             Speed
           </legend>
-          <div className="flex flex-wrap gap-1" title="Applies from the next play; a running stream keeps its pace.">
+          {/* One control, not two: the group wraps as a unit rather than
+              orphaning `100 ms` onto a line of its own. */}
+          <ButtonGroup label="Replay speed">
             {SPEEDS.map((preset) => (
               <Button
                 key={preset.intervalMs}
@@ -159,7 +174,7 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
                 {preset.label}
               </Button>
             ))}
-          </div>
+          </ButtonGroup>
         </fieldset>
 
         <div className="flex items-center gap-2">
@@ -189,7 +204,13 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
             Reset
           </Button>
           <StatusBadge
-            tone={state.status === 'error' || state.status === 'truncated' ? 'bad' : playing ? 'active' : 'idle'}
+            tone={
+              state.status === 'error' || state.status === 'truncated'
+                ? 'bad'
+                : playing
+                  ? 'active'
+                  : 'idle'
+            }
             testId="replay-status"
           >
             {STATUS_LABEL[state.status]}
@@ -197,7 +218,10 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
         </div>
 
         {run ? (
-          <div className="flex flex-col gap-1">
+          // Anchored to the foot of the column: the controls are what you
+          // reach for, the progress readout is what you glance at, and the
+          // panel now fills its cell rather than floating above empty ground.
+          <div className="mt-auto flex flex-col gap-1">
             <div
               role="progressbar"
               data-testid="replay-progress"
@@ -222,9 +246,13 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
         ) : null}
       </Panel>
 
-      <div className="flex min-w-0 flex-col gap-4">
+      {/* The workspace column: Book keeps its natural height, Equity and the
+          fill/signal tables share the slack, and the column scrolls only when
+          those floors genuinely no longer fit. */}
+      <FillColumn className="min-w-0 gap-4 overflow-y-auto">
         {state.status === 'error' ? (
           <EmptyState
+            className="shrink-0"
             testId="replay-error"
             icon={ServerCrash}
             tone="error"
@@ -236,7 +264,7 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
           <div
             role="alert"
             data-testid="replay-truncated"
-            className="flex gap-2 rounded-sm border border-destructive/40 bg-destructive/5 p-2 text-[11px] text-destructive"
+            className="flex shrink-0 gap-2 rounded-sm border border-destructive/40 bg-destructive/5 p-2 text-[11px] text-destructive"
           >
             <TriangleAlert size={16} strokeWidth={1.5} className="mt-px shrink-0" />
             <span>
@@ -246,10 +274,13 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
           </div>
         ) : null}
 
-        <Panel title="Book" bodyClassName="p-3">
+        <Panel title="Book" className="shrink-0" bodyClassName="p-3">
           <BookStats state={state} />
           {Object.keys(state.closes).length > 0 ? (
-            <p data-testid="replay-prices" className="mt-3 font-mono text-[11px] text-muted-foreground">
+            <p
+              data-testid="replay-prices"
+              className="mt-3 font-mono text-[11px] text-muted-foreground"
+            >
               {Object.entries(state.closes)
                 .map(([symbol, price]) => `${symbol} ${price.toFixed(2)}`)
                 .join(' · ')}
@@ -257,13 +288,25 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
           ) : null}
         </Panel>
 
-        <Panel title="Equity" bodyClassName="p-3">
-          <EquityCurve equity={state.equity} strategyLabel="Replayed equity" height={220} />
+        <Panel title="Equity" fill className="min-h-[220px] flex-[2]" bodyClassName="p-3">
+          {state.equity.length === 0 ? (
+            <EmptyState
+              className="min-h-0 flex-1"
+              testId="replay-equity-empty"
+              icon={ChartLine}
+              title="No equity yet"
+              detail="Press Play and the run's equity curve is drawn here, one session at a time."
+            />
+          ) : (
+            <EquityCurve equity={state.equity} strategyLabel="Replayed equity" fill />
+          )}
         </Panel>
 
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <div className="grid min-h-[168px] flex-[1] grid-cols-1 gap-4 xl:grid-cols-2">
           <Panel
             title="Fills"
+            fill
+            scroll
             bodyClassName="p-0"
             actions={
               <span className="font-mono text-[10px] text-muted-foreground">
@@ -274,88 +317,87 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
             {state.fills.length === 0 ? (
               <p className="p-3 font-mono text-[11px] text-muted-foreground">No fills yet.</p>
             ) : (
-              <div className="max-h-56 overflow-y-auto">
-                <table data-testid="replay-fills" className="w-full">
-                  <thead className="sticky top-0 bg-card">
-                    <tr className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-                      <th className="px-3 py-1.5 text-left font-normal">Date</th>
-                      <th className="px-3 py-1.5 text-left font-normal">Symbol</th>
-                      <th className="px-3 py-1.5 text-left font-normal">Side</th>
-                      <th className="px-3 py-1.5 text-right font-normal">Qty</th>
-                      <th className="px-3 py-1.5 text-right font-normal">Price</th>
+              <table data-testid="replay-fills" className="w-full">
+                <thead className="sticky top-0 bg-card">
+                  <tr className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                    <th className="px-3 py-1.5 text-left font-normal">Date</th>
+                    <th className="px-3 py-1.5 text-left font-normal">Symbol</th>
+                    <th className="px-3 py-1.5 text-left font-normal">Side</th>
+                    <th className="px-3 py-1.5 text-right font-normal">Qty</th>
+                    <th className="px-3 py-1.5 text-right font-normal">Price</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {state.fills.map((fill, index) => (
+                    <tr
+                      key={`${fill.date}-${fill.symbol}-${index}`}
+                      className="border-t border-border"
+                    >
+                      <td className="px-3 py-1.5 font-mono text-[11px] tabular-nums text-muted-foreground">
+                        {fill.date}
+                      </td>
+                      <td className="px-3 py-1.5 font-mono text-[11px]">{fill.symbol}</td>
+                      <td className="px-3 py-1.5">
+                        <StatusBadge tone={fill.side === 'buy' ? 'active' : 'idle'}>
+                          {fill.side}
+                        </StatusBadge>
+                      </td>
+                      <td className="px-3 py-1.5 text-right">
+                        <Numeric value={fill.qty} format="price" className="text-[11px]" />
+                      </td>
+                      <td className="px-3 py-1.5 text-right">
+                        <Numeric value={fill.price} format="price" className="text-[11px]" />
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {state.fills.map((fill, index) => (
-                      <tr key={`${fill.date}-${fill.symbol}-${index}`} className="border-t border-border">
-                        <td className="px-3 py-1.5 font-mono text-[11px] tabular-nums text-muted-foreground">
-                          {fill.date}
-                        </td>
-                        <td className="px-3 py-1.5 font-mono text-[11px]">{fill.symbol}</td>
-                        <td className="px-3 py-1.5">
-                          <StatusBadge tone={fill.side === 'buy' ? 'active' : 'idle'}>
-                            {fill.side}
-                          </StatusBadge>
-                        </td>
-                        <td className="px-3 py-1.5 text-right">
-                          <Numeric value={fill.qty} format="price" className="text-[11px]" />
-                        </td>
-                        <td className="px-3 py-1.5 text-right">
-                          <Numeric value={fill.price} format="price" className="text-[11px]" />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                  ))}
+                </tbody>
+              </table>
             )}
           </Panel>
 
-          <Panel title="Signals" bodyClassName="p-0">
+          <Panel title="Signals" fill scroll bodyClassName="p-0">
             {state.signals.length === 0 ? (
               <p className="p-3 font-mono text-[11px] text-muted-foreground">No signals yet.</p>
             ) : (
-              <div className="max-h-56 overflow-y-auto">
-                <table data-testid="replay-signals" className="w-full">
-                  <thead className="sticky top-0 bg-card">
-                    <tr className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-                      <th className="px-3 py-1.5 text-left font-normal">Date</th>
-                      <th className="px-3 py-1.5 text-left font-normal">Symbol</th>
-                      <th className="px-3 py-1.5 text-left font-normal">Direction</th>
-                      <th className="px-3 py-1.5 text-left font-normal">Trigger values</th>
+              <table data-testid="replay-signals" className="w-full">
+                <thead className="sticky top-0 bg-card">
+                  <tr className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                    <th className="px-3 py-1.5 text-left font-normal">Date</th>
+                    <th className="px-3 py-1.5 text-left font-normal">Symbol</th>
+                    <th className="px-3 py-1.5 text-left font-normal">Direction</th>
+                    <th className="px-3 py-1.5 text-left font-normal">Trigger values</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {state.signals.map((signal, index) => (
+                    <tr
+                      key={`${signal.date}-${signal.symbol}-${index}`}
+                      className="border-t border-border"
+                    >
+                      <td className="px-3 py-1.5 font-mono text-[11px] tabular-nums text-muted-foreground">
+                        {signal.date}
+                      </td>
+                      <td className="px-3 py-1.5 font-mono text-[11px]">{signal.symbol}</td>
+                      <td className="px-3 py-1.5">
+                        <StatusBadge tone={signal.direction === 'bullish' ? 'active' : 'idle'}>
+                          {signal.direction}
+                        </StatusBadge>
+                      </td>
+                      <td className="px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+                        {Object.entries(signal.trigger_values)
+                          .map(([key, value]) => `${key}=${String(value)}`)
+                          .join(', ')}
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {state.signals.map((signal, index) => (
-                      <tr
-                        key={`${signal.date}-${signal.symbol}-${index}`}
-                        className="border-t border-border"
-                      >
-                        <td className="px-3 py-1.5 font-mono text-[11px] tabular-nums text-muted-foreground">
-                          {signal.date}
-                        </td>
-                        <td className="px-3 py-1.5 font-mono text-[11px]">{signal.symbol}</td>
-                        <td className="px-3 py-1.5">
-                          <StatusBadge tone={signal.direction === 'bullish' ? 'good' : 'bad'}>
-                            {signal.direction}
-                          </StatusBadge>
-                        </td>
-                        <td className="px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
-                          {Object.entries(signal.trigger_values)
-                            .map(([key, value]) => `${key}=${String(value)}`)
-                            .join(', ')}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                  ))}
+                </tbody>
+              </table>
             )}
           </Panel>
         </div>
 
         {state.summary ? (
-          <Panel title="Replay summary" className="border-primary/40" bodyClassName="p-3">
+          <Panel title="Replay summary" className="shrink-0 border-primary/40" bodyClassName="p-3">
             <div data-testid="replay-summary" className="space-y-4">
               <StatRow metrics={state.summary} />
               <dl className="flex flex-wrap gap-x-6 gap-y-1 text-xs">
@@ -385,7 +427,7 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
             </div>
           </Panel>
         ) : null}
-      </div>
+      </FillColumn>
     </div>
   );
 }

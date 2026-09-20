@@ -9,6 +9,7 @@ import { RunsRail } from '../../components/RunsRail';
 import { DatasetBadge } from '../../workbench/DatasetBadge';
 import { useRuns } from '../../runs/RunsContext';
 import { EquityCurve } from '../charts/EquityCurve';
+import { FillColumn } from '../../components/ui/layout';
 import { CascadeItem } from '../chrome/Cascade';
 import { Chip, FloatingChips } from '../chrome/FloatingChips';
 import { Panel } from '../chrome/Panel';
@@ -111,8 +112,8 @@ export function OverviewView() {
     // Asymmetric on purpose: a fixed rail against a fluid workspace, rather
     // than an even split that would read as a dashboard.
     <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)]">
-      <CascadeItem index={0} className="hidden border-r border-border lg:block">
-        <Panel title="Runs" className="border-0" bodyClassName="p-0">
+      <CascadeItem index={0} className="hidden min-h-0 flex-col border-r border-border lg:flex">
+        <Panel title="Runs" fill scroll className="border-0" bodyClassName="p-0">
           <RunsRail
             runs={allRuns}
             selectedId={targetId}
@@ -187,20 +188,16 @@ export function OverviewView() {
                     />
                   </Chip>
                 </FloatingChips>
-                <Panel
-                  title="Equity curve"
-                  className="flex min-h-0 flex-1 flex-col border-0"
-                  bodyClassName="flex min-h-0 flex-1 flex-col p-3"
-                >
+                <Panel title="Equity curve" fill className="border-0">
                   <StatRow metrics={performance.performance.metrics} />
-                  <div className="mt-6 flex min-h-0 flex-1 flex-col">
+                  <FillColumn className="mt-6">
                     <EquityCurve
                       fill
                       equity={performance.performance.equity}
                       benchmark={performance.performance.benchmark}
                       benchmarkLabel="Buy & hold"
                     />
-                  </div>
+                  </FillColumn>
                   {/* Closed here: the curve is the subject of this screen, and
                       nine lines of prose under it turned the chart into a
                       band. The count in the summary still says they exist. */}
@@ -214,8 +211,10 @@ export function OverviewView() {
               <CascadeItem index={3} className="flex min-h-0 flex-col bg-background">
                 <Panel
                   title="Open positions"
-                  className="flex min-h-0 flex-1 flex-col border-0"
-                  bodyClassName="min-h-0 flex-1 overflow-y-auto p-0"
+                  fill
+                  scroll
+                  className="border-0"
+                  bodyClassName="p-0"
                   simulated="The live column re-marks against the simulated feed."
                 >
                   <PositionsTable trades={performance.performance.trades} />

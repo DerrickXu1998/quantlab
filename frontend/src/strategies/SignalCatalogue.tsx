@@ -175,7 +175,15 @@ export function SignalCatalogue({
               {CATEGORY_LABELS[category]}
               <span className="ml-2 tabular-nums">{models.length}</span>
             </h3>
-            <div className="grid grid-cols-1 gap-2 xl:grid-cols-2">
+            {/* One column, always.
+
+                The catalogue lives in a 380px rail, and `xl:grid-cols-2` was
+                splitting that into ~170px cards: "Close re-entering the
+                Bollinger band after piercing it." wrapped to three lines of
+                three words, and cards of very different heights left the grid
+                visibly ragged. A signal card is a paragraph and a row of
+                controls; it wants a measure, not a column count. */}
+              <div className="grid grid-cols-1 gap-2">
               {models.map((model) => (
                 <SignalCard key={`${model.name}@${model.version}`} model={model} onAdd={onAdd} />
               ))}

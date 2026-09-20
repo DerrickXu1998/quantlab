@@ -121,6 +121,21 @@ check('motion on hover', {
   why: 'No hover bloat: no scaling, movement or glow on hover.',
 });
 
+// --- Fitting ---------------------------------------------------------------
+
+check('scroll container that cannot shrink', {
+  // The exact defect behind every mid-row clip on this surface: a flex child
+  // that both grows and scrolls, but has no `min-h-0`. A flex item will not
+  // shrink below its content by default, so the box never gets shorter than
+  // the rows inside it, the scrollbar never engages, and the overflow is cut
+  // off by the parent instead — leaving half a number as the last thing on
+  // screen. `ScrollRegion` and `<Panel fill scroll>` exist so this does not
+  // have to be remembered.
+  test: (l) =>
+    /\bflex-1\b/.test(l) && /\boverflow-(?:y-)?auto\b/.test(l) && !/\bmin-h-0\b/.test(l),
+  why: 'A scrolling flex child needs min-h-0, or it clips instead of scrolling. Use ScrollRegion or <Panel fill scroll>.',
+});
+
 // --- Report ----------------------------------------------------------------
 
 const byRule = new Map();

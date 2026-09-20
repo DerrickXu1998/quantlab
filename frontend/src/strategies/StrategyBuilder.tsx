@@ -263,7 +263,7 @@ export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) 
           )}
         </Panel>
 
-        <Panel title="Signal catalogue" bodyClassName="max-h-[52vh] overflow-y-auto">
+        <Panel title="Signal catalogue" scroll bodyClassName="max-h-[52vh]">
           {modelsStatus === 'loading' ? (
             <EmptyState icon={Hourglass} title="Loading the registry…" role="status" />
           ) : (

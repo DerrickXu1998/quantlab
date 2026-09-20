@@ -32,6 +32,10 @@ function PositionRow({ position }: { position: Position }) {
 /**
  * Positions netted from the session's fills, marked against the simulated
  * feed. Unrealized P&L is the one number here allowed to go red.
+ *
+ * The panel around this scrolls, so there is no scroller here. The empty state
+ * is compact for the same reason the fills one is: its band is capped, and the
+ * order book above it is the better home for the slack.
  */
 export function ExecutionPositions({ positions }: { positions: Position[] }) {
   if (positions.length === 0) {
@@ -40,14 +44,15 @@ export function ExecutionPositions({ positions }: { positions: Position[] }) {
         testId="execution-positions-empty"
         icon={Inbox}
         title="No positions"
-        detail="Positions net from the session's fills. Submit an order to open one."
+        detail="They net from the session's fills."
+        className="py-6"
       />
     );
   }
 
   return (
     <table data-testid="execution-positions" className="w-full">
-      <thead>
+      <thead className="sticky top-0 z-10 bg-card">
         <tr className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
           <th className="px-3 py-1.5 text-left font-normal">Symbol</th>
           <th className="px-3 py-1.5 text-right font-normal">Qty</th>

@@ -2,9 +2,8 @@ import { PackageOpen } from 'lucide-react';
 import type { ModelEntry } from '../runs/RunsContext';
 import { EmptyState } from './ui/empty-state';
 import { Numeric } from './ui/numeric';
-import { StatusBadge } from './ui/status-badge';
+import { LifecycleRow } from './ui/lifecycle';
 
-const NO_EXECUTION = 'No execution backend — QuantLab computes signals, it does not place orders.';
 
 /**
  * The model list, used by both Research and Strategies.
@@ -65,14 +64,8 @@ export function ModelList({
                 {model.direction_semantics}
               </span>
 
-              <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                <StatusBadge tone="active">Backtest</StatusBadge>
-                <StatusBadge tone="disabled" title={NO_EXECUTION}>
-                  Paper
-                </StatusBadge>
-                <StatusBadge tone="disabled" title={NO_EXECUTION}>
-                  Live
-                </StatusBadge>
+              <span className="mt-1.5 block">
+                <LifecycleRow />
               </span>
 
               <span className="mt-1.5 flex flex-wrap items-center gap-x-3 text-[10px] text-muted-foreground">
