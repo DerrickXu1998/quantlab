@@ -1,7 +1,7 @@
 # QuantLab deploy -- GitHub Actions -> Artifact Registry -> single Compute Engine VM.
 #
 # The whole pipeline costs nothing beyond the VM: Actions minutes are free for
-# public repositories (and 2,000/month on the free private tier), and the three
+# public repositories (and 2,000/month on the free private tier), and the two
 # images are a few hundred MB in Artifact Registry, under the 0.5 GB free tier
 # for the first repository.
 #
@@ -240,11 +240,25 @@ jobs:
         id: address
         run: |
           set -euo pipefail
-          ip="$(gcloud compute instances describe "${{ vars.GCP_INSTANCE }}" \
-            --zone "${{ vars.GCP_ZONE }}" \
-            --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"
-          echo "url=http://${ip}/" >> "$GITHUB_OUTPUT"
-          echo "ip=${ip}" >> "$GITHUB_OUTPUT"
+          # The site address, not the IP, decides the public URL: with a
+          # hostname set, Caddy answers every plain-HTTP request with a 308 to
+          # HTTPS, and a redirect is not a curl -f failure -- probing
+          # http://<ip> would "succeed" on a redirect while proving nothing.
+          site="$(gcloud compute ssh "${{ vars.GCP_INSTANCE }}" \
+            --zone "${{ vars.GCP_ZONE }}" --tunnel-through-iap --quiet \
+            --command "sudo sed -n 's/^QUANTLAB_SITE_ADDRESS=//p' /opt/quantlab/.env | head -1" \
+            | tr -d '[:space:]')"
+          if [ -z "$site" ] || [ "$site" = ":80" ]; then
+            ip="$(gcloud compute instances describe "${{ vars.GCP_INSTANCE }}" \
+              --zone "${{ vars.GCP_ZONE }}" \
+              --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"
+            url="http://${ip}"
+          else
+            url="https://${site}"
+          fi
+          # No trailing slash: the verify step and check-warehouse.sh append
+          # paths to this.
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
 
       # remote-deploy.sh already proved the stack serves itself from inside the
       # VM. This proves the firewall lets the rest of the world in, which is a
@@ -254,7 +268,7 @@ jobs:
           set -euo pipefail
           # The API, not an SPA -- the SPA is on Vercel. There is nothing to
           # serve at / and FastAPI correctly 404s it, so health is the probe.
-          health="${{ steps.address.outputs.url }}api/v1/health"
+          health="${{ steps.address.outputs.url }}/api/v1/health"
           for i in $(seq 1 10); do
             if curl -fsS --max-time 10 -o /dev/null "${health}"; then
               echo "API reachable at ${health}"
@@ -272,8 +286,7 @@ jobs:
       - name: Warehouse coverage report
         continue-on-error: true
         run: |
-          # No trailing slash: the script appends /api/v1/... to this.
-          BACKEND_URL="http://${{ steps.address.outputs.ip }}" bash scripts/check-warehouse.sh
+          BACKEND_URL="${{ steps.address.outputs.url }}" bash scripts/check-warehouse.sh
 
       - name: Summary
         if: always()
