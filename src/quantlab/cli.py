@@ -295,6 +295,24 @@ def cmd_ingest_macro(args) -> int:
     return 0 if report.status in ("ok", "partial") else 1
 
 
+def cmd_map_identifiers(args) -> int:
+    from . import store
+
+    # Catalog-only: identifier mappings live in Postgres, not ClickHouse.
+    with store.session(args.db_url) as conn:
+        if not args.no_migrate:
+            store.migrate(conn)
+
+        report = store.map_identifiers(
+            conn,
+            limit=args.limit,
+            only_missing=args.only_missing,
+        )
+        print(report.summary())
+
+    return 0 if report.status in ("ok", "partial") else 1
+
+
 def cmd_coverage(args) -> int:
     from . import store
 
@@ -513,6 +531,21 @@ def build_parser() -> argparse.ArgumentParser:
     im.add_argument("--no-migrate", action="store_true",
                     help="skip the automatic migrate step")
     im.set_defaults(func=cmd_ingest_macro)
+
+    mid = sub.add_parser(
+        "map-identifiers",
+        help="map catalog instruments to OpenFIGI identifiers (keyless; resumable)",
+    )
+    mid.add_argument("--limit", type=int, default=None,
+                     help="map at most N instruments this run")
+    mid.add_argument("--only-missing", dest="only_missing", action="store_true", default=True,
+                     help="only instruments without a FIGI yet (default; makes re-runs resume)")
+    mid.add_argument("--all", dest="only_missing", action="store_false",
+                     help="re-map every eligible instrument, refreshing existing FIGIs")
+    mid.add_argument("--db-url", default="", help="Postgres catalog; overrides $QUANTLAB_DB_URL")
+    mid.add_argument("--no-migrate", action="store_true",
+                     help="skip the automatic migrate step")
+    mid.set_defaults(func=cmd_map_identifiers)
 
     rp = sub.add_parser(
         "replay-publish",

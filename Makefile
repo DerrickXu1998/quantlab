@@ -24,7 +24,7 @@ END     ?=
 PROVIDERS ?= yahoo stooq
 
 .PHONY: help up down build seed logs shell docker-shell test smoke check-warehouse hash dump-hash gen-api \
-	check-contract sync-contract migrate ingest seed-warehouse ingest-macro coverage signals store-test \
+	check-contract sync-contract migrate ingest seed-warehouse ingest-macro map-identifiers coverage signals store-test \
 	replay-publish db-shell ch-shell destroy
 
 help: ## Show available targets
@@ -68,6 +68,15 @@ MACRO_START ?= 2010-01-01
 ingest-macro: ## Load BoE macro series as pseudo-instrument bars (override MACRO_START/END)
 	$(COMPOSE) run --rm ingest ingest-macro \
 		--start $(MACRO_START) $(if $(END),--end $(END),)
+
+# OpenFIGI identifier mappings: keyless at 25 req/min x 10 jobs, so the full
+# warehouse takes a few minutes. Resumable by default (--only-missing).
+MAP_LIMIT ?=
+MAP_ALL ?=
+
+map-identifiers: ## Map warehouse instruments to OpenFIGI identifiers (override MAP_LIMIT/MAP_ALL=--all)
+	$(COMPOSE) run --rm ingest map-identifiers \
+		$(if $(MAP_LIMIT),--limit $(MAP_LIMIT),) $(MAP_ALL)
 
 coverage: ## What is in the store, where it came from, and how well it compresses
 	$(COMPOSE) run --rm ingest coverage

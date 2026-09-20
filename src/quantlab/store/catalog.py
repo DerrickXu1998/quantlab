@@ -156,6 +156,69 @@ def map_vendor_symbols(
     return len(rows)
 
 
+def record_figi_mappings(
+    conn,
+    mappings: Mapping[str, Mapping[str, Any]],
+    ids: Mapping[str, int],
+    *,
+    source: str = "openfigi",
+) -> int:
+    """Record OpenFIGI mapping results for catalog instruments.
+
+    ``mappings``: symbol -> the best entry OpenFIGI returned for it. The FIGI
+    lands in the two places join paths already read -- the ``instruments.figi``
+    column and a ``symbol_map`` row under ``source='openfigi'`` -- while the
+    rest of the payload (composite FIGI, name, exchange code, market sector,
+    security type) folds into ``meta['openfigi']``. As with
+    ``ensure_instruments``, a mapping never blanks an existing FIGI.
+    """
+    import datetime as dt
+
+    rows = []
+    figi_by_symbol: dict[str, str] = {}
+    for symbol, entry in mappings.items():
+        if symbol not in ids:
+            continue
+        figi = str(entry.get("figi") or "")
+        if figi:
+            figi_by_symbol[symbol] = figi
+        rows.append(
+            {
+                "symbol": symbol,
+                "figi": figi,
+                "meta": json.dumps(
+                    {
+                        source: {
+                            "composite_figi": entry.get("compositeFIGI", ""),
+                            "ticker": entry.get("ticker", ""),
+                            "name": entry.get("name", ""),
+                            "exch_code": entry.get("exchCode", ""),
+                            "market_sector": entry.get("marketSector", ""),
+                            "security_type": entry.get("securityType", ""),
+                            "mapped_at": dt.date.today().isoformat(),
+                        }
+                    },
+                    sort_keys=True,
+                ),
+            }
+        )
+    if not rows:
+        return 0
+
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            UPDATE instruments SET
+                figi = COALESCE(NULLIF(%(figi)s, ''), instruments.figi),
+                meta = instruments.meta || %(meta)s::jsonb
+            WHERE symbol = %(symbol)s
+            """,
+            rows,
+        )
+    map_vendor_symbols(conn, source, figi_by_symbol, ids)
+    return len(rows)
+
+
 # ---------------------------------------------------------------------------
 # Provenance
 # ---------------------------------------------------------------------------

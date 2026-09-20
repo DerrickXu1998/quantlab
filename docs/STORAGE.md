@@ -54,6 +54,15 @@ universe is the only free defence against survivorship bias.
 spirit to `ingest_runs`. That is ~8 bytes a row instead of duplicating source
 strings across 100M rows, and it gives full lineage for any value.
 
+**OpenFIGI identifiers land in three places, no new table.** `make
+map-identifiers` resolves every real instrument against keyless OpenFIGI
+(25 req/min × 10 jobs, resumable via `--only-missing`). The exchange-level
+FIGI goes into `instruments.figi` and a `symbol_map` row under
+`source='openfigi'` — the same vendor-identifier binding every other source
+uses — while the rest of the mapping payload (composite FIGI, name, exchange
+code, market sector, security type, mapped-at date) folds into
+`meta.openfigi`. Synthetic and macro pseudo-instruments are never submitted.
+
 ## Idempotency
 
 `price_bars` is a `ReplacingMergeTree(run_id)`: re-ingesting a range writes
@@ -126,6 +135,7 @@ values written are identical anyway. Synthetic and real symbols coexist; the
 make migrate     # apply pending migrations to both stores
 make ingest      # SYMBOLS="AAPL.US HSBA.LON" START=2015-01-01
 make seed-warehouse  # deterministic synthetic bars, no network
+make map-identifiers  # OpenFIGI FIGIs for every real instrument (keyless, resumable)
 make coverage    # what is held, where it came from, compression ratios
 make signals     # recompute signals from bars into the catalog
 make store-test  # store test suite against the live stack

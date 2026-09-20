@@ -38,6 +38,7 @@ from .catalog import (
     list_symbols,
     load_securities,
     map_vendor_symbols,
+    record_figi_mappings,
     record_rejects,
     run_history,
     snapshot_members,
@@ -64,6 +65,7 @@ from .conn import (
     ping,
     session,
 )
+from .identifiers import MapReport, map_identifiers
 from .ingest import IngestReport, ingest_corporate_actions, ingest_prices
 from .macro import ingest_macro_series, series_to_bars
 from .seed import seed_warehouse
@@ -87,6 +89,7 @@ __all__ = [
     "ENV_VAR",
     "IngestReport",
     "MIGRATIONS_DIR",
+    "MapReport",
     "MigrationDrift",
     "StoreNotConfigured",
     "bar_count",
@@ -112,12 +115,14 @@ __all__ = [
     "load_bars",
     "load_panel",
     "load_securities",
+    "map_identifiers",
     "map_vendor_symbols",
     "migrate",
     "migrate_all",
     "optimize",
     "panel_for_modelling",
     "ping",
+    "record_figi_mappings",
     "record_rejects",
     "run_history",
     "seed_warehouse",

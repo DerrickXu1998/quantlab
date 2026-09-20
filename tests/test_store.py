@@ -463,6 +463,87 @@ def test_write_bars_handles_more_months_than_one_insert_block_allows(
     store_conn.commit()
 
 
+@needs_store
+def test_map_identifiers_records_figi_symbol_map_and_meta(store_conn, unique_symbol):
+    """A stubbed OpenFIGI provider, a real catalog write: the FIGI must land
+    in instruments.figi, symbol_map and meta['openfigi']; synthetic and macro
+    pseudo-instruments must be skipped; a re-run must resume, not redo."""
+    from quantlab import store
+
+    real = unique_symbol
+    synthetic = f"TST{uuid.uuid4().hex[:6].upper()}.US"
+    macro = f"TST{uuid.uuid4().hex[:6].upper()}.BOE"
+    symbols = [real, synthetic, macro]
+
+    class StubOpenFigi:
+        jobs_per_request = 10
+
+        def __init__(self):
+            self.jobs: list[dict] = []
+
+        def map_identifiers(self, jobs):
+            self.jobs.extend(jobs)
+            return [
+                [
+                    {
+                        "figi": f"BBGT{i:08d}",
+                        "compositeFIGI": f"BBGC{i:08d}",
+                        "ticker": job["idValue"],
+                        "name": "Stub Corp",
+                        "exchCode": job["exchCode"],
+                        "marketSector": "Equity",
+                        "securityType": "Common Stock",
+                    }
+                ]
+                for i, job in enumerate(jobs)
+            ]
+
+    try:
+        catalog.ensure_instruments(
+            store_conn,
+            {
+                real: Security(symbol=real, currency=Currency.USD),
+                synthetic: Security(
+                    symbol=synthetic, currency=Currency.USD, meta={"synthetic": True}
+                ),
+                macro: Security(symbol=macro, currency=Currency.USD, meta={"macro": True}),
+            },
+        )
+
+        stub = StubOpenFigi()
+        report = store.map_identifiers(store_conn, symbols, provider=stub)
+
+        assert report.candidates == 1, "synthetic and macro rows must not become jobs"
+        assert report.mapped == 1 and report.status == "ok"
+        assert [j["idValue"] for j in stub.jobs] == [real.rsplit(".", 1)[0]]
+
+        row = store_conn.execute(
+            "SELECT figi, meta->'openfigi'->>'composite_figi', "
+            "       meta->'openfigi'->>'security_type' "
+            "FROM instruments WHERE symbol = %s",
+            (real,),
+        ).fetchone()
+        assert row == ("BBGT00000000", "BBGC00000000", "Common Stock")
+
+        mapped = store_conn.execute(
+            "SELECT vendor_symbol FROM symbol_map WHERE source = 'openfigi' "
+            "AND instrument_id = (SELECT instrument_id FROM instruments WHERE symbol = %s)",
+            (real,),
+        ).fetchall()
+        assert [r[0] for r in mapped] == ["BBGT00000000"]
+
+        # Resumable: with the FIGI recorded, only-missing finds nothing to do.
+        again = store.map_identifiers(store_conn, symbols, provider=StubOpenFigi())
+        assert again.candidates == 0 and again.status == "ok"
+    finally:
+        rows = store_conn.execute(
+            "DELETE FROM instruments WHERE symbol = ANY(%s) RETURNING instrument_id",
+            (symbols,),
+        ).fetchall()
+        store_conn.commit()
+        assert len(rows) in (0, 3)  # symbol_map rows cascade away with them
+
+
 def _cleanup_bars(client, instrument_id: int) -> None:
     """Remove a test instrument's bars. ClickHouse deletes are mutations and
     asynchronous, which is fine for cleanup but never for the write path."""

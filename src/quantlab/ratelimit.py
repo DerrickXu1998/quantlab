@@ -55,8 +55,10 @@ DEFAULT_LIMITS: dict[str, Limit] = {
     "sec_edgar": Limit.per_second(9, note="SEC published limit is 10 req/s; we stay under"),
     # Companies House: 600 requests per 5-minute rolling window.
     "companies_house": Limit.per_window(600, 300, note="600 req / 5 min"),
-    # OpenFIGI mapping: 25 req/min anonymous, 25 req/6s with a key.
-    "openfigi": Limit.per_minute(25, note="raise to 250/min when OPENFIGI_API_KEY is set"),
+    # OpenFIGI mapping: 25 req/min anonymous, 25 req/6s with a key. The
+    # anonymous window rejects bursts, so keyless pacing is strictly one
+    # request every 2.4s (burst=1), never 10-at-once.
+    "openfigi": Limit(rate=25 / 60, burst=1, note="keyless 25 req/min; raise with OPENFIGI_API_KEY"),
     "openfigi_keyed": Limit.per_window(25, 6, note="25 req / 6 s with API key"),
     # Unpublished: be conservative. Yahoo 429s somewhere near 360 req/hour.
     "yahoo": Limit.per_minute(4, note="undocumented; community reports ~360/hr before 429"),

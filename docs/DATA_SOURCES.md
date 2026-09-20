@@ -131,6 +131,10 @@ Accepts `TICKER`, `ID_ISIN`, `ID_SEDOL`, `ID_CUSIP` and more. **One asymmetry wo
 designing around**: the response carries FIGI, ticker, name and exchange code — *not*
 ISIN. So ISIN/SEDOL → FIGI → ticker works; ticker → ISIN needs another source.
 
+`make map-identifiers` maps the whole warehouse catalog keyless: FIGI → `instruments.figi`
+and `symbol_map` (source `openfigi`), the rest of the payload → `meta.openfigi`. It is
+resumable (`--only-missing` is the default) and skips synthetic/macro pseudo-instruments.
+
 ### Bank of England IADB — `quantlab.providers.boe`
 
 Free, keyless, one documented CSV endpoint, up to **300 series per request**. Gives you
