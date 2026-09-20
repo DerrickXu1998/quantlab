@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SignalTable } from '../src/components/SignalTable';
 import { makeSignal } from './fixtures';
 
@@ -72,5 +72,32 @@ describe('SignalTable', () => {
 
     renderTable({ total: 120, page: 2, pageSize: 50 });
     expect(screen.getAllByRole('button', { name: /next/i })[1]).toBeDisabled();
+  });
+});
+
+describe('SignalTable re-run handoff', () => {
+  afterEach(() => {
+    window.location.hash = '';
+  });
+
+  it('"Re-run" deep-links Strategies with the model and parameters prefilled', async () => {
+    const user = userEvent.setup();
+    renderTable();
+
+    // The row click selects; the action navigates.
+    await user.click(screen.getAllByRole('button', { name: /re-run/i })[0]);
+
+    expect(window.location.hash).toBe(
+      '#/strategies?model=sma-crossover&version=1.0.0&p_fast=20&p_slow=50',
+    );
+  });
+
+  it('does not select the row when the re-run action is used', async () => {
+    const user = userEvent.setup();
+    const props = renderTable();
+
+    await user.click(screen.getAllByRole('button', { name: /re-run/i })[0]);
+
+    expect(props.onSelect).not.toHaveBeenCalled();
   });
 });

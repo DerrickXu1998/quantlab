@@ -85,5 +85,17 @@ export function useCanvas2d(draw: DrawFn, deps: unknown[] = []) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [render, ...deps]);
 
+  // Colours come from live CSS tokens, and a theme toggle changes those tokens
+  // without changing size or data — so watch the theme switch on <html> too.
+  useEffect(() => {
+    if (typeof MutationObserver === 'undefined') return;
+    const observer = new MutationObserver(() => render());
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class'],
+    });
+    return () => observer.disconnect();
+  }, [render]);
+
   return { wrapperRef, canvasRef, size, supported };
 }

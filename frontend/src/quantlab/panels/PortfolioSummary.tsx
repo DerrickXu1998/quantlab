@@ -24,7 +24,7 @@ export function PortfolioSummary({
 
   return (
     <div data-testid="portfolio-summary" className="px-2 py-10 sm:px-8">
-      <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+      <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
         Book value
       </p>
 

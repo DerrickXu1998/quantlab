@@ -37,7 +37,14 @@ const WorkspaceContext = createContext<WorkspaceContextValue | undefined>(undefi
  * when panels are dragged, which can remount panel components. State held inside
  * a panel would be lost on every rearrange, and rearranging would re-fetch.
  */
-export function WorkspaceProvider({ children }: { children: ReactNode }) {
+export function WorkspaceProvider({
+  children,
+  instrumentFilter = null,
+}: {
+  children: ReactNode;
+  /** Handoff from another destination ("Signals for X"): applied as the instrument filter. */
+  instrumentFilter?: string | null;
+}) {
   const [instruments, setInstruments] = useState<Instrument[]>([]);
   const [filters, setFilters] = useState<SignalFilterState>(EMPTY_FILTERS);
   const [page, setPage] = useState(0);
@@ -47,6 +54,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [errorMessage, setErrorMessage] = useState<string>();
   const [selected, setSelected] = useState<Signal | null>(null);
   const [contextBars, setContextBars] = useState<PriceBar[] | null>(null);
+
+  // Cross-destination handoff: arriving with ?instrument=… pre-filters the table.
+  useEffect(() => {
+    if (!instrumentFilter) return;
+    setFilters({ ...EMPTY_FILTERS, instrument: instrumentFilter });
+    setPage(0);
+  }, [instrumentFilter]);
 
   useEffect(() => {
     let cancelled = false;

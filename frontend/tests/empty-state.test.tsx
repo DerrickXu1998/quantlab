@@ -1,6 +1,10 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { BackendUnavailable, EmptyResults, Loading } from '../src/components/StatusStates';
+import {
+  BackendUnavailable,
+  EmptyResults,
+  Loading,
+} from '../src/components/ui/empty-state';
 
 describe('StatusStates', () => {
   it('renders the loading state as a polite status region', () => {

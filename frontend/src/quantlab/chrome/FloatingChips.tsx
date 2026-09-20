@@ -30,7 +30,7 @@ export function Chip({
       title={title}
       className="pointer-events-auto flex items-center gap-1.5 rounded-sm border border-border bg-card px-2 py-1"
     >
-      <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground">
+      <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-muted-foreground">
         {label}
       </span>
       {children}

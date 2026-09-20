@@ -1,7 +1,10 @@
 import type { Signal } from '../api/client';
-import { EmptyResults } from './StatusStates';
+import { navigate } from '../chrome/router';
 import { Button } from './ui/button';
-import { CardHeader, CardTitle } from './ui/card';
+import { Card, CardHeader, CardTitle } from './ui/card';
+import { EmptyResults } from './ui/empty-state';
+import { Numeric } from './ui/numeric';
+import { StatusBadge, type StatusTone } from './ui/status-badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 
 interface SignalTableProps {
@@ -20,10 +23,28 @@ function formatTriggerValues(values: Record<string, unknown>): string {
     .join(', ');
 }
 
-const DIRECTION_BADGE: Record<string, string> = {
-  bullish: 'bg-success/15 text-success',
-  bearish: 'bg-destructive/15 text-destructive',
+// Red is reserved for losses and errors, so a bearish *signal* is not red —
+// the accent marks the bullish side and the two read apart by fill, not hue.
+const DIRECTION_TONE: Record<string, StatusTone> = {
+  bullish: 'active',
+  bearish: 'idle',
 };
+
+/**
+ * The signal carries everything the run form needs: model name and version,
+ * and the parameter values it fired with — handed to Strategies as `p_*`
+ * params on the hash, so the prefill survives a refresh.
+ */
+export function rerunParams(signal: Signal): Record<string, string> {
+  const params: Record<string, string> = {
+    model: signal.rule_name,
+    version: signal.rule_version,
+  };
+  for (const [key, value] of Object.entries(signal.parameters)) {
+    params[`p_${key}`] = String(value);
+  }
+  return params;
+}
 
 export function SignalTable({
   signals,
@@ -37,17 +58,18 @@ export function SignalTable({
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
   return (
-    <section className="signal-table overflow-hidden rounded-lg border border-border bg-card text-card-foreground">
-      <CardHeader className="signal-table-header border-b border-border">
+    <Card className="signal-table overflow-hidden">
+      <CardHeader className="signal-table-header">
         <CardTitle>
-          <span data-testid="signal-count">{total}</span> signal{total === 1 ? '' : 's'}
+          <span data-testid="signal-count">
+            <Numeric value={total} format="integer" />
+          </span>{' '}
+          signal{total === 1 ? '' : 's'}
         </CardTitle>
       </CardHeader>
 
       {signals.length === 0 ? (
-        <div className="p-4">
-          <EmptyResults />
-        </div>
+        <EmptyResults />
       ) : (
         <>
           <Table>
@@ -58,6 +80,9 @@ export function SignalTable({
                 <TableHead>Rule</TableHead>
                 <TableHead>Direction</TableHead>
                 <TableHead>Trigger values</TableHead>
+                <TableHead>
+                  <span className="sr-only">Actions</span>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -71,22 +96,36 @@ export function SignalTable({
                   }
                   onClick={() => onSelect(signal)}
                 >
-                  <TableCell className="font-medium">{signal.symbol}</TableCell>
-                  <TableCell className="tabular-nums">{signal.date}</TableCell>
-                  <TableCell>
+                  <TableCell className="font-mono text-xs">{signal.symbol}</TableCell>
+                  <TableCell className="font-mono text-xs tabular-nums">{signal.date}</TableCell>
+                  <TableCell className="text-xs">
                     {signal.rule_name} v{signal.rule_version}
                   </TableCell>
                   <TableCell>
-                    <span
-                      className={`badge badge-${signal.direction} inline-block rounded-full px-2 py-0.5 text-xs font-bold ${
-                        DIRECTION_BADGE[signal.direction] ?? 'bg-muted text-muted-foreground'
-                      }`}
+                    <StatusBadge
+                      tone={DIRECTION_TONE[signal.direction] ?? 'idle'}
+                      className={`badge badge-${signal.direction}`}
                     >
                       {signal.direction}
-                    </span>
+                    </StatusBadge>
                   </TableCell>
                   <TableCell className="trigger-values font-mono text-xs text-muted-foreground">
                     {formatTriggerValues(signal.trigger_values)}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      title={`Re-run ${signal.rule_name} with these parameters`}
+                      onClick={(event) => {
+                        // The row click selects the signal; the button navigates.
+                        event.stopPropagation();
+                        navigate('strategies', rerunParams(signal));
+                      }}
+                    >
+                      Re-run
+                    </Button>
                   </TableCell>
                 </TableRow>
               ))}
@@ -94,7 +133,7 @@ export function SignalTable({
           </Table>
 
           <nav
-            className="pagination flex items-center gap-4 border-t border-border px-4 py-3 text-sm"
+            className="pagination flex items-center gap-4 border-t border-border px-3 py-2 text-xs"
             aria-label="Pagination"
           >
             <Button
@@ -107,7 +146,8 @@ export function SignalTable({
               Previous
             </Button>
             <span className="text-muted-foreground">
-              Page {page + 1} of {pageCount}
+              Page <Numeric value={page + 1} format="integer" /> of{' '}
+              <Numeric value={pageCount} format="integer" />
             </span>
             <Button
               type="button"
@@ -121,6 +161,6 @@ export function SignalTable({
           </nav>
         </>
       )}
-    </section>
+    </Card>
   );
 }

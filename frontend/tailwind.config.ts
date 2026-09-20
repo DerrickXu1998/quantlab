@@ -39,8 +39,8 @@ export default {
           DEFAULT: 'hsl(var(--card))',
           foreground: 'hsl(var(--card-foreground))',
         },
-        // Quant Lab only: chart grid lines, and the resting colour of a value
-        // that can tick. Additive -- unset outside .quantlab.
+        // Chart grid lines, and the resting colour of a value that can tick.
+        // Defined in both themes alongside the other tokens.
         grid: 'hsl(var(--grid))',
         tick: 'hsl(var(--tick))',
       },

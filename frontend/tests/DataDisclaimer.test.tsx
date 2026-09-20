@@ -1,11 +1,10 @@
-import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import * as apiClient from '../../src/api/client';
-import { DatasetProvider } from '../../src/api/DatasetProvider';
-import { DataDisclaimer } from '../../src/components/DataDisclaimer';
-import { useSurface } from '../../src/surface/useSurface';
+import { render, screen } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as apiClient from '../src/api/client';
+import { DatasetProvider } from '../src/api/DatasetProvider';
+import { DataDisclaimer } from '../src/components/DataDisclaimer';
 
-vi.mock('../../src/api/client', async (importOriginal) => {
+vi.mock('../src/api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof apiClient>();
   return { ...actual, getHealth: vi.fn() };
 });
@@ -14,52 +13,7 @@ function health(dataset: 'sqlite' | 'warehouse'): apiClient.Health {
   return { status: 'ok', dataset, seeded: true, signal_count: 10 };
 }
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  window.location.hash = '';
-});
-afterEach(() => {
-  window.location.hash = '';
-});
-
-describe('useSurface', () => {
-  it('defaults to the Signal Viewer, so the existing entry point is unchanged', () => {
-    const { result } = renderHook(() => useSurface());
-
-    expect(result.current.surface).toBe('signals');
-  });
-
-  it('is deep-linkable: #/lab opens Quant Lab directly', () => {
-    window.location.hash = '#/lab';
-
-    const { result } = renderHook(() => useSurface());
-
-    expect(result.current.surface).toBe('lab');
-  });
-
-  it('follows the hash changing under it, which is what the back button does', async () => {
-    const { result } = renderHook(() => useSurface());
-
-    act(() => {
-      result.current.setSurface('lab');
-    });
-    await waitFor(() => expect(result.current.surface).toBe('lab'));
-
-    act(() => {
-      window.location.hash = '#/';
-      window.dispatchEvent(new HashChangeEvent('hashchange'));
-    });
-    await waitFor(() => expect(result.current.surface).toBe('signals'));
-  });
-
-  it('treats an unrecognised hash as the default surface, not as a blank page', () => {
-    window.location.hash = '#/nonsense';
-
-    const { result } = renderHook(() => useSurface());
-
-    expect(result.current.surface).toBe('signals');
-  });
-});
+beforeEach(() => vi.clearAllMocks());
 
 describe('DataDisclaimer', () => {
   it('calls the demo dataset synthetic', async () => {

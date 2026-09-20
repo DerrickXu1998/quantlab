@@ -1,8 +1,9 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { getPrices, listInstruments, listModels, listSignals } from '../src/api/client';
+import { getPrices, listInstruments, listModels, listRuns, listSignals } from '../src/api/client';
 import { SignalsPage } from '../src/pages/SignalsPage';
+import { RunsProvider } from '../src/runs/RunsContext';
 import { ThemeProvider } from '../src/theme/ThemeProvider';
 import { makeBar, makeInstrument, makeSignal } from './fixtures';
 
@@ -12,19 +13,25 @@ const mockedListSignals = vi.mocked(listSignals);
 const mockedListInstruments = vi.mocked(listInstruments);
 const mockedGetPrices = vi.mocked(getPrices);
 const mockedListModels = vi.mocked(listModels);
+const mockedListRuns = vi.mocked(listRuns);
 
-// Mirrors how the page is composed in main.tsx — theme-aware children need the provider.
+// Mirrors how the page is composed in App — theme-aware children need the
+// provider, and the panels read the app-level runs store.
 function renderPage() {
   return render(
     <ThemeProvider>
-      <SignalsPage />
+      <RunsProvider>
+        <SignalsPage />
+      </RunsProvider>
     </ThemeProvider>,
   );
 }
 
 beforeEach(() => {
   vi.resetAllMocks();
+  window.location.hash = '';
   mockedListModels.mockResolvedValue({ total: 0, items: [] });
+  mockedListRuns.mockResolvedValue({ total: 0, items: [] });
 });
 
 describe('SignalsPage', () => {

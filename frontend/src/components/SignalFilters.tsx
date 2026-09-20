@@ -29,14 +29,14 @@ interface SignalFiltersProps {
 }
 
 const radioClasses =
-  'h-3.5 w-3.5 accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+  'h-3.5 w-3.5 accent-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring';
 
 export function SignalFilters({ instruments, ruleNames, value, onChange }: SignalFiltersProps) {
   const update = (patch: Partial<SignalFilterState>) => onChange({ ...value, ...patch });
 
   return (
     <form
-      className="signal-filters mb-4 flex flex-wrap items-end gap-4 rounded-lg border border-border bg-card p-4"
+      className="signal-filters mb-4 flex flex-wrap items-end gap-4 rounded-sm border border-border bg-card p-4"
       onSubmit={(event) => event.preventDefault()}
     >
       <Label>
@@ -63,8 +63,8 @@ export function SignalFilters({ instruments, ruleNames, value, onChange }: Signa
         </Select>
       </Label>
 
-      <fieldset className="direction-toggle rounded-md border border-border px-3 py-2">
-        <legend className="px-1 text-xs font-semibold text-muted-foreground">Direction</legend>
+      <fieldset className="direction-toggle rounded-sm border border-border px-3 py-2">
+        <legend className="px-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Direction</legend>
         <div className="flex items-center gap-3 text-sm text-foreground">
           <label className="inline-flex items-center gap-1.5">
             <input

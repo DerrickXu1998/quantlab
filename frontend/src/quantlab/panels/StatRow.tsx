@@ -12,7 +12,7 @@ function Stat({
 }) {
   return (
     <div className="flex flex-col gap-1" title={hint}>
-      <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+      <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
         {label}
       </span>
       <span className="text-lg">{children}</span>

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useTheme } from '../theme/ThemeProvider';
+import { token } from '../lib/token';
 import { buildEdges, scatterPoints, seededRandom, selectConnected, type Edge } from './particles';
 
 /**
@@ -33,13 +33,6 @@ const PARTICLE_COUNT = 620;
  *  some are just noise — rather than one uniform web. */
 const CONNECTED_FRACTION = 0.6;
 
-// Canvas needs literal colours, so the palettes are mirrored from the app's
-// tokens — the same approach CandlestickChart uses.
-const PALETTES = {
-  light: { dot: '#6b5210', edge: '#8f7220' },
-  dark: { dot: '#a8842b', edge: '#6b5417' },
-} as const;
-
 interface Particle {
   ox: number; // scattered origin
   oy: number;
@@ -59,7 +52,6 @@ function prefersReducedMotion(): boolean {
 }
 
 export function SplashScreen({ onComplete }: { onComplete: () => void }) {
-  const { theme } = useTheme();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const doneRef = useRef(false);
   const [leaving, setLeaving] = useState(false);
@@ -115,7 +107,13 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
       y: point.y,
     }));
 
-    const palette = PALETTES[theme];
+    // Canvas needs literal colours; read them off the live tokens, so the
+    // field is the accent and the links are the muted ink of whatever theme
+    // is active when the sequence starts.
+    const palette = {
+      dot: token(document.documentElement, '--primary'),
+      edge: token(document.documentElement, '--muted-foreground'),
+    };
     let raf = 0;
     let entering = false;
     const start = performance.now();
@@ -202,7 +200,7 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
     >
       {staticFallback ? (
         <div data-testid="splash-static" className="flex h-full w-full items-center justify-center">
-          <span className="h-2 w-2 animate-pulse rounded-full bg-[#6b5210] dark:bg-[#a8842b]" />
+          <span className="h-2 w-2 border border-primary bg-primary/20" />
         </div>
       ) : (
         <canvas
@@ -217,7 +215,7 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
         type="button"
         onClick={() => finish(260)}
         data-testid="splash-skip"
-        className="absolute bottom-8 left-1/2 -translate-x-1/2 rounded-md px-3 py-1 text-[11px] text-muted-foreground underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="absolute bottom-8 left-1/2 -translate-x-1/2 rounded-sm px-3 py-1 font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
       >
         Skip
       </button>

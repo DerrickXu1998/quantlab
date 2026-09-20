@@ -2,7 +2,10 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as apiClient from '../../src/api/client';
-import { QuantLabPage } from '../../src/quantlab/QuantLabPage';
+import { DatasetProvider } from '../../src/api/DatasetProvider';
+import { AppShell } from '../../src/chrome/AppShell';
+import { RunsProvider } from '../../src/runs/RunsContext';
+import { ThemeProvider } from '../../src/theme/ThemeProvider';
 import { installCanvas2d, recordingFor } from '../mocks/canvas-2d';
 import { installResizeObserver } from '../mocks/resize-observer';
 import { makePerformance, makeRun, model } from './fixtures';
@@ -11,13 +14,17 @@ vi.mock('../../src/api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof apiClient>();
   return {
     ...actual,
+    getHealth: vi.fn(),
     listInstruments: vi.fn(),
     getPrices: vi.fn(),
+    listSignals: vi.fn(),
     listModels: vi.fn(),
     listRuns: vi.fn(),
     getRun: vi.fn(),
     createRun: vi.fn(),
     getRunPerformance: vi.fn(),
+    saveRun: vi.fn(),
+    deleteRun: vi.fn(),
   };
 });
 
@@ -31,6 +38,13 @@ const instruments = [
 
 beforeEach(() => {
   vi.clearAllMocks();
+  window.location.hash = '';
+  vi.mocked(apiClient.getHealth).mockResolvedValue({
+    status: 'ok',
+    dataset: 'sqlite',
+    seeded: true,
+    signal_count: 933,
+  });
   vi.mocked(apiClient.listInstruments).mockResolvedValue({
     total: instruments.length,
     items: instruments,
@@ -41,62 +55,110 @@ beforeEach(() => {
       { date: '2024-12-31', open: 10, high: 11, low: 9, close: 10.5, volume: 100 },
     ] as unknown as apiClient.PriceBar[],
   });
+  vi.mocked(apiClient.listSignals).mockResolvedValue({ total: 0, items: [] });
   vi.mocked(apiClient.listModels).mockResolvedValue({ total: 1, items: [model] });
   vi.mocked(apiClient.listRuns).mockResolvedValue({ total: 1, items: [makeRun()] });
   vi.mocked(apiClient.getRun).mockResolvedValue(makeRun());
   vi.mocked(apiClient.getRunPerformance).mockResolvedValue(makePerformance());
 });
 
-function renderLab() {
-  return render(<QuantLabPage onExit={() => {}} />);
+function renderApp() {
+  return render(
+    <ThemeProvider>
+      <DatasetProvider>
+        <RunsProvider>
+          <AppShell />
+        </RunsProvider>
+      </DatasetProvider>
+    </ThemeProvider>,
+  );
 }
 
-describe('Quant Lab surface', () => {
-  it('scopes its palette to itself so the Signal Viewer theme is untouched', () => {
-    const { container } = renderLab();
+async function openStrategies() {
+  const user = userEvent.setup();
+  renderApp();
+  await user.click(screen.getByRole('button', { name: /strategies/i }));
+  return user;
+}
 
-    expect(container.querySelector('.quantlab')).not.toBeNull();
-    expect(document.documentElement.classList.contains('quantlab')).toBe(false);
+describe('App shell', () => {
+  it('canonicalises the empty hash to #/overview', async () => {
+    renderApp();
+
+    await waitFor(() => expect(window.location.hash).toBe('#/overview'));
+  });
+
+  it('maps the legacy #/lab hash to Overview rather than stranding it', async () => {
+    window.location.hash = '#/lab';
+    renderApp();
+
+    await waitFor(() => expect(window.location.hash).toBe('#/overview'));
+    expect(await screen.findByTestId('portfolio-summary')).toBeInTheDocument();
+  });
+
+  it('navigates between destinations and follows the back button', async () => {
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findByTestId('portfolio-summary');
+
+    await user.click(screen.getByRole('button', { name: /market/i }));
+    expect(await screen.findByRole('region', { name: /intraday/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /execution/i }));
+    expect(await screen.findByTestId('order-ticket')).toBeInTheDocument();
+
+    // The back button is a hashchange to the previous entry.
+    window.location.hash = '#/overview';
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
+    expect(await screen.findByTestId('portfolio-summary')).toBeInTheDocument();
+  });
+
+  it('marks the feed as simulated in the header, and Execution in the nav', async () => {
+    renderApp();
+
+    const status = await screen.findByTestId('feed-status');
+    expect(status).toHaveTextContent(/sim/i);
+    expect(status).toHaveAttribute('title', expect.stringMatching(/no streaming feed/i));
+
+    const execution = screen.getByRole('button', { name: /execution/i });
+    expect(within(execution).getByText('sim')).toBeInTheDocument();
   });
 
   it('keeps the grain overlay out of the way of every control', () => {
-    const { container } = renderLab();
+    const { container } = renderApp();
 
     const grain = container.querySelector('.quantlab-grain');
     expect(grain).not.toBeNull();
     expect(grain).toHaveClass('pointer-events-none');
   });
 
-  it('offers a way back to the Signal Viewer', async () => {
-    const onExit = vi.fn();
+  it('keeps the dataset disclosure in the shell on every destination', async () => {
     const user = userEvent.setup();
-    render(<QuantLabPage onExit={onExit} />);
+    renderApp();
 
-    await user.click(screen.getByRole('button', { name: /signal viewer/i }));
+    expect(await screen.findByTestId('dataset-badge')).toHaveTextContent(/demo data/i);
 
-    expect(onExit).toHaveBeenCalled();
-  });
-
-  it('marks the feed as simulated without being asked', async () => {
-    renderLab();
-
-    const status = await screen.findByTestId('feed-status');
-    expect(status).toHaveTextContent(/sim/i);
-    expect(status).toHaveAttribute('title', expect.stringMatching(/no streaming feed/i));
+    await user.click(screen.getByRole('button', { name: /market/i }));
+    expect(screen.getByTestId('dataset-badge')).toBeInTheDocument();
   });
 });
 
 describe('Overview', () => {
-  it('reports on the most recent completed run, with the backend\'s own numbers', async () => {
-    renderLab();
+  it('falls back to the latest completed run when nothing is saved', async () => {
+    renderApp();
 
+    // The rail's saved view is empty and says how to fix it…
+    expect(await screen.findByTestId('runs-rail-empty')).toHaveTextContent(
+      /run and save an experiment/i,
+    );
+    // …while the main view still reports on the latest completed run.
     const summary = await screen.findByTestId('portfolio-summary');
     expect(within(summary).getByText(/\$112,000/)).toBeInTheDocument();
     expect(within(summary).getByText('+12.00%')).toBeInTheDocument();
   });
 
   it('never computes a metric itself', async () => {
-    renderLab();
+    renderApp();
     await screen.findByTestId('stat-row');
 
     // Every figure on the row came off the wire; the browser reduced nothing.
@@ -114,14 +176,14 @@ describe('Overview', () => {
       }),
     );
 
-    renderLab();
+    renderApp();
 
     const row = await screen.findByTestId('stat-row');
     expect(within(row).getAllByText('—')).toHaveLength(2);
   });
 
   it('draws the equity curve rather than leaving an empty canvas', async () => {
-    const { container } = renderLab();
+    const { container } = renderApp();
     await screen.findByTestId('stat-row');
 
     await waitFor(() => {
@@ -132,7 +194,7 @@ describe('Overview', () => {
   });
 
   it('lists only the positions still open, and tags the live column', async () => {
-    renderLab();
+    renderApp();
 
     const positions = await screen.findByTestId('positions-table');
     expect(within(positions).getByText('ZZMEAN')).toBeInTheDocument();
@@ -142,64 +204,123 @@ describe('Overview', () => {
   });
 
   it('ships the backtest caveats alongside the figures', async () => {
-    renderLab();
+    renderApp();
 
     const caveats = await screen.findByTestId('performance-assumptions');
     expect(caveats).toHaveTextContent(/not a tradeable backtest/i);
     expect(caveats).toHaveTextContent(/no transaction costs/i);
   });
 
-  it('explains an absence of runs instead of showing an empty book', async () => {
+  it('makes saved runs the primary content of the rail', async () => {
+    const saved = makeRun({ id: 'run-saved', name: 'base case', created_at: '2026-09-18T12:00:00Z' });
+    vi.mocked(apiClient.listRuns).mockResolvedValue({
+      total: 2,
+      items: [saved, makeRun()],
+    });
+    vi.mocked(apiClient.getRun).mockImplementation((id: string) =>
+      Promise.resolve(makeRun({ id, name: id === 'run-saved' ? 'base case' : null })),
+    );
+
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findByTestId('portfolio-summary');
+
+    const rail = screen.getByTestId('runs-rail');
+    // Saved is the default filter: the unnamed run stays out of it.
+    expect(within(rail).getByText('base case')).toBeInTheDocument();
+    expect(within(rail).queryByText('sma-crossover')).toBeNull();
+
+    await user.click(within(rail).getByRole('button', { name: 'all' }));
+    expect(within(rail).getByText('sma-crossover')).toBeInTheDocument();
+  });
+
+  it('loads a saved run into the hero when its row is selected', async () => {
+    const saved = makeRun({ id: 'run-saved', name: 'base case', created_at: '2026-09-18T12:00:00Z' });
+    vi.mocked(apiClient.listRuns).mockResolvedValue({ total: 1, items: [saved] });
+    vi.mocked(apiClient.getRun).mockImplementation((id: string) =>
+      Promise.resolve(makeRun({ id, name: 'base case' })),
+    );
+
+    const user = userEvent.setup();
+    renderApp();
+    const rail = await screen.findByTestId('runs-rail');
+
+    await user.click(within(rail).getByText('base case'));
+
+    await waitFor(() => expect(window.location.hash).toBe('#/overview?run=run-saved'));
+    await waitFor(() =>
+      expect(vi.mocked(apiClient.getRunPerformance).mock.calls.at(-1)?.[0]).toBe('run-saved'),
+    );
+    expect(await screen.findByTestId('portfolio-summary')).toBeInTheDocument();
+  });
+
+  it('deletes a run behind a confirm step', async () => {
+    vi.mocked(apiClient.listRuns).mockResolvedValue({
+      total: 1,
+      items: [makeRun({ name: 'base case' })],
+    });
+    vi.mocked(apiClient.deleteRun).mockResolvedValue(undefined);
+
+    const user = userEvent.setup();
+    renderApp();
+    const rail = await screen.findByTestId('runs-rail');
+
+    await user.click(within(rail).getByRole('button', { name: /delete run base case/i }));
+    // Armed, not fired: the first click only reveals the confirm step.
+    expect(apiClient.deleteRun).not.toHaveBeenCalled();
+
+    await user.click(within(rail).getByRole('button', { name: /confirm/i }));
+
+    await waitFor(() => expect(apiClient.deleteRun).toHaveBeenCalledWith('run-1'));
+    await waitFor(() => expect(within(rail).queryByText('base case')).toBeNull());
+  });
+
+  it('guides the first run when no runs exist at all', async () => {
     vi.mocked(apiClient.listRuns).mockResolvedValue({ total: 0, items: [] });
 
-    renderLab();
+    const user = userEvent.setup();
+    renderApp();
 
-    expect(await screen.findByTestId('overview-no-runs')).toHaveTextContent(/no runs yet/i);
+    const guide = await screen.findByTestId('overview-no-runs');
+    expect(guide).toHaveTextContent(/no runs yet/i);
+    // Step 1 names the dataset; step 3 cites the stored signal count.
+    expect(within(guide).getByTestId('dataset-badge')).toHaveTextContent(/demo data/i);
+    expect(guide).toHaveTextContent('933');
     expect(screen.queryByTestId('portfolio-summary')).not.toBeInTheDocument();
+
+    await user.click(within(guide).getByRole('button', { name: /run your first backtest/i }));
+    await waitFor(() => expect(window.location.hash).toBe('#/strategies'));
   });
 
   it('distinguishes an unreachable backend from an empty one', async () => {
     vi.mocked(apiClient.listRuns).mockRejectedValue(new apiClient.ApiError(0, 'down'));
 
-    renderLab();
+    renderApp();
 
     const error = await screen.findByTestId('overview-error');
     expect(error).toHaveAttribute('role', 'alert');
     expect(screen.queryByTestId('overview-no-runs')).not.toBeInTheDocument();
   });
-
-  it('says the feed is disconnected rather than showing a blank rail', async () => {
-    vi.mocked(apiClient.listInstruments).mockRejectedValue(new apiClient.ApiError(0, 'down'));
-
-    renderLab();
-
-    expect(await screen.findByTestId('watchlist-disconnected')).toHaveTextContent(
-      /feed disconnected/i,
-    );
-  });
 });
 
-describe('Strategy Lab', () => {
-  async function openLab() {
-    const user = userEvent.setup();
-    renderLab();
-    await user.click(screen.getByRole('button', { name: /strategy lab/i }));
-    return user;
-  }
-
+describe('Strategies', () => {
   it('lists what the registry reports, with nothing about it hardcoded', async () => {
-    await openLab();
+    await openStrategies();
 
-    const list = await screen.findByTestId('strategy-list');
+    const list = await screen.findByTestId('model-list');
     expect(within(list).getByText('sma-crossover')).toBeInTheDocument();
     expect(within(list).getByText('v1.0.0')).toBeInTheDocument();
-    expect(within(list).getByText(/1 run/)).toBeInTheDocument();
+    // The count renders through the shared Numeric primitive, so the row's
+    // text is split across elements; match on its full text.
+    expect(
+      within(list).getByText((_, element) => element?.textContent === '1 run'),
+    ).toBeInTheDocument();
   });
 
-  it('does not pretend a strategy is live or paper trading', async () => {
-    await openLab();
+  it('does not pretend a model is live or paper trading', async () => {
+    await openStrategies();
 
-    const list = await screen.findByTestId('strategy-list');
+    const list = await screen.findByTestId('model-list');
     // BACKTEST is the only mode the backend has, so it is the only one lit.
     expect(within(list).getByText('Backtest')).toBeInTheDocument();
     for (const label of ['Paper', 'Live']) {
@@ -211,7 +332,7 @@ describe('Strategy Lab', () => {
   });
 
   it('generates the parameter form from declared metadata', async () => {
-    await openLab();
+    await openStrategies();
 
     const field = (await screen.findByLabelText(/fast/i)) as HTMLInputElement;
     expect(field.value).toBe('20');
@@ -220,7 +341,7 @@ describe('Strategy Lab', () => {
   });
 
   it('refuses to run until instruments are chosen', async () => {
-    await openLab();
+    await openStrategies();
     await screen.findByLabelText(/fast/i);
 
     expect(screen.getByRole('button', { name: /run backtest/i })).toBeDisabled();
@@ -229,7 +350,7 @@ describe('Strategy Lab', () => {
 
   it('submits only the parameters that were changed', async () => {
     vi.mocked(apiClient.createRun).mockResolvedValue(makeRun());
-    const user = await openLab();
+    const user = await openStrategies();
 
     await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
     await user.click(screen.getByRole('button', { name: /run backtest/i }));
@@ -241,7 +362,7 @@ describe('Strategy Lab', () => {
   });
 
   it('reports an out-of-range parameter against that field', async () => {
-    const user = await openLab();
+    const user = await openStrategies();
 
     const field = await screen.findByLabelText(/fast/i);
     await user.clear(field);
@@ -251,12 +372,16 @@ describe('Strategy Lab', () => {
     expect(field).toHaveAttribute('aria-invalid', 'true');
   });
 
-  it('shows the trade log for a completed run', async () => {
+  it('shows the full results for a completed run, including the trade log', async () => {
     vi.mocked(apiClient.createRun).mockResolvedValue(makeRun());
-    const user = await openLab();
+    const user = await openStrategies();
 
     await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
     await user.click(screen.getByRole('button', { name: /run backtest/i }));
+
+    const results = await screen.findByTestId('run-results');
+    expect(within(results).getByTestId('run-coverage')).toHaveTextContent('1/1');
+    expect(within(results).getByTestId('run-dataset')).toHaveTextContent(/demo data/i);
 
     const log = await screen.findByTestId('trade-log');
     expect(within(log).getByText('ZZTRND')).toBeInTheDocument();
@@ -268,39 +393,27 @@ describe('Strategy Lab', () => {
     const empty = makeRun({ signal_count: 0, signals: [] });
     vi.mocked(apiClient.createRun).mockResolvedValue(empty);
     vi.mocked(apiClient.getRun).mockResolvedValue(empty);
-    const user = await openLab();
+    const user = await openStrategies();
 
     await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
     await user.click(screen.getByRole('button', { name: /run backtest/i }));
 
-    expect(await screen.findByTestId('lab-run-empty')).toHaveTextContent(/no signals/i);
-    expect(screen.queryByTestId('lab-run-failed')).not.toBeInTheDocument();
+    expect(await screen.findByTestId('run-empty')).toHaveTextContent(/no signals/i);
+    expect(screen.queryByTestId('run-failed')).not.toBeInTheDocument();
   });
 
   it('renders a failed run distinctly from an empty one', async () => {
     const failed = makeRun({ status: 'failed', error: 'boom', signal_count: 0 });
     vi.mocked(apiClient.createRun).mockResolvedValue(failed);
     vi.mocked(apiClient.getRun).mockResolvedValue(failed);
-    const user = await openLab();
+    const user = await openStrategies();
 
     await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
     await user.click(screen.getByRole('button', { name: /run backtest/i }));
 
-    const failure = await screen.findByTestId('lab-run-failed');
+    const failure = await screen.findByTestId('run-failed');
     expect(failure).toHaveAttribute('role', 'alert');
-    expect(screen.queryByTestId('lab-run-empty')).not.toBeInTheDocument();
-  });
-
-  it('always shows coverage beside the signal count', async () => {
-    vi.mocked(apiClient.createRun).mockResolvedValue(makeRun());
-    const user = await openLab();
-
-    await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(screen.getByRole('button', { name: /run backtest/i }));
-
-    const coverage = await screen.findByTestId('lab-run-coverage');
-    expect(coverage).toHaveTextContent('1/1');
-    expect(coverage).toHaveTextContent(/demo data/i);
+    expect(screen.queryByTestId('run-empty')).not.toBeInTheDocument();
   });
 
   it('warns about unadjusted corporate actions in the window', async () => {
@@ -318,24 +431,86 @@ describe('Strategy Lab', () => {
     });
     vi.mocked(apiClient.createRun).mockResolvedValue(withSplit);
     vi.mocked(apiClient.getRun).mockResolvedValue(withSplit);
-    const user = await openLab();
+    const user = await openStrategies();
 
     await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
     await user.click(screen.getByRole('button', { name: /run backtest/i }));
 
-    const warning = await screen.findByTestId('lab-corporate-actions');
+    const warning = await screen.findByTestId('run-corporate-actions');
     expect(warning).toHaveAttribute('role', 'alert');
     expect(warning).toHaveTextContent('2024-08-31');
+  });
+
+  it('saves an experiment under a name, which the run then wears', async () => {
+    vi.mocked(apiClient.createRun).mockResolvedValue(makeRun());
+    vi.mocked(apiClient.saveRun).mockResolvedValue(makeRun({ name: 'base case' }));
+    const user = await openStrategies();
+
+    await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
+    await user.click(screen.getByRole('button', { name: /run backtest/i }));
+    await screen.findByTestId('run-results');
+
+    await user.type(screen.getByLabelText(/experiment name/i), 'base case');
+    await user.click(screen.getByRole('button', { name: /save experiment/i }));
+
+    await waitFor(() => expect(apiClient.saveRun).toHaveBeenCalledWith('run-1', 'base case'));
+    expect(await screen.findByTestId('run-saved-name')).toHaveTextContent('base case');
+  });
+
+  it('prefills the form from a signal-row handoff', async () => {
+    window.location.hash = '#/strategies?model=sma-crossover&p_fast=50';
+    renderApp();
+
+    const field = (await screen.findByLabelText(/fast/i)) as HTMLInputElement;
+    expect(field.value).toBe('50');
+    // The named model is the one being configured.
+    expect(await screen.findByRole('region', { name: /sma-crossover — backtest/i }))
+      .toBeInTheDocument();
   });
 
   it('explains an empty registry instead of showing a blank list', async () => {
     vi.mocked(apiClient.listModels).mockResolvedValue({ total: 0, items: [] });
 
-    await openLab();
+    await openStrategies();
 
-    expect(await screen.findByTestId('strategies-empty')).toHaveTextContent(
-      /no strategies registered/i,
+    expect(await screen.findByTestId('model-list-empty')).toHaveTextContent(
+      /no models registered/i,
     );
+  });
+});
+
+describe('cross-destination run state', () => {
+  it('a run created in Research is already selected in Strategies', async () => {
+    vi.mocked(apiClient.createRun).mockResolvedValue(makeRun());
+    const user = userEvent.setup();
+    window.location.hash = '#/research';
+    renderApp();
+
+    // The Research dock renders every panel (the dockview mock), so the run
+    // form is right there.
+    await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
+    await user.click(await screen.findByRole('button', { name: /run backtest/i }));
+    expect(await screen.findByTestId('run-results')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /strategies/i }));
+
+    // No re-finding, no re-running: the same run is on screen.
+    expect(await screen.findByTestId('run-results')).toBeInTheDocument();
+    expect(apiClient.createRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('"Watch in Overview" pins the run in the Overview rail', async () => {
+    vi.mocked(apiClient.createRun).mockResolvedValue(makeRun());
+    const user = await openStrategies();
+
+    await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
+    await user.click(screen.getByRole('button', { name: /run backtest/i }));
+    await screen.findByTestId('run-results');
+
+    await user.click(screen.getByRole('button', { name: /watch in overview/i }));
+
+    await waitFor(() => expect(window.location.hash).toBe('#/overview?run=run-1'));
+    expect(await screen.findByTestId('portfolio-summary')).toBeInTheDocument();
   });
 });
 
@@ -344,7 +519,7 @@ describe('Composition', () => {
     // The brief asks for a deliberate overlap rather than a column of cards.
     // Pinned by a test because it is the kind of detail a later refactor
     // flattens without noticing.
-    const { container } = renderLab();
+    const { container } = renderApp();
     await screen.findByTestId('stat-row');
 
     const chips = container.querySelector('.-top-3');

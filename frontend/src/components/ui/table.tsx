@@ -6,6 +6,10 @@ import {
 } from 'react';
 import { cn } from '../../lib/utils';
 
+/**
+ * Terminal table density: mono 10px uppercase headers, `py-1.5` rows, and 1px
+ * dividers — the same spec the Quant Lab tables are written to by hand.
+ */
 export const Table = forwardRef<HTMLTableElement, HTMLAttributes<HTMLTableElement>>(
   ({ className, ...props }, ref) => (
     <div className="w-full overflow-x-auto">
@@ -18,9 +22,7 @@ Table.displayName = 'Table';
 export const TableHeader = forwardRef<
   HTMLTableSectionElement,
   HTMLAttributes<HTMLTableSectionElement>
->(({ className, ...props }, ref) => (
-  <thead ref={ref} className={cn('bg-muted/60', className)} {...props} />
-));
+>(({ className, ...props }, ref) => <thead ref={ref} className={cn(className)} {...props} />);
 TableHeader.displayName = 'TableHeader';
 
 export const TableBody = forwardRef<
@@ -45,7 +47,7 @@ export const TableHead = forwardRef<HTMLTableCellElement, ThHTMLAttributes<HTMLT
     <th
       ref={ref}
       className={cn(
-        'px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground',
+        'px-3 py-1.5 text-left font-mono text-[10px] font-normal uppercase tracking-[0.12em] text-muted-foreground',
         className,
       )}
       {...props}
@@ -56,7 +58,7 @@ TableHead.displayName = 'TableHead';
 
 export const TableCell = forwardRef<HTMLTableCellElement, TdHTMLAttributes<HTMLTableCellElement>>(
   ({ className, ...props }, ref) => (
-    <td ref={ref} className={cn('px-3 py-2 align-middle', className)} {...props} />
+    <td ref={ref} className={cn('px-3 py-1.5 align-middle', className)} {...props} />
   ),
 );
 TableCell.displayName = 'TableCell';

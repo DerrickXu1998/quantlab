@@ -1,87 +1,159 @@
-import { FlaskConical, ServerCrash } from 'lucide-react';
-import type { Instrument } from '../../api/client';
+import { FlaskConical, Hourglass, ServerCrash } from 'lucide-react';
+import { useEffect } from 'react';
+import { useDataset } from '../../api/DatasetProvider';
+import { navigate, useRoute } from '../../chrome/router';
+import { Button } from '../../components/ui/button';
+import { EmptyState } from '../../components/ui/empty-state';
+import { Numeric } from '../../components/ui/numeric';
+import { RunsRail } from '../../components/RunsRail';
+import { DatasetBadge } from '../../workbench/DatasetBadge';
+import { useRuns } from '../../runs/RunsContext';
 import { EquityCurve } from '../charts/EquityCurve';
 import { CascadeItem } from '../chrome/Cascade';
-import { EmptyState } from '../chrome/EmptyState';
 import { Chip, FloatingChips } from '../chrome/FloatingChips';
-import { Numeric } from '../chrome/Numeric';
 import { Panel } from '../chrome/Panel';
-import { useLatestRun } from '../data/useLatestRun';
 import { useRunPerformance } from '../data/useRunPerformance';
 import { Assumptions } from '../panels/Assumptions';
 import { PortfolioSummary } from '../panels/PortfolioSummary';
 import { PositionsTable } from '../panels/PositionsTable';
 import { StatRow } from '../panels/StatRow';
-import { WatchlistRail } from '../panels/WatchlistRail';
 
-const SIM_FEED = 'QuantLab serves end-of-day bars and has no streaming feed; the movement is simulated.';
+/**
+ * The first-run experience, when no run exists at all: three steps, each one
+ * click from a result.
+ */
+function FirstRun() {
+  const dataset = useDataset();
+  const signalCount = dataset.status === 'ready' ? dataset.health.signal_count : null;
 
-export function OverviewView({
-  instruments,
-  feedError,
-  selected,
-  onSelect,
-  onOpenStrategyLab,
-}: {
-  instruments: Instrument[];
-  feedError: string | null;
-  selected: string | null;
-  onSelect: (symbol: string) => void;
-  onOpenStrategyLab: () => void;
-}) {
-  const latest = useLatestRun();
-  const runId = latest.status === 'ready' ? latest.run.id : null;
-  const performance = useRunPerformance(runId);
+  return (
+    <div data-testid="overview-no-runs" className="p-4">
+      <Panel title="No runs yet" className="border-0">
+        <ol className="space-y-4">
+          <li className="flex items-start gap-3">
+            <span className="font-mono text-[11px] text-muted-foreground">01</span>
+            <div>
+              <p className="flex items-center gap-2 text-xs">
+                Know your data <DatasetBadge />
+              </p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Everything the app shows traces back to this source.
+              </p>
+            </div>
+          </li>
+          <li className="flex items-start gap-3">
+            <span className="font-mono text-[11px] text-muted-foreground">02</span>
+            <div>
+              <Button type="button" size="sm" onClick={() => navigate('strategies')}>
+                Run your first backtest
+              </Button>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Strategies opens with the first registered model preselected.
+              </p>
+            </div>
+          </li>
+          <li className="flex items-start gap-3">
+            <span className="font-mono text-[11px] text-muted-foreground">03</span>
+            <div>
+              <Button type="button" size="sm" variant="outline" onClick={() => navigate('research')}>
+                Explore stored signals
+              </Button>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {signalCount !== null ? (
+                  <>
+                    <Numeric value={signalCount} format="integer" /> stored signals from the seeded
+                    dataset.
+                  </>
+                ) : (
+                  'Signals stored in the dataset, before you run anything yourself.'
+                )}
+              </p>
+            </div>
+          </li>
+        </ol>
+      </Panel>
+    </div>
+  );
+}
 
-  if (latest.status === 'error') {
+/**
+ * Overview is run-centric: the saved-runs rail is the primary content, and
+ * selecting a run loads its detail and performance into the hero, the equity
+ * curve and the open positions. With nothing saved it degrades to the latest
+ * completed run; with no runs at all it is the first-run guide.
+ */
+export function OverviewView() {
+  const { allRuns, runsStatus, latestCompleted, activeRun, select } = useRuns();
+  const route = useRoute();
+  const paramId = route.params.get('run');
+  const targetId = paramId ?? latestCompleted?.id ?? null;
+
+  useEffect(() => {
+    if (targetId && activeRun?.id !== targetId) void select(targetId);
+  }, [targetId, activeRun?.id, select]);
+
+  const run = activeRun && activeRun.id === targetId ? activeRun : null;
+  const performance = useRunPerformance(run && run.status === 'completed' ? run.id : null);
+
+  if (runsStatus === 'error') {
     return (
       <EmptyState
         testId="overview-error"
         icon={ServerCrash}
         tone="error"
         title="Backend unreachable"
-        detail={latest.message}
+        detail="The run history could not be loaded."
       />
     );
   }
 
   return (
-    // Asymmetric on purpose: a fixed 240px rail against a fluid workspace,
-    // rather than an even split that would read as a dashboard.
-    <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)]">
+    // Asymmetric on purpose: a fixed rail against a fluid workspace, rather
+    // than an even split that would read as a dashboard.
+    <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)]">
       <CascadeItem index={0} className="hidden border-r border-border lg:block">
-        <p className="border-b border-border px-3 py-2 font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
-          Watchlist
-        </p>
-        <WatchlistRail
-          instruments={instruments}
-          selected={selected}
-          onSelect={onSelect}
-          error={feedError}
-        />
+        <Panel title="Runs" className="border-0" bodyClassName="p-0">
+          <RunsRail
+            runs={allRuns}
+            selectedId={targetId}
+            onSelect={(runId) => navigate('overview', { run: runId })}
+          />
+        </Panel>
       </CascadeItem>
 
       <div className="min-w-0 overflow-y-auto">
-        {latest.status === 'empty' ? (
+        {runsStatus === 'loading' ? (
+          <EmptyState icon={Hourglass} title="Loading…" role="status" />
+        ) : allRuns.length === 0 ? (
+          <FirstRun />
+        ) : !targetId ? (
           <EmptyState
-            testId="overview-no-runs"
             icon={FlaskConical}
-            title="No runs yet"
-            detail="Overview reports on the most recent completed experiment. Run a strategy to populate it."
-            action={
-              <button
-                type="button"
-                onClick={onOpenStrategyLab}
-                className="mt-2 rounded-sm border border-primary/50 px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider text-primary hover:bg-primary/10"
-              >
-                Open Strategy Lab
-              </button>
-            }
+            title="No completed runs"
+            detail="Every recorded run failed. Run a backtest in Strategies to produce a result."
           />
-        ) : latest.status === 'ready' && performance.status === 'ready' ? (
+        ) : !run ? (
+          <EmptyState icon={Hourglass} title="Loading…" role="status" />
+        ) : run.status === 'failed' ? (
+          <EmptyState
+            testId="overview-run-failed"
+            icon={FlaskConical}
+            tone="error"
+            title="This run failed"
+            detail={run.error ?? 'The run did not complete.'}
+          />
+        ) : performance.status === 'error' ? (
+          <EmptyState
+            testId="overview-performance-error"
+            icon={ServerCrash}
+            tone="error"
+            title="Could not load performance"
+            detail={performance.message}
+          />
+        ) : performance.status === 'ready' ? (
           <>
             <CascadeItem index={1}>
-              <PortfolioSummary run={latest.run} performance={performance.performance} />
+              <PortfolioSummary run={run} performance={performance.performance} />
             </CascadeItem>
 
             <div className="grid grid-cols-1 gap-px bg-border xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
@@ -136,22 +208,10 @@ export function OverviewView({
               </CascadeItem>
             </div>
           </>
-        ) : performance.status === 'error' ? (
-          <EmptyState
-            testId="overview-performance-error"
-            icon={ServerCrash}
-            tone="error"
-            title="Could not load performance"
-            detail={performance.message}
-          />
         ) : (
-          <p className="px-8 py-10 font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
-            Loading…
-          </p>
+          <EmptyState icon={Hourglass} title="Loading…" role="status" />
         )}
       </div>
     </div>
   );
 }
-
-export { SIM_FEED };

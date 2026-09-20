@@ -160,6 +160,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/runs/{run_id}/replay/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Replay a run's window as a server-sent event stream
+         * @description Streams the run's window chronologically, as if history were arriving live: each trading date's bars, the stored signals firing that date, the fills the simulator executes at that date's close, and one end-of-date equity mark, ending with a summary event. The body is a sequence of `data: {json}\n\n` frames; every frame's JSON object carries an `event` field, one of:
+         *
+         *       * `bar` -- `{date, closes}`: the date's close per run symbol. Thinned
+         *         to every `step`-th date; a date carrying a signal always gets one.
+         *       * `signal` -- `{date, symbol, direction, trigger_values,
+         *         data_window_end}`: a stored signal as it fires.
+         *       * `fill` -- `{date, symbol, side, qty, price, value,
+         *         realized_pnl}`: an executed trade at the close of the signal date.
+         *       * `equity` -- `{date, equity, cash, positions, realized_pnl}`: the
+         *         book marked once per replayed date, after that date's fills.
+         *       * `summary` -- terminal; the ReplaySummary object.
+         *       * `truncated` -- terminal in place of `summary` when `max_events`
+         *         cut the stream short: `{event, detail}`.
+         *
+         *     Events on one date arrive in bar, signal, fill, equity order, so a signal never precedes the bar event of its own date. Sizing and filling mirror the run's performance report exactly (equal-weight per-symbol sleeves, close-of-signal-date fills, no costs): the terminal `summary` reconciles with GET /runs/{run_id}/performance.
+         */
+        get: operations["streamRunReplay"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/runs/{run_id}/replay/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * The replay engine run to completion, as one object
+         * @description Drives the same engine as the stream endpoint to completion and returns only its terminal summary event. Useful for clients that do not want SSE, and the cheapest way to check a replay reconciles with GET /runs/{run_id}/performance.
+         */
+        get: operations["getRunReplaySummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/replay/live/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Replay a Kafka bar stream live, as a server-sent event stream
+         * @description The streaming counterpart of GET /runs/{run_id}/replay/stream. A publisher (`quantlab replay-publish`) has turned a warehouse window into a chronological bar stream on the Kafka replay topic; this endpoint consumes the topic from the beginning, re-runs the model's compute on each symbol's growing window as bars arrive (identical to batch by the point-in-time truncation guarantee), and trades the new signals through the same portfolio simulator.
+         *     The frame format is exactly the batch replay's: `bar`, `signal`, `fill`, `equity` and a terminal `summary` (whose `run_id` is `live:<model>`), plus `truncated` if `max_events` cuts the stream short. Bars dated before `start` act as warm-up: they feed the model's lookback but emit no events and no trades, mirroring how a batch run loads history before its window. Because of that warm-up, the terminal summary reconciles with a batch replay of a run over the same model, symbols and window when the publisher's range covers the model's lookback before `start`.
+         *     Requires the streaming stack (`docker compose --profile streaming up`). A 503 means the bus is unconfigured (QUANTLAB_KAFKA_BROKERS unset) or the broker is unreachable -- never a startup failure.
+         */
+        get: operations["streamLiveReplay"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -418,6 +498,29 @@ export interface components {
             metrics: components["schemas"]["PerformanceMetrics"];
             trades: components["schemas"]["Trade"][];
             /** @description Every simplification applied. These figures are not tradeable and must never be presented as if they were. */
+            assumptions: string[];
+        };
+        /** @description The terminal event of a run's replay. Metrics are computed by the same helpers behind GET /runs/{run_id}/performance, over the replayed equity curve and trade list, so the two reconcile on the same run. */
+        ReplaySummary: {
+            run_id: string;
+            /** @description Trading dates replayed (dates with at least one bar). */
+            days: number;
+            initial_cash: number;
+            /** @description Book value on the last replayed date. */
+            final_equity: number;
+            /** @description Fraction, e.g. 0.12 for +12%. */
+            total_return: number;
+            /** @description Null when undefined -- fewer than two points, or zero variance. */
+            sharpe_ratio: number | null;
+            /** @description Negative fraction, peak to trough. */
+            max_drawdown: number;
+            /** @description Share of closed trades that gained. Null when nothing closed. */
+            win_rate: number | null;
+            /** @description All positions, including any still open. */
+            trade_count: number;
+            winning_trades: number;
+            losing_trades: number;
+            /** @description Every simplification applied, shared with the performance report. These figures are not tradeable and must never be presented as if they were. */
             assumptions: string[];
         };
     };
@@ -755,6 +858,164 @@ export interface operations {
             };
             /** @description The run failed, so it has no performance. Zeroed figures would read as a flat book rather than as an absent result. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    streamRunReplay: {
+        parameters: {
+            query?: {
+                /** @description Optional server-side pacing: milliseconds to wait between dates (after each equity event). 0 streams as fast as possible; the data is historical, so clients may pace themselves instead. */
+                interval_ms?: number;
+                /** @description Safety cap on frames emitted. On reaching it the stream ends with a `truncated` frame instead of `summary`. */
+                max_events?: number;
+                /** @description Emit bar events only every Nth date; 1 is every date. */
+                step?: number;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Server-sent event stream of replay events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            /** @description Unknown run */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The run failed, so there is nothing to replay */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getRunReplaySummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Replay summary for the run */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReplaySummary"];
+                };
+            };
+            /** @description Unknown run */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The run failed, so there is nothing to replay */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    streamLiveReplay: {
+        parameters: {
+            query: {
+                /** @description Signal rule name; the latest registered version is used. */
+                model?: string;
+                /** @description Comma-separated canonical symbols, e.g. `ZX1.US,ZX2.US`. */
+                symbols: string;
+                /** @description First session date of the replayed window. */
+                start: string;
+                /** @description Last session date of the replayed window. */
+                end: string;
+                /** @description Model parameter overrides as a JSON object, e.g. `{"fast": 10, "slow": 30}`. */
+                params?: string;
+                /** @description Starting book value, split into equal per-symbol sleeves. */
+                initial_cash?: number;
+                /** @description Safety cap on frames emitted. On reaching it the stream ends with a `truncated` frame instead of `summary`. */
+                max_events?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Server-sent event stream of replay events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            /** @description Missing or malformed symbols, start, end or params */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unknown model */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description A parameter override failed the model's declared spec */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The event bus is unconfigured or unreachable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

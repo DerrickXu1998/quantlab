@@ -3,19 +3,25 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { forwardRef, type ButtonHTMLAttributes } from 'react';
 import { cn } from '../../lib/utils';
 
+/**
+ * The one button. Terminal grammar: square corners, a 1px border, a mono
+ * uppercase label, and the accent reserved for the primary action.
+ */
 const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50',
+  'inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-sm border font-mono text-[11px] uppercase tracking-[0.12em] transition-colors focus-visible:outline-none focus-visible:border-primary disabled:cursor-not-allowed',
   {
     variants: {
       variant: {
-        default: 'bg-primary text-primary-foreground hover:bg-primary/90',
-        outline: 'border border-border bg-card text-foreground hover:bg-accent',
-        ghost: 'text-foreground hover:bg-accent',
+        default:
+          'border-primary bg-primary text-primary-foreground hover:bg-primary/90 disabled:border-border disabled:bg-transparent disabled:text-muted-foreground',
+        outline:
+          'border-border bg-card text-foreground hover:border-primary/50 hover:text-primary disabled:opacity-40',
+        ghost: 'border-transparent text-muted-foreground hover:text-foreground disabled:opacity-40',
       },
       size: {
-        default: 'h-9 px-4 py-2',
-        sm: 'h-8 px-3 text-xs',
-        icon: 'h-9 w-9',
+        default: 'h-8 px-3',
+        sm: 'h-7 px-2.5',
+        icon: 'h-8 w-8',
       },
     },
     defaultVariants: {

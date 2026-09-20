@@ -2,11 +2,11 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as apiClient from '../src/api/client';
-import { ModelCatalog } from '../src/workbench/ModelCatalog';
-import { RunConfig } from '../src/workbench/RunConfig';
-import { RunResults } from '../src/workbench/RunResults';
-import { WorkbenchProvider } from '../src/workbench/WorkbenchContext';
-import { WorkspaceProvider } from '../src/workspace/WorkspaceContext';
+import { ModelList } from '../src/components/ModelList';
+import { RunConfigForm } from '../src/components/RunConfigForm';
+import { RunResultsView } from '../src/components/RunResultsView';
+import { RunsProvider, useRuns } from '../src/runs/RunsContext';
+import { WorkspaceProvider, useWorkspace } from '../src/workspace/WorkspaceContext';
 import { makeInstrument } from './fixtures';
 
 vi.mock('../src/api/client', async (importOriginal) => {
@@ -16,9 +16,13 @@ vi.mock('../src/api/client', async (importOriginal) => {
     listModels: vi.fn(),
     listInstruments: vi.fn(),
     listSignals: vi.fn(),
+    listRuns: vi.fn(),
     getPrices: vi.fn(),
     createRun: vi.fn(),
     getRun: vi.fn(),
+    getRunPerformance: vi.fn(),
+    saveRun: vi.fn(),
+    deleteRun: vi.fn(),
   };
 });
 
@@ -84,37 +88,71 @@ function makeRun(overrides: Partial<apiClient.RunDetail> = {}): apiClient.RunDet
   };
 }
 
+/** The merged pieces, wired the way the destinations wire them. */
+function Harness({ results = false }: { results?: boolean }) {
+  const { modelEntries, modelsStatus, selectedModel, selectModel, activeRun, inFlight, start, cancel } =
+    useRuns();
+  const { instruments } = useWorkspace();
+
+  if (modelsStatus !== 'ready') return null;
+  return (
+    <>
+      <ModelList
+        entries={modelEntries}
+        selected={selectedModel?.name ?? null}
+        onSelect={(name) =>
+          selectModel(modelEntries.find((entry) => entry.model.name === name)?.model ?? null)
+        }
+      />
+      {selectedModel ? (
+        <RunConfigForm
+          model={selectedModel}
+          instruments={instruments}
+          running={inFlight}
+          onRun={(body) => void start(body)}
+          onCancel={cancel}
+        />
+      ) : null}
+      {results && activeRun ? <RunResultsView run={activeRun} /> : null}
+    </>
+  );
+}
+
 function renderWorkbench(ui: React.ReactNode) {
   return render(
     <WorkspaceProvider>
-      <WorkbenchProvider>{ui}</WorkbenchProvider>
+      <RunsProvider>{ui}</RunsProvider>
     </WorkspaceProvider>,
   );
 }
 
 beforeEach(() => {
+  vi.clearAllMocks();
+  window.location.hash = '';
   vi.mocked(apiClient.listModels).mockResolvedValue({ total: 1, items: [inventedModel] });
   vi.mocked(apiClient.listInstruments).mockResolvedValue({
     total: 1,
     items: [makeInstrument()],
   });
   vi.mocked(apiClient.listSignals).mockResolvedValue({ total: 0, items: [] });
+  vi.mocked(apiClient.listRuns).mockResolvedValue({ total: 0, items: [] });
   vi.mocked(apiClient.getPrices).mockResolvedValue({ total: 0, items: [] });
 });
 
-describe('ModelCatalog', () => {
+describe('ModelList', () => {
   it('lists whatever the backend registry reports, including unknown models', async () => {
-    renderWorkbench(<ModelCatalog />);
+    renderWorkbench(<Harness />);
 
     expect(await screen.findByText('zeta-reversion')).toBeInTheDocument();
     expect(screen.getByText('v2.1.0')).toBeInTheDocument();
-    expect(screen.getByText(/1 parameter/)).toBeInTheDocument();
+    // The list is honest about what a model is: no live or paper pretence.
+    expect(screen.getByText('Backtest')).toBeInTheDocument();
   });
 });
 
-describe('RunConfig', () => {
+describe('RunConfigForm', () => {
   it('generates the parameter form from declared metadata', async () => {
-    renderWorkbench(<RunConfig />);
+    renderWorkbench(<Harness />);
 
     const field = (await screen.findByLabelText(/zeta_threshold/i)) as HTMLInputElement;
     expect(field.value).toBe('12'); // seeded from the declared default
@@ -124,7 +162,7 @@ describe('RunConfig', () => {
 
   it('reports an out-of-range value against that specific parameter', async () => {
     const user = userEvent.setup();
-    renderWorkbench(<RunConfig />);
+    renderWorkbench(<Harness />);
 
     const field = await screen.findByLabelText(/zeta_threshold/i);
     await user.clear(field);
@@ -143,10 +181,10 @@ describe('RunConfig', () => {
     vi.mocked(apiClient.createRun).mockResolvedValue(makeRun());
     vi.mocked(apiClient.getRun).mockResolvedValue(makeRun());
 
-    renderWorkbench(<RunConfig />);
+    renderWorkbench(<Harness />);
 
     await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(screen.getByRole('button', { name: /^run$/i }));
+    await user.click(await screen.findByRole('button', { name: /run backtest/i }));
 
     await waitFor(() => expect(apiClient.createRun).toHaveBeenCalled());
     const [body] = vi.mocked(apiClient.createRun).mock.calls[0];
@@ -157,46 +195,62 @@ describe('RunConfig', () => {
   });
 });
 
-describe('RunResults', () => {
-  it('always shows coverage alongside the signal count', async () => {
-    vi.mocked(apiClient.createRun).mockResolvedValue(makeRun());
-    vi.mocked(apiClient.getRun).mockResolvedValue(makeRun());
-    const user = userEvent.setup();
+describe('RunResultsView', () => {
+  beforeEach(() => {
+    vi.mocked(apiClient.getRunPerformance).mockResolvedValue({
+      run_id: 'run-1',
+      initial_capital: 100_000,
+      equity: [
+        { date: '2024-01-01', value: 100_000 },
+        { date: '2024-01-02', value: 112_000 },
+      ],
+      benchmark: [
+        { date: '2024-01-01', value: 100_000 },
+        { date: '2024-01-02', value: 103_000 },
+      ],
+      metrics: {
+        total_return: 0.12,
+        sharpe_ratio: 1.84,
+        max_drawdown: -0.07,
+        win_rate: 0.6,
+        trade_count: 5,
+        winning_trades: 3,
+        losing_trades: 2,
+      },
+      trades: [],
+      assumptions: [],
+    });
+  });
 
-    renderWorkbench(
-      <>
-        <RunConfig />
-        <RunResults />
-      </>,
+  function renderResults(run: apiClient.RunDetail) {
+    return render(
+      <RunsProvider>
+        <RunResultsView run={run} />
+      </RunsProvider>,
     );
+  }
 
-    await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(screen.getByRole('button', { name: /^run$/i }));
+  it('always shows coverage alongside the signal count', () => {
+    renderResults(makeRun());
 
-    const coverage = await screen.findByTestId('run-coverage');
+    const coverage = screen.getByTestId('run-coverage');
     expect(within(coverage).getByTestId('signal-count')).toHaveTextContent('1');
     // The denominator is never omitted: 2 of 3 had data, 1 of 3 had warm-up.
     expect(coverage).toHaveTextContent('2/3');
     expect(coverage).toHaveTextContent('1/3');
   });
 
-  it('renders a zero-signal run as a result, not a failure', async () => {
-    const empty = makeRun({ signal_count: 0, signals: [] });
-    vi.mocked(apiClient.createRun).mockResolvedValue(empty);
-    vi.mocked(apiClient.getRun).mockResolvedValue(empty);
-    const user = userEvent.setup();
+  it('fetches the backend performance for a populated run', async () => {
+    renderResults(makeRun());
 
-    renderWorkbench(
-      <>
-        <RunConfig />
-        <RunResults />
-      </>,
-    );
+    await waitFor(() => expect(apiClient.getRunPerformance).toHaveBeenCalledWith('run-1'));
+    expect(await screen.findByTestId('stat-row')).toHaveTextContent('1.84');
+  });
 
-    await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(screen.getByRole('button', { name: /^run$/i }));
+  it('renders a zero-signal run as a result, not a failure', () => {
+    renderResults(makeRun({ signal_count: 0, signals: [] }));
 
-    const empties = await screen.findByTestId('run-empty');
+    const empties = screen.getByTestId('run-empty');
     expect(empties).toHaveTextContent(/no signals/i);
     // Decisively: not an error treatment, and no failure state.
     expect(screen.queryByTestId('run-failed')).not.toBeInTheDocument();
@@ -205,62 +259,27 @@ describe('RunResults', () => {
     expect(screen.getByTestId('run-coverage')).toBeInTheDocument();
   });
 
-  it('renders a failed run distinctly from an empty one', async () => {
-    const failed = makeRun({
-      status: 'failed',
-      error: 'something broke',
-      signal_count: 0,
-      signals: [],
-    });
-    vi.mocked(apiClient.createRun).mockResolvedValue(failed);
-    vi.mocked(apiClient.getRun).mockResolvedValue(failed);
-    const user = userEvent.setup();
+  it('renders a failed run distinctly from an empty one', () => {
+    renderResults(makeRun({ status: 'failed', error: 'something broke', signal_count: 0, signals: [] }));
 
-    renderWorkbench(
-      <>
-        <RunConfig />
-        <RunResults />
-      </>,
-    );
-
-    await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(screen.getByRole('button', { name: /^run$/i }));
-
-    expect(await screen.findByTestId('run-failed')).toBeInTheDocument();
+    expect(screen.getByTestId('run-failed')).toHaveAttribute('role', 'alert');
     expect(screen.queryByTestId('run-empty')).not.toBeInTheDocument();
   });
-});
 
-describe('RunResults provenance (feature 006)', () => {
-  async function runAndRender(run: apiClient.RunDetail) {
-    vi.mocked(apiClient.createRun).mockResolvedValue(run);
-    vi.mocked(apiClient.getRun).mockResolvedValue(run);
-    const user = userEvent.setup();
+  it('shows which dataset produced the result', () => {
+    renderResults(makeRun({ dataset: 'warehouse' }));
 
-    renderWorkbench(
-      <>
-        <RunConfig />
-        <RunResults />
-      </>,
-    );
-    await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(screen.getByRole('button', { name: /^run$/i }));
-  }
-
-  it('shows which dataset produced the result', async () => {
-    await runAndRender(makeRun({ dataset: 'warehouse' }));
-
-    expect(await screen.findByTestId('run-dataset')).toHaveTextContent(/live history/i);
+    expect(screen.getByTestId('run-dataset')).toHaveTextContent(/live history/i);
   });
 
-  it('marks demo results plainly, so they cannot pass for real ones', async () => {
-    await runAndRender(makeRun({ dataset: 'sqlite' }));
+  it('marks demo results plainly, so they cannot pass for real ones', () => {
+    renderResults(makeRun({ dataset: 'sqlite' }));
 
-    expect(await screen.findByTestId('run-dataset')).toHaveTextContent(/demo data/i);
+    expect(screen.getByTestId('run-dataset')).toHaveTextContent(/demo data/i);
   });
 
-  it('warns about unadjusted corporate actions in the window', async () => {
-    await runAndRender(
+  it('warns about unadjusted corporate actions in the window', () => {
+    renderResults(
       makeRun({
         corporate_actions: [
           {
@@ -275,7 +294,7 @@ describe('RunResults provenance (feature 006)', () => {
       }),
     );
 
-    const warning = await screen.findByTestId('run-corporate-actions');
+    const warning = screen.getByTestId('run-corporate-actions');
     // A correctness warning, not a footnote: signals near an ex-date may be
     // artefacts of the unadjusted split rather than market moves.
     expect(warning).toHaveAttribute('role', 'alert');
@@ -283,18 +302,57 @@ describe('RunResults provenance (feature 006)', () => {
     expect(warning).toHaveTextContent(/2020-08-31/);
   });
 
-  it('says nothing about corporate actions when there are none', async () => {
-    await runAndRender(makeRun());
+  it('says nothing about corporate actions when there are none', () => {
+    renderResults(makeRun());
 
-    await screen.findByTestId('run-coverage');
+    expect(screen.getByTestId('run-coverage')).toBeInTheDocument();
     expect(screen.queryByTestId('run-corporate-actions')).not.toBeInTheDocument();
   });
 
-  it('marks a run recorded against another dataset as not reproducible', async () => {
-    await runAndRender(makeRun({ re_runnable: false }));
+  it('marks a run recorded against another dataset as not reproducible', () => {
+    renderResults(makeRun({ re_runnable: false }));
 
-    expect(await screen.findByTestId('run-not-rerunnable')).toHaveTextContent(
-      /not reproducible as recorded/i,
-    );
+    expect(screen.getByTestId('run-not-rerunnable')).toHaveTextContent(/not reproducible/i);
+  });
+
+  it('marks a run whose model left the registry as unavailable', () => {
+    renderResults(makeRun({ model_available: false }));
+
+    expect(screen.getByTestId('run-model-unavailable')).toHaveTextContent(/model unavailable/i);
+  });
+});
+
+describe('run store', () => {
+  it('a run started from the form becomes the shared selected run', async () => {
+    // The store is the handoff between destinations: what Research creates,
+    // Strategies already has.
+    vi.mocked(apiClient.createRun).mockResolvedValue(makeRun());
+    vi.mocked(apiClient.getRun).mockResolvedValue(makeRun());
+    vi.mocked(apiClient.getRunPerformance).mockResolvedValue({
+      run_id: 'run-1',
+      initial_capital: 100_000,
+      equity: [],
+      benchmark: [],
+      metrics: {
+        total_return: 0.12,
+        sharpe_ratio: null,
+        max_drawdown: -0.07,
+        win_rate: null,
+        trade_count: 0,
+        winning_trades: 0,
+        losing_trades: 0,
+      },
+      trades: [],
+      assumptions: [],
+    });
+    const user = userEvent.setup();
+
+    renderWorkbench(<Harness results />);
+
+    await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
+    await user.click(await screen.findByRole('button', { name: /run backtest/i }));
+
+    expect(await screen.findByTestId('run-results')).toBeInTheDocument();
+    expect(screen.getByTestId('run-coverage')).toBeInTheDocument();
   });
 });

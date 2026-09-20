@@ -28,23 +28,13 @@ describe('ThemeToggle', () => {
     mockSystemPrefersDark(false);
     renderToggle();
 
+    // First visit is dark, so the action on offer is the light theme.
     expect(screen.getAllByRole('button')).toHaveLength(1);
-    expect(screen.getByRole('button', { name: /switch to dark mode/i })).toBeInTheDocument();
-  });
-
-  it('switches the app to dark mode and flips its own accessible name', async () => {
-    mockSystemPrefersDark(false);
-    const user = userEvent.setup();
-    renderToggle();
-
-    await user.click(screen.getByRole('button', { name: /switch to dark mode/i }));
-
-    expect(document.documentElement.classList.contains('dark')).toBe(true);
     expect(screen.getByRole('button', { name: /switch to light mode/i })).toBeInTheDocument();
   });
 
-  it('switches back to light mode on a second activation', async () => {
-    mockSystemPrefersDark(true);
+  it('switches the app to light mode and flips its own accessible name', async () => {
+    mockSystemPrefersDark(false);
     const user = userEvent.setup();
     renderToggle();
 
@@ -52,6 +42,18 @@ describe('ThemeToggle', () => {
 
     expect(document.documentElement.classList.contains('dark')).toBe(false);
     expect(screen.getByRole('button', { name: /switch to dark mode/i })).toBeInTheDocument();
+  });
+
+  it('switches back to dark mode on a second activation', async () => {
+    mockSystemPrefersDark(true);
+    const user = userEvent.setup();
+    renderToggle();
+
+    await user.click(screen.getByRole('button', { name: /switch to light mode/i }));
+    await user.click(screen.getByRole('button', { name: /switch to dark mode/i }));
+
+    expect(document.documentElement.classList.contains('dark')).toBe(true);
+    expect(screen.getByRole('button', { name: /switch to light mode/i })).toBeInTheDocument();
   });
 
   it('is operable with the keyboard', async () => {
@@ -63,6 +65,6 @@ describe('ThemeToggle', () => {
     expect(screen.getByRole('button')).toHaveFocus();
 
     await user.keyboard('{Enter}');
-    expect(document.documentElement.classList.contains('dark')).toBe(true);
+    expect(document.documentElement.classList.contains('dark')).toBe(false);
   });
 });

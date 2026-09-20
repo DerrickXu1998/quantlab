@@ -27,7 +27,7 @@ export function TradeLog({ trades }: { trades: Trade[] }) {
     <div className="max-h-72 overflow-y-auto">
       <table data-testid="trade-log" className="w-full">
         <thead className="sticky top-0 bg-card">
-          <tr className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+          <tr className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
             <th className="px-3 py-1.5 text-left font-normal">Symbol</th>
             <th className="px-3 py-1.5 text-left font-normal">In</th>
             <th className="px-3 py-1.5 text-left font-normal">Out</th>

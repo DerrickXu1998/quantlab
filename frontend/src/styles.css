@@ -53,53 +53,70 @@
 }
 
 /*
-  shadcn/ui-style design tokens. Values are HSL triplets (no hsl() wrapper) so
-  Tailwind's `hsl(var(--x))` color definitions in tailwind.config.ts can apply
-  opacity modifiers. .dark overrides are toggled by ThemeProvider on <html>.
+  Terminal design tokens, one palette per theme. Values are HSL triplets (no
+  hsl() wrapper) so Tailwind's `hsl(var(--x))` color definitions in
+  tailwind.config.ts can apply opacity modifiers. ThemeProvider toggles .dark
+  on <html>; the terminal grammar (hairlines, mono numbers, one accent) is
+  identical in both — only the surfaces change.
+
+  The accent is lime in both themes, darkened in the light one: the dark
+  theme's acid lime (#BFFF3C) does not carry enough contrast on a near-white
+  ground, so :root uses a deep lime (#466F11, ~5.9:1 on white) and the acid
+  value appears in .dark only. Losses and errors are the only things allowed
+  to use --destructive.
 */
 :root {
-  --background: 210 20% 98%;
-  --foreground: 215 28% 17%;
-  --card: 0 0% 100%;
-  --card-foreground: 215 28% 17%;
-  --border: 214 20% 88%;
-  --input: 214 20% 88%;
-  --ring: 217 91% 60%;
-  --primary: 217 91% 60%;
-  --primary-foreground: 210 20% 98%;
-  --secondary: 214 32% 94%;
-  --secondary-foreground: 215 28% 17%;
-  --muted: 214 32% 94%;
-  --muted-foreground: 215 16% 47%;
-  --accent: 214 32% 91%;
-  --accent-foreground: 215 28% 17%;
-  --destructive: 0 72% 51%;
-  --destructive-foreground: 210 20% 98%;
-  --success: 142 71% 35%;
-  --success-foreground: 210 20% 98%;
-  --radius: 0.5rem;
+  --background: 90 11% 96%; /* #F5F6F3 — warm-neutral near-white */
+  --foreground: 220 11% 12%;
+  --card: 0 0% 100%; /* white panels on the off-white ground */
+  --card-foreground: 220 11% 12%;
+  --border: 90 8% 85%; /* light hairline */
+  --input: 90 8% 85%;
+  --ring: 86 74% 25%;
+  --primary: 86 74% 25%; /* #466F11 — the single accent, dark-theme lime tuned down */
+  --primary-foreground: 90 20% 97%;
+  --secondary: 90 8% 92%;
+  --secondary-foreground: 220 11% 12%;
+  --muted: 90 8% 92%;
+  --muted-foreground: 215 8% 38%;
+  --accent: 96 6% 90%;
+  --accent-foreground: 220 11% 12%;
+  --destructive: 0 72% 51%; /* #DC2626 — losses and errors only */
+  --destructive-foreground: 90 20% 97%;
+  --success: 86 74% 25%;
+  --success-foreground: 90 20% 97%;
+  /* Chart grid lines, and the resting colour of a value that can tick. */
+  --grid: 90 8% 88%;
+  --tick: 215 8% 38%;
+  /* The brief caps corner radius at 4px. 0.25rem = 4px, and the sm/md steps
+     derived from it in tailwind.config.ts stay below that. */
+  --radius: 0.25rem;
 }
 
 .dark {
-  --background: 222 30% 10%;
-  --foreground: 210 20% 92%;
-  --card: 222 26% 14%;
-  --card-foreground: 210 20% 92%;
-  --border: 217 19% 24%;
-  --input: 217 19% 24%;
-  --ring: 217 91% 65%;
-  --primary: 217 91% 65%;
-  --primary-foreground: 222 30% 10%;
-  --secondary: 217 19% 20%;
-  --secondary-foreground: 210 20% 92%;
-  --muted: 217 19% 20%;
-  --muted-foreground: 215 16% 65%;
-  --accent: 217 19% 24%;
-  --accent-foreground: 210 20% 92%;
-  --destructive: 0 63% 58%;
-  --destructive-foreground: 210 20% 92%;
-  --success: 142 60% 45%;
-  --success-foreground: 210 20% 92%;
+  --background: 220 11% 5%; /* #0A0B0D */
+  --foreground: 210 14% 93%;
+  --card: 220 12% 7%; /* #0F1114 */
+  --card-foreground: 210 14% 93%;
+  --border: 216 15% 13%; /* #1C2026 hairline */
+  --input: 216 15% 13%;
+  --ring: 76 100% 62%;
+  --primary: 76 100% 62%; /* #BFFF3C -- the single accent */
+  --primary-foreground: 220 11% 5%;
+  --secondary: 218 14% 11%;
+  --secondary-foreground: 210 14% 93%;
+  --muted: 218 14% 11%;
+  --muted-foreground: 215 12% 55%;
+  --accent: 218 14% 14%;
+  --accent-foreground: 210 14% 93%;
+  --destructive: 0 100% 65%; /* #FF4D4D -- losses and drawdown only */
+  --destructive-foreground: 220 11% 5%;
+  --success: 76 100% 62%;
+  --success-foreground: 220 11% 5%;
+  /* Chart grid lines, and the resting colour of a value that can tick. */
+  --grid: 216 15% 13%;
+  --tick: 215 12% 55%;
+  --radius: 0.25rem;
 }
 
 body {
@@ -137,47 +154,6 @@ body {
 }
 
 /*
-  Quant Lab palette. Scoped to the surface root rather than <html>, so it
-  cannot disturb ThemeProvider's light/dark toggle or the Signal Viewer, and so
-  every existing ui/* primitive re-skins for free -- Tailwind resolves
-  hsl(var(--x)) at the use site, not at build time.
-
-  The terminal is fixed near-black by design; it has no light mode. Losses and
-  drawdown are the only things allowed to use --destructive.
-*/
-.quantlab {
-  --background: 220 11% 5%; /* #0A0B0D */
-  --foreground: 210 14% 93%;
-  --card: 220 12% 7%; /* #0F1114 */
-  --card-foreground: 210 14% 93%;
-  --border: 216 15% 13%; /* #1C2026 hairline */
-  --input: 216 15% 13%;
-  --ring: 76 100% 62%;
-  --primary: 76 100% 62%; /* #BFFF3C -- the single accent */
-  --primary-foreground: 220 11% 5%;
-  --secondary: 218 14% 11%;
-  --secondary-foreground: 210 14% 93%;
-  --muted: 218 14% 11%;
-  --muted-foreground: 215 12% 55%;
-  --accent: 218 14% 14%;
-  --accent-foreground: 210 14% 93%;
-  --destructive: 0 100% 65%; /* #FF4D4D -- losses and drawdown only */
-  --destructive-foreground: 220 11% 5%;
-  --success: 76 100% 62%;
-  --success-foreground: 220 11% 5%;
-  /* Chart grid lines, and the resting colour of a value that can tick. */
-  --grid: 216 15% 13%;
-  --tick: 215 12% 55%;
-  /* The brief caps corner radius at 4px. 0.25rem = 4px, and the sm/md steps
-     derived from it in tailwind.config.ts stay below that. */
-  --radius: 0.25rem;
-
-  font-family: theme('fontFamily.sans');
-  /* body's bg-background is bound to :root, so the surface sets its own. */
-  @apply bg-background text-foreground;
-}
-
-/*
   Film grain: one static SVG noise tile at 3% over the background only. Sits
   under everything interactive and never receives a pointer event.
 */
@@ -193,8 +169,8 @@ body {
   rule becomes an accessibility problem.
 */
 @media (prefers-reduced-motion: reduce) {
-  .quantlab [data-cascade],
-  .quantlab [data-flash] {
+  [data-cascade],
+  [data-flash] {
     animation: none !important;
     opacity: 1 !important;
     transform: none !important;

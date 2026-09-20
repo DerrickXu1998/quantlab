@@ -1,43 +1,48 @@
 import { PackageOpen } from 'lucide-react';
-import { EmptyState } from '../chrome/EmptyState';
-import { Numeric } from '../chrome/Numeric';
-import { StatusBadge } from '../chrome/StatusBadge';
-import type { Strategy } from '../data/useStrategies';
+import type { ModelEntry } from '../runs/RunsContext';
+import { EmptyState } from './ui/empty-state';
+import { Numeric } from './ui/numeric';
+import { StatusBadge } from './ui/status-badge';
 
 const NO_EXECUTION = 'No execution backend — QuantLab computes signals, it does not place orders.';
 
 /**
- * Registered models, with their run history.
+ * The model list, used by both Research and Strategies.
+ *
+ * A model is not a strategy until it is deployed, so the list says "models".
+ * Every entry comes from the backend registry at request time — nothing about
+ * model identity is hardcoded here, which is what makes registering a model
+ * enough to make it appear (Constitution II).
  *
  * The LIVE/PAPER/BACKTEST chips a terminal usually carries are not faked here.
- * BACKTEST is the only mode that exists, so it is the only one lit; the other
- * two are rendered visibly disabled with the reason on hover. Showing a green
- * LIVE badge over a system that cannot trade would be the single most
+ * BACKTEST is the only mode the backend has, so it is the only one lit; the
+ * other two are rendered visibly disabled with the reason on hover. Showing a
+ * lit LIVE badge over a system that cannot trade would be the single most
  * misleading thing on the screen.
  */
-export function StrategyList({
-  strategies,
+export function ModelList({
+  entries,
   selected,
   onSelect,
 }: {
-  strategies: Strategy[];
+  entries: ModelEntry[];
   selected: string | null;
   onSelect: (name: string) => void;
 }) {
-  if (strategies.length === 0) {
+  if (entries.length === 0) {
     return (
       <EmptyState
-        testId="strategies-empty"
+        testId="model-list-empty"
         icon={PackageOpen}
-        title="No strategies registered"
+        title="No models registered"
         detail="The model registry is empty. Register a signal rule in the backend and it appears here without a frontend change."
       />
     );
   }
 
   return (
-    <ul data-testid="strategy-list" className="divide-y divide-border">
-      {strategies.map(({ model, runs, latest }) => {
+    <ul data-testid="model-list" className="divide-y divide-border">
+      {entries.map(({ model, runs, latest }) => {
         const active = model.name === selected;
         return (
           <li key={`${model.name}@${model.version}`}>
@@ -56,6 +61,10 @@ export function StrategyList({
                 </span>
               </span>
 
+              <span className="mt-1 block text-[11px] text-muted-foreground">
+                {model.direction_semantics}
+              </span>
+
               <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
                 <StatusBadge tone="active">Backtest</StatusBadge>
                 <StatusBadge tone="disabled" title={NO_EXECUTION}>
@@ -67,10 +76,14 @@ export function StrategyList({
               </span>
 
               <span className="mt-1.5 flex flex-wrap items-center gap-x-3 text-[10px] text-muted-foreground">
-                <span className="font-mono">{model.lookback_days}d lookback</span>
+                <span className="font-mono">
+                  <Numeric value={model.lookback_days} format="integer" className="text-[10px]" />
+                  d lookback
+                </span>
                 <span className="font-mono">{model.scale_class.replace('_', '-')}</span>
                 <span className="font-mono">
-                  {runs.length} {runs.length === 1 ? 'run' : 'runs'}
+                  <Numeric value={runs.length} format="integer" className="text-[10px]" />{' '}
+                  {runs.length === 1 ? 'run' : 'runs'}
                 </span>
                 {latest ? (
                   <span className="flex items-center gap-1">

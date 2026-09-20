@@ -6,14 +6,22 @@ import {
 } from 'react';
 import { cn } from '../../lib/utils';
 
-const controlClasses =
-  'h-9 rounded-md border border-input bg-card px-2 text-sm text-foreground shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50';
+/**
+ * The one field treatment, shared by every form in the app: square corners, a
+ * 1px border, values in mono, and focus marked by the accent border — never a
+ * shadow or a ring.
+ */
+export const fieldClasses =
+  'h-9 w-full rounded-sm border border-input bg-background px-2 font-mono text-[11px] tabular-nums text-foreground transition-colors focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-50';
 
 export const Label = forwardRef<HTMLLabelElement, LabelHTMLAttributes<HTMLLabelElement>>(
   ({ className, ...props }, ref) => (
     <label
       ref={ref}
-      className={cn('flex flex-col gap-1 text-xs font-semibold text-muted-foreground', className)}
+      className={cn(
+        'flex flex-col gap-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground',
+        className,
+      )}
       {...props}
     />
   ),
@@ -22,7 +30,7 @@ Label.displayName = 'Label';
 
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
   ({ className, ...props }, ref) => (
-    <input ref={ref} className={cn(controlClasses, className)} {...props} />
+    <input ref={ref} className={cn(fieldClasses, className)} {...props} />
   ),
 );
 Input.displayName = 'Input';
@@ -34,7 +42,7 @@ Input.displayName = 'Input';
  */
 export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSelectElement>>(
   ({ className, ...props }, ref) => (
-    <select ref={ref} className={cn(controlClasses, 'pr-8', className)} {...props} />
+    <select ref={ref} className={cn(fieldClasses, 'pr-8', className)} {...props} />
   ),
 );
 Select.displayName = 'Select';

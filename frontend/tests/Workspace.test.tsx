@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as apiClient from '../src/api/client';
 import { ThemeProvider } from '../src/theme/ThemeProvider';
-import { WorkbenchProvider } from '../src/workbench/WorkbenchContext';
+import { RunsProvider } from '../src/runs/RunsContext';
 import { Workspace } from '../src/workspace/Workspace';
 import { WorkspaceProvider } from '../src/workspace/WorkspaceContext';
 import { LAYOUT_STORAGE_KEY, saveLayout } from '../src/workspace/layoutStorage';
@@ -16,9 +16,9 @@ function renderWorkspace() {
   return render(
     <ThemeProvider>
       <WorkspaceProvider>
-        <WorkbenchProvider>
+        <RunsProvider>
           <Workspace />
-        </WorkbenchProvider>
+        </RunsProvider>
       </WorkspaceProvider>
     </ThemeProvider>,
   );
@@ -35,6 +35,7 @@ describe('Workspace', () => {
     vi.mocked(apiClient.listSignals).mockResolvedValue({ total: 1, items: [makeSignal()] });
     vi.mocked(apiClient.getPrices).mockResolvedValue({ total: 0, items: [] });
     vi.mocked(apiClient.listModels).mockResolvedValue({ total: 0, items: [] });
+    vi.mocked(apiClient.listRuns).mockResolvedValue({ total: 0, items: [] });
   });
 
   afterEach(() => {
@@ -150,6 +151,7 @@ describe('Workspace floating panels (FR-013)', () => {
     vi.mocked(apiClient.listSignals).mockResolvedValue({ total: 1, items: [makeSignal()] });
     vi.mocked(apiClient.getPrices).mockResolvedValue({ total: 0, items: [] });
     vi.mocked(apiClient.listModels).mockResolvedValue({ total: 0, items: [] });
+    vi.mocked(apiClient.listRuns).mockResolvedValue({ total: 0, items: [] });
   });
 
   it('floats a panel through a keyboard-operable control, not drag alone', async () => {

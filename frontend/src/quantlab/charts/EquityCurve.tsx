@@ -61,18 +61,14 @@ export function EquityCurve({
 
   return (
     <div ref={themeRef} className="flex flex-col gap-2">
-      <div className="flex items-center gap-4 font-mono text-[10px] uppercase tracking-wider">
+      <div className="flex items-center gap-4 font-mono text-[10px] uppercase tracking-[0.12em]">
         <span className="flex items-center gap-1.5 text-primary">
           <span aria-hidden="true" className="h-px w-3 bg-primary" />
           {strategyLabel}
         </span>
         {benchmark.length > 1 ? (
           <span className="flex items-center gap-1.5 text-muted-foreground">
-            <span
-              aria-hidden="true"
-              className="h-px w-3 bg-muted-foreground"
-              style={{ backgroundImage: 'repeating-linear-gradient(90deg,currentColor 0 2px,transparent 2px 4px)' }}
-            />
+            <span aria-hidden="true" className="w-3 border-t border-dashed border-muted-foreground" />
             {benchmarkLabel}
           </span>
         ) : null}
@@ -89,7 +85,7 @@ export function EquityCurve({
           {formatNumeric(last ?? 0, 'currency')} over {equity.length} sessions.
         </p>
         {!supported ? (
-          <div className="flex h-full items-center justify-center font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
+          <div className="flex h-full items-center justify-center font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
             {formatNumeric(first ?? 0, 'currency')} → {formatNumeric(last ?? 0, 'currency')}
           </div>
         ) : null}

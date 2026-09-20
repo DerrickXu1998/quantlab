@@ -30,7 +30,7 @@ function Row({
       }`}
     >
       <span className="min-w-0">
-        <span className="block truncate font-mono text-[11px] tracking-wide">
+        <span className="block truncate font-mono text-[11px] tracking-[0.12em]">
           {instrument.symbol}
         </span>
         <span className="block truncate text-[10px] text-muted-foreground">

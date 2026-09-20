@@ -16,11 +16,6 @@ function isTheme(value: unknown): value is Theme {
   return value === 'light' || value === 'dark';
 }
 
-function getSystemTheme(): Theme {
-  if (typeof window === 'undefined' || !window.matchMedia) return 'light';
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-}
-
 function getStoredTheme(): Theme | null {
   try {
     const stored = window.localStorage.getItem(STORAGE_KEY);
@@ -32,8 +27,10 @@ function getStoredTheme(): Theme | null {
 }
 
 function getInitialTheme(): Theme {
-  if (typeof window === 'undefined') return 'light';
-  return getStoredTheme() ?? getSystemTheme();
+  if (typeof window === 'undefined') return 'dark';
+  // The terminal is dark by design; the light theme is an explicit choice,
+  // stored once made. First visit is always dark.
+  return getStoredTheme() ?? 'dark';
 }
 
 function applyTheme(theme: Theme) {

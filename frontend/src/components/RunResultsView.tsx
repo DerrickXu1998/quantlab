@@ -1,0 +1,283 @@
+import { AlertTriangle, TriangleAlert } from 'lucide-react';
+import { useState } from 'react';
+import type { Run, RunDetail } from '../api/client';
+import { navigate } from '../chrome/router';
+import { useRunPerformance } from '../quantlab/data/useRunPerformance';
+import { EquityCurve } from '../quantlab/charts/EquityCurve';
+import { Assumptions } from '../quantlab/panels/Assumptions';
+import { StatRow } from '../quantlab/panels/StatRow';
+import { TradeLog } from '../quantlab/panels/TradeLog';
+import { useRuns } from '../runs/RunsContext';
+import { Button } from './ui/button';
+import { EmptyState } from './ui/empty-state';
+import { Input } from './ui/field';
+import { Numeric } from './ui/numeric';
+import { Panel } from '../quantlab/chrome/Panel';
+import { StatusBadge } from './ui/status-badge';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from './ui/table';
+
+/**
+ * Coverage always accompanies a signal count. A count without its denominator
+ * is not interpretable: "47 signals" means nothing without knowing how many of
+ * the selected instruments actually had data (FR-009).
+ */
+function Coverage({ run }: { run: Run }) {
+  const { instruments_requested, instruments_with_data, instruments_full_warmup } = run.coverage;
+  return (
+    <dl data-testid="run-coverage" className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+      <div className="flex gap-1">
+        <dt className="text-muted-foreground">Signals</dt>
+        <dd data-testid="signal-count">
+          <Numeric value={run.signal_count} format="integer" />
+        </dd>
+      </div>
+      <div className="flex gap-1">
+        <dt className="text-muted-foreground">Instruments with data</dt>
+        <dd>
+          <Numeric value={instruments_with_data} format="integer" />
+          <span className="text-muted-foreground">/</span>
+          <Numeric value={instruments_requested} format="integer" />
+        </dd>
+      </div>
+      <div className="flex gap-1">
+        <dt className="text-muted-foreground">Full warm-up history</dt>
+        <dd>
+          <Numeric value={instruments_full_warmup} format="integer" />
+          <span className="text-muted-foreground">/</span>
+          <Numeric value={instruments_requested} format="integer" />
+        </dd>
+      </div>
+    </dl>
+  );
+}
+
+function Provenance({ run }: { run: RunDetail }) {
+  return (
+    <p className="mt-1 text-xs text-muted-foreground">
+      <span
+        data-testid="run-dataset"
+        className="mr-1 font-mono uppercase tracking-[0.12em] text-foreground"
+      >
+        {run.dataset === 'warehouse' ? 'live history' : 'demo data'}
+      </span>
+      · {run.model_name} v{run.model_version} · {run.start_date} → {run.end_date} ·{' '}
+      <span className="font-mono">
+        {Object.entries(run.parameters)
+          .map(([key, value]) => `${key}=${String(value)}`)
+          .join(', ')}
+      </span>
+    </p>
+  );
+}
+
+/** Naming a run is what keeps it: saved experiments survive the session. */
+function SaveExperiment({ run }: { run: RunDetail }) {
+  const { save } = useRuns();
+  const [name, setName] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (run.name) {
+    return (
+      <StatusBadge tone="good" testId="run-saved-name" title="Saved experiment">
+        {run.name}
+      </StatusBadge>
+    );
+  }
+
+  return (
+    <form
+      className="flex items-center gap-2"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        if (!name.trim() || saving) return;
+        setSaving(true);
+        setError(null);
+        try {
+          await save(run.id, name.trim());
+        } catch (caught: unknown) {
+          setError(caught instanceof Error ? caught.message : 'could not save the run');
+        } finally {
+          setSaving(false);
+        }
+      }}
+    >
+      <Input
+        aria-label="Experiment name"
+        placeholder="Name this experiment"
+        value={name}
+        onChange={(event) => setName(event.target.value)}
+        className="h-7 w-44"
+      />
+      <Button type="submit" size="sm" disabled={!name.trim() || saving}>
+        {saving ? 'Saving…' : 'Save experiment'}
+      </Button>
+      {error ? (
+        <span role="alert" className="text-[11px] text-destructive">
+          {error}
+        </span>
+      ) : null}
+    </form>
+  );
+}
+
+/**
+ * The one results renderer, shared by Research and Strategies: coverage and
+ * provenance up front, then what the backend computed — stat row, equity
+ * against its benchmark, assumptions, trade log — and the raw signal table.
+ *
+ * Failed, empty and populated are three visibly different states. A run that
+ * found nothing is a result and is not dressed as an error.
+ */
+export function RunResultsView({ run }: { run: RunDetail }) {
+  const performance = useRunPerformance(
+    run.status === 'completed' && run.signal_count > 0 ? run.id : null,
+  );
+
+  return (
+    <div className="h-full overflow-auto" data-testid="run-results">
+      <header className="rounded-sm border border-border bg-card p-3">
+        <Coverage run={run} />
+        <Provenance run={run} />
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <StatusBadge tone={run.dataset === 'warehouse' ? 'good' : 'idle'}>
+            {run.dataset === 'warehouse' ? 'Live history' : 'Demo data'}
+          </StatusBadge>
+          {run.re_runnable === false ? (
+            <StatusBadge
+              tone="bad"
+              testId="run-not-rerunnable"
+              title="Recorded against a dataset that is not the active one — readable, but not reproducible as recorded."
+            >
+              Not reproducible
+            </StatusBadge>
+          ) : null}
+          {run.model_available === false ? (
+            <StatusBadge
+              tone="bad"
+              testId="run-model-unavailable"
+              title="The recorded model/version is no longer registered; the run stays readable but is not re-runnable."
+            >
+              Model unavailable
+            </StatusBadge>
+          ) : null}
+          <span className="flex-1" />
+          <SaveExperiment run={run} />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => navigate('overview', { run: run.id })}
+          >
+            Watch in Overview
+          </Button>
+        </div>
+      </header>
+
+      {/* A correctness warning, not a footnote: stored bars are unadjusted, so
+          any signal near an ex-date may be an artefact of the split rather
+          than a market move. */}
+      {(run.corporate_actions ?? []).length > 0 ? (
+        <div
+          role="alert"
+          data-testid="run-corporate-actions"
+          className="mt-3 flex gap-2 rounded-sm border border-destructive/40 bg-destructive/5 p-2 text-[11px] text-destructive"
+        >
+          <TriangleAlert size={16} strokeWidth={1.5} className="mt-px shrink-0" />
+          <span>
+            Unadjusted prices across{' '}
+            {(run.corporate_actions ?? [])
+              .map((action) => `${action.symbol} ${action.ex_date}`)
+              .join(', ')}
+            . Moves near those dates may be artefacts of the action rather than the market.
+          </span>
+        </div>
+      ) : null}
+
+      {run.status === 'failed' ? (
+        <EmptyState
+          testId="run-failed"
+          icon={AlertTriangle}
+          tone="error"
+          title="Backtest failed"
+          detail={run.error ?? 'The run did not complete.'}
+        />
+      ) : run.signal_count === 0 ? (
+        // A model finding nothing is a result, not a failure. This state is
+        // deliberately styled as an outcome, never as an error (FR-008).
+        <EmptyState
+          testId="run-empty"
+          icon={TriangleAlert}
+          title="No signals"
+          detail="The model ran and found nothing in this window. That is a result, not a failure — try a wider range or different parameters."
+        />
+      ) : (
+        <>
+          {performance.status === 'error' ? (
+            <EmptyState
+              testId="run-performance-error"
+              icon={AlertTriangle}
+              tone="error"
+              title="Could not load performance"
+              detail={performance.message}
+            />
+          ) : performance.status === 'ready' ? (
+            <div className="mt-4 space-y-4">
+              <StatRow metrics={performance.performance.metrics} />
+              <EquityCurve
+                equity={performance.performance.equity}
+                benchmark={performance.performance.benchmark}
+                benchmarkLabel="Buy & hold"
+                height={220}
+              />
+              <Assumptions assumptions={performance.performance.assumptions} />
+              <Panel title="Trade log" bodyClassName="p-0">
+                <TradeLog trades={performance.performance.trades} />
+              </Panel>
+            </div>
+          ) : (
+            <p className="mt-4 font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+              Computing…
+            </p>
+          )}
+
+          <div className="mt-4">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Symbol</TableHead>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Direction</TableHead>
+                  <TableHead>Trigger values</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {run.signals.map((signal, index) => (
+                  <TableRow key={`${signal.symbol}-${signal.date}-${index}`}>
+                    <TableCell className="font-mono text-xs">{signal.symbol}</TableCell>
+                    <TableCell className="font-mono text-xs tabular-nums">
+                      {signal.date}
+                    </TableCell>
+                    <TableCell className="text-xs">{signal.direction}</TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground">
+                      {Object.entries(signal.trigger_values)
+                        .map(([key, value]) => `${key}=${String(value)}`)
+                        .join(', ')}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}

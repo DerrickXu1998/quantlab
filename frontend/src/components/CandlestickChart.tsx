@@ -16,12 +16,18 @@ import {
   type Time,
 } from 'lightweight-charts';
 import type { PriceBar } from '../api/client';
+import { token } from '../lib/token';
 import { useTheme } from '../theme/ThemeProvider';
 import { usePanelSize } from './usePanelSize';
 
 interface CandlestickChartProps {
   bars: PriceBar[];
   markerDate?: string;
+  /**
+   * Size from container observation instead of dock-panel events. Only safe
+   * outside the dock — see the note at the creation site (FR-009).
+   */
+  autoSize?: boolean;
 }
 
 interface HoverReadout {
@@ -33,30 +39,22 @@ interface HoverReadout {
   volume: number;
 }
 
-// Chart colors can't come from CSS variables — the canvas needs literal values —
-// so the two palettes are mirrored here from the tokens in styles.css.
-const PALETTES = {
-  light: {
-    background: '#ffffff',
-    text: '#334155',
-    grid: '#e8edf3',
-    border: '#dde3ea',
-    up: '#16a34a',
-    down: '#dc2626',
-    volume: '#cbd5e1',
-    marker: '#dc2626',
-  },
-  dark: {
-    background: '#1b2130',
-    text: '#cbd5e1',
-    grid: '#2b3444',
-    border: '#3a4457',
-    up: '#3fb950',
-    down: '#f0605a',
-    volume: '#46536b',
-    marker: '#f0605a',
-  },
-} as const;
+// Canvas needs literal colours, so the chart reads the live design tokens off
+// its own container — the same approach the Quant Lab charts use — rather than
+// mirroring the palette as hex. Up/down candles are the accent/destructive
+// tokens: green plays no part in this grammar.
+function readPalette(host: Element | null) {
+  return {
+    background: token(host, '--card'),
+    text: token(host, '--muted-foreground'),
+    grid: token(host, '--grid'),
+    border: token(host, '--border'),
+    up: token(host, '--primary'),
+    down: token(host, '--destructive'),
+    volume: token(host, '--muted-foreground', 0.35),
+    marker: token(host, '--primary'),
+  };
+}
 
 function toCandle(bar: PriceBar): CandlestickData<Time> {
   return {
@@ -93,9 +91,8 @@ function isVolumePoint(data: unknown): data is { value: number } {
   );
 }
 
-export function CandlestickChart({ bars, markerDate }: CandlestickChartProps) {
+export function CandlestickChart({ bars, markerDate, autoSize = false }: CandlestickChartProps) {
   const { theme } = useTheme();
-  const palette = PALETTES[theme];
   const { width, height, isVisible } = usePanelSize();
 
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -113,11 +110,13 @@ export function CandlestickChart({ bars, markerDate }: CandlestickChartProps) {
     const container = containerRef.current;
     if (!container) return;
 
-    const colors = PALETTES[theme];
+    const colors = readPalette(container);
     const chart = createChart(container, {
-      // No autoSize: a panel in an inactive tab has no measurable box, so
-      // container observation yields a zero-height chart. Sizing is driven
-      // explicitly from the dock panel's own events instead (FR-009).
+      // autoSize only outside the dock: a panel in an inactive tab has no
+      // measurable box, so container observation yields a zero-height chart
+      // and dock panels are sized explicitly from the panel's own events
+      // instead (FR-009).
+      autoSize,
       layout: {
         background: { type: ColorType.Solid, color: colors.background },
         textColor: colors.text,
@@ -188,8 +187,9 @@ export function CandlestickChart({ bars, markerDate }: CandlestickChartProps) {
     const markers = markersRef.current;
     if (!candleSeries || !volumeSeries || !markers) return;
 
+    const colors = readPalette(containerRef.current);
     candleSeries.setData(bars.map(toCandle));
-    volumeSeries.setData(bars.map((bar) => toVolume(bar, palette.volume)));
+    volumeSeries.setData(bars.map((bar) => toVolume(bar, colors.volume)));
 
     const marker: SeriesMarker<Time>[] = markedBar
       ? [
@@ -197,13 +197,13 @@ export function CandlestickChart({ bars, markerDate }: CandlestickChartProps) {
             time: markedBar.date as Time,
             position: 'aboveBar',
             shape: 'arrowDown',
-            color: palette.marker,
+            color: colors.marker,
             text: 'signal',
           },
         ]
       : [];
     markers.setMarkers(marker);
-  }, [bars, markedBar, palette.marker, palette.volume]);
+  }, [bars, markedBar, theme]);
 
   // Apply the panel's size, but only while the panel is actually visible. A
   // hidden panel reports a box we must not draw to; on the hidden -> visible
@@ -211,10 +211,10 @@ export function CandlestickChart({ bars, markerDate }: CandlestickChartProps) {
   // what keeps a revealed background tab from showing a blank chart (FR-009).
   useEffect(() => {
     const chart = chartRef.current;
-    if (!chart || !isVisible) return;
+    if (!chart || autoSize || !isVisible) return;
     if (width <= 0 || height <= 0) return;
     chart.resize(width, height);
-  }, [width, height, isVisible]);
+  }, [width, height, isVisible, autoSize]);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -222,6 +222,7 @@ export function CandlestickChart({ bars, markerDate }: CandlestickChartProps) {
     const volumeSeries = volumeSeriesRef.current;
     if (!chart || !candleSeries || !volumeSeries) return;
 
+    const palette = readPalette(containerRef.current);
     chart.applyOptions({
       layout: {
         background: { type: ColorType.Solid, color: palette.background },
@@ -241,22 +242,24 @@ export function CandlestickChart({ bars, markerDate }: CandlestickChartProps) {
       wickDownColor: palette.down,
     });
     volumeSeries.applyOptions({ color: palette.volume });
-  }, [palette]);
+    // `theme` is the trigger: the palette itself is read live above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [theme]);
 
   if (!hasBars) {
     return (
-      <p className="rounded-lg border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
+      <p className="rounded-sm border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
         No price history available.
       </p>
     );
   }
 
   return (
-    <div className="relative">
+    <div className="relative h-full">
       <div
         ref={containerRef}
         data-testid="price-chart"
-        className="h-[320px] w-full overflow-hidden rounded-lg border border-border"
+        className="h-full min-h-[320px] w-full overflow-hidden rounded-sm border border-border"
       />
       {markedBar && (
         <span data-testid="signal-marker" className="sr-only">
@@ -264,8 +267,8 @@ export function CandlestickChart({ bars, markerDate }: CandlestickChartProps) {
         </span>
       )}
       {hover && (
-        <div className="pointer-events-none absolute left-3 top-3 rounded-md border border-border bg-card/95 px-3 py-2 text-xs tabular-nums text-card-foreground shadow-sm">
-          <div className="font-semibold">{hover.date}</div>
+        <div className="pointer-events-none absolute left-3 top-3 rounded-sm border border-border bg-card/95 px-3 py-2 font-mono text-[11px] tabular-nums text-card-foreground">
+          <div>{hover.date}</div>
           <div className="mt-1 flex gap-2">
             <span>O {hover.open.toFixed(2)}</span>
             <span>H {hover.high.toFixed(2)}</span>

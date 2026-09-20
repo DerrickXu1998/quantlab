@@ -5,8 +5,9 @@ import {
   type DockviewReadyEvent,
   type IDockviewPanelProps,
 } from 'dockview-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { PanelApiProvider } from '../components/usePanelSize';
+import { Button } from '../components/ui/button';
 import { useTheme } from '../theme/ThemeProvider';
 import { buildDefaultLayout } from './defaultLayout';
 import { PANELS, PANEL_IDS, type PanelId } from './panels';
@@ -46,9 +47,9 @@ function StackedPanels() {
           <section
             key={id}
             aria-label={PANELS[id].title}
-            className="rounded-lg border border-border bg-card"
+            className="rounded-sm border border-border bg-card"
           >
-            <h2 className="border-b border-border px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            <h2 className="border-b border-border px-3 py-2 font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
               {PANELS[id].title}
             </h2>
             <div className="min-h-[240px]">
@@ -63,8 +64,11 @@ function StackedPanels() {
 
 export function Workspace({
   onReady,
+  actions,
 }: {
   onReady?: (handle: WorkspaceHandle) => void;
+  /** Extra controls for the panel-management strip (e.g. Reset layout). */
+  actions?: ReactNode;
 } = {}) {
   const { theme } = useTheme();
   const [api, setApi] = useState<DockviewReadyEvent['api'] | null>(null);
@@ -138,9 +142,6 @@ export function Workspace({
     api.addFloatingGroup(panel, { width: 640, height: 400 });
   };
 
-  const chipClasses =
-    'rounded border border-border bg-card px-2 py-0.5 font-medium text-foreground hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
-
   if (!dockingViable) {
     return <StackedPanels />;
   }
@@ -150,27 +151,30 @@ export function Workspace({
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-muted px-3 py-1.5 text-xs">
         <span className="text-muted-foreground">Panels:</span>
         {openPanels.map((id) => (
-          <button
+          <Button
             key={id}
             type="button"
+            variant="outline"
+            size="sm"
             onClick={() => float(id)}
             aria-label={`Float ${PANELS[id].title} panel`}
-            className={chipClasses}
           >
             Float {PANELS[id].title}
-          </button>
+          </Button>
         ))}
         {missingPanels.map((id) => (
-          <button
+          <Button
             key={id}
             type="button"
+            variant="outline"
+            size="sm"
             onClick={() => reopen(id)}
             aria-label={`Reopen ${PANELS[id].title} panel`}
-            className={chipClasses}
           >
             Reopen {PANELS[id].title}
-          </button>
+          </Button>
         ))}
+        {actions}
       </div>
 
       <DockviewReact

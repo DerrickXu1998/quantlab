@@ -1,7 +1,12 @@
+import { token } from '../../lib/token';
 import type { CanvasSize } from './useCanvas2d';
 
+// Re-exported so the charts keep a single import site for drawing helpers.
+export { token };
+
 export interface Series {
-  points: { date: string; value: number }[];
+  /** Null is "no value yet" (an indicator still warming up): a gap, not a zero. */
+  points: { date: string; value: number | null }[];
   color: string;
   /** Dashed lines read as "reference", which is what a benchmark is. */
   dashed?: boolean;
@@ -18,21 +23,6 @@ export interface Scale {
 
 export const PADDING = { top: 10, right: 52, bottom: 20, left: 10 };
 
-/**
- * Read a CSS custom property as a usable colour.
- *
- * Canvas cannot resolve `hsl(var(--x))`, so the tokens are read off the live
- * element instead of being duplicated as hex here. That is what stops this file
- * drifting out of step with the palette the way CandlestickChart's hard-coded
- * hex tables did.
- */
-export function token(element: Element | null, name: string, alpha = 1): string {
-  if (!element) return `hsla(0, 0%, 50%, ${alpha})`;
-  const triplet = getComputedStyle(element).getPropertyValue(name).trim();
-  if (!triplet) return `hsla(0, 0%, 50%, ${alpha})`;
-  return `hsl(${triplet} / ${alpha})`;
-}
-
 export function buildScale(seriesList: Series[], size: CanvasSize): Scale | null {
   const lengths = seriesList.map((s) => s.points.length);
   const length = Math.max(0, ...lengths);
@@ -42,6 +32,7 @@ export function buildScale(seriesList: Series[], size: CanvasSize): Scale | null
   let max = -Infinity;
   for (const series of seriesList) {
     for (const point of series.points) {
+      if (point.value === null) continue;
       if (point.value < min) min = point.value;
       if (point.value > max) max = point.value;
     }
@@ -101,22 +92,43 @@ export function drawSeries(ctx: CanvasRenderingContext2D, series: Series, scale:
   if (series.points.length < 2) return;
 
   const path = new Path2D();
+  let started = false;
+  let lastDrawn = -1;
   series.points.forEach((point, index) => {
+    if (point.value === null) return;
     const x = scale.x(index);
     const y = scale.y(point.value);
-    if (index === 0) path.moveTo(x, y);
+    // A gap breaks the line rather than bridging it with an invented segment.
+    if (!started || index !== lastDrawn + 1) path.moveTo(x, y);
     else path.lineTo(x, y);
+    started = true;
+    lastDrawn = index;
   });
 
   if (series.fill) {
-    const area = new Path2D(path);
-    const lastX = scale.x(series.points.length - 1);
-    const baseline = scale.y(scale.min);
-    area.lineTo(lastX, baseline);
-    area.lineTo(scale.x(0), baseline);
-    area.closePath();
-    ctx.fillStyle = series.fill;
-    ctx.fill(area);
+    const area = new Path2D();
+    let firstX: number | null = null;
+    let lastX: number | null = null;
+    series.points.forEach((point, index) => {
+      if (point.value === null) return;
+      const x = scale.x(index);
+      const y = scale.y(point.value);
+      if (firstX === null) {
+        area.moveTo(x, y);
+        firstX = x;
+      } else {
+        area.lineTo(x, y);
+      }
+      lastX = x;
+    });
+    if (firstX !== null && lastX !== null && lastX > firstX) {
+      const baseline = scale.y(scale.min);
+      area.lineTo(lastX, baseline);
+      area.lineTo(firstX, baseline);
+      area.closePath();
+      ctx.fillStyle = series.fill;
+      ctx.fill(area);
+    }
   }
 
   ctx.save();

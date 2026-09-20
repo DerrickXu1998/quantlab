@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
+import { CornerTicks } from '../../components/ui/corner-ticks';
+import { StatusBadge } from '../../components/ui/status-badge';
 import { cn } from '../../lib/utils';
-import { CornerTicks } from './CornerTicks';
-import { SimulatedTag } from './SimulatedTag';
 
 export interface PanelProps {
   title: string;
@@ -38,7 +38,11 @@ export function Panel({
           {title}
         </h2>
         <div className="flex items-center gap-2">
-          {simulated ? <SimulatedTag reason={simulated} /> : null}
+          {simulated ? (
+            <StatusBadge tone="simulated" title={simulated} testId="simulated-tag">
+              Simulated
+            </StatusBadge>
+          ) : null}
           {actions}
         </div>
       </header>

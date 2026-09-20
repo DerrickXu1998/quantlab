@@ -28,8 +28,10 @@ describe('ThemeProvider', () => {
     document.documentElement.classList.remove('dark');
   });
 
-  it('defaults to dark when no preference is stored and the system prefers dark', async () => {
-    mockSystemPrefersDark(true);
+  it('defaults to dark on a first visit, whatever the system prefers', async () => {
+    // The terminal palette is dark by design; the light theme is a stored
+    // choice, not a system inheritance.
+    mockSystemPrefersDark(false);
 
     render(
       <ThemeProvider>
@@ -41,8 +43,8 @@ describe('ThemeProvider', () => {
     expect(document.documentElement.classList.contains('dark')).toBe(true);
   });
 
-  it('defaults to light when no preference is stored and the system prefers light', async () => {
-    mockSystemPrefersDark(false);
+  it('defaults to dark when the system prefers dark and nothing is stored', async () => {
+    mockSystemPrefersDark(true);
 
     render(
       <ThemeProvider>
@@ -50,8 +52,8 @@ describe('ThemeProvider', () => {
       </ThemeProvider>,
     );
 
-    await waitFor(() => expect(screen.getByTestId('theme-value')).toHaveTextContent('light'));
-    expect(document.documentElement.classList.contains('dark')).toBe(false);
+    await waitFor(() => expect(screen.getByTestId('theme-value')).toHaveTextContent('dark'));
+    expect(document.documentElement.classList.contains('dark')).toBe(true);
   });
 
   it('applies the dark class and persists to localStorage when setTheme is called', async () => {
@@ -81,13 +83,14 @@ describe('ThemeProvider', () => {
       </ThemeProvider>,
     );
 
-    await user.click(screen.getByText('toggle'));
-    expect(screen.getByTestId('theme-value')).toHaveTextContent('dark');
-    expect(window.localStorage.getItem(STORAGE_KEY)).toBe('dark');
-
+    // First visit is dark; the first toggle chooses light.
     await user.click(screen.getByText('toggle'));
     expect(screen.getByTestId('theme-value')).toHaveTextContent('light');
     expect(window.localStorage.getItem(STORAGE_KEY)).toBe('light');
+
+    await user.click(screen.getByText('toggle'));
+    expect(screen.getByTestId('theme-value')).toHaveTextContent('dark');
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBe('dark');
   });
 
   it('a stored preference wins over the system preference on mount', async () => {
@@ -104,8 +107,8 @@ describe('ThemeProvider', () => {
     expect(document.documentElement.classList.contains('dark')).toBe(false);
   });
 
-  it('falls back to the system preference when the stored value is invalid', async () => {
-    mockSystemPrefersDark(true);
+  it('falls back to the dark default when the stored value is invalid', async () => {
+    mockSystemPrefersDark(false);
     window.localStorage.setItem(STORAGE_KEY, 'not-a-theme');
 
     render(
