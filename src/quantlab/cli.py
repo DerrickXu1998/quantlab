@@ -266,6 +266,35 @@ def cmd_seed_synthetic(args) -> int:
     return 0 if report.status in ("ok", "partial") else 1
 
 
+def cmd_ingest_macro(args) -> int:
+    from . import store
+    from .store.macro import parse_series_args
+
+    try:
+        mapping = parse_series_args(args.series)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    with store.session(args.db_url) as conn, store.ch_session(args.ch_url) as client:
+        if not args.no_migrate:
+            store.migrate_all(conn, client)
+
+        report = store.ingest_macro_series(
+            conn,
+            client,
+            mapping,
+            start=args.start,
+            end=args.end,
+        )
+        print(report.summary())
+
+        if args.optimize:
+            # Pay the ReplacingMergeTree merge now rather than on every read.
+            store.optimize(client)
+
+    return 0 if report.status in ("ok", "partial") else 1
+
+
 def cmd_coverage(args) -> int:
     from . import store
 
@@ -467,6 +496,23 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-migrate", action="store_true",
                    help="skip the automatic migrate step")
     s.set_defaults(func=cmd_seed_synthetic)
+
+    im = sub.add_parser(
+        "ingest-macro",
+        help="load BoE macro series (FX, Bank Rate, gilts, M4) as pseudo-instrument bars",
+    )
+    im.add_argument("--start", default="2010-01-01")
+    im.add_argument("--end", default="")
+    im.add_argument("--series", action="append",
+                    help="CODE:SYMBOL, e.g. XUDLUSS:GBPUSD.BOE, repeatable; "
+                         "default: the five BoE COMMON_SERIES")
+    im.add_argument("--db-url", default="", help="Postgres catalog; overrides $QUANTLAB_DB_URL")
+    im.add_argument("--ch-url", default="", help="ClickHouse bars; overrides $QUANTLAB_CH_URL")
+    im.add_argument("--optimize", action="store_true",
+                    help="force the ClickHouse merge after loading")
+    im.add_argument("--no-migrate", action="store_true",
+                    help="skip the automatic migrate step")
+    im.set_defaults(func=cmd_ingest_macro)
 
     rp = sub.add_parser(
         "replay-publish",

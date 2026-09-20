@@ -104,4 +104,6 @@ def map_suffix(symbol: str, vendor: str) -> str:
     mapped = SUFFIX_MAP.get(suffix.upper(), {}).get(vendor)
     if mapped is None:
         return symbol
+    # Class shares: canonical "BT.A" is "BT-A" to both Stooq and Yahoo.
+    root = root.replace(".", "-")
     return f"{root}.{mapped}" if mapped else root

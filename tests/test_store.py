@@ -100,6 +100,37 @@ def test_validate_keeps_good_bars_when_one_is_bad():
     assert len(rejected) == 1
 
 
+def test_partition_chunks_empty_frame_yields_nothing():
+    frame = pd.DataFrame({"ts": pd.Series(dtype="datetime64[ns]"), "close": pd.Series(dtype=float)})
+    assert bars_mod.partition_chunks(frame) == []
+
+
+def test_partition_chunks_bound_the_months_per_chunk():
+    """The whole point: no insert block may touch more partitions than
+    max_partitions_per_insert_block (default 100 in ClickHouse)."""
+    ts = pd.date_range("2015-01-01", periods=130, freq="MS")  # 130 partition months
+    frame = pd.DataFrame({"ts": ts, "close": range(len(ts))})
+
+    chunks = bars_mod.partition_chunks(frame, max_partitions=12)
+
+    assert sum(len(c) for c in chunks) == len(frame), "chunking must not drop rows"
+    for chunk in chunks:
+        assert chunk["ts"].dt.to_period("M").nunique() <= 12
+    first_months = [c["ts"].min() for c in chunks]
+    assert first_months == sorted(first_months), "chunks must be in calendar order"
+
+
+def test_partition_chunks_respect_the_default_cap():
+    ts = pd.date_range("2020-01-01", periods=25, freq="MS")
+    frame = pd.DataFrame({"ts": ts})
+    chunks = bars_mod.partition_chunks(frame)
+    assert len(chunks) == 3  # 12 + 12 + 1 months
+    assert all(
+        c["ts"].dt.to_period("M").nunique() <= bars_mod.MAX_PARTITIONS_PER_INSERT
+        for c in chunks
+    )
+
+
 # ---------------------------------------------------------------------------
 # Live database round-trips
 # ---------------------------------------------------------------------------
@@ -389,6 +420,45 @@ def test_seed_warehouse_round_trip_and_reseed_is_idempotent(store_conn, store_cl
     )
     store_conn.execute(
         "DELETE FROM instruments WHERE instrument_id = %s", (instrument_id,)
+    )
+    store_conn.commit()
+
+
+@needs_store
+def test_write_bars_handles_more_months_than_one_insert_block_allows(
+    store_conn, store_client, unique_symbol
+):
+    """Regression: ClickHouse rejects an insert block touching more than 100
+    partitions (toYYYYMM of ts). Writing >100 months in one call must succeed
+    via chunked inserts and read back complete."""
+    days = pd.bdate_range("2015-01-01", "2025-06-30")  # ~126 partition months
+    assert len(days.to_period("M").unique()) > 100
+    panel = _panel(
+        unique_symbol,
+        [(str(day.date()), 10.0, 11.0, 9.5, 10.5, 1000) for day in days],
+    )
+
+    sec = Security(symbol=unique_symbol, currency=Currency.USD)
+    ids = catalog.ensure_instruments(store_conn, {unique_symbol: sec})
+    run_id = catalog.start_run(store_conn, source="test", symbols_requested=1)
+    store_conn.commit()
+
+    result = bars_mod.write_bars(
+        store_client, panel, run_id=run_id,
+        ids=ids, currencies={unique_symbol: Currency.USD}, source="test",
+    )
+    assert result.written == len(days)
+    assert result.rejected_count == 0
+
+    readback = bars_mod.load_bars(store_client, [ids[unique_symbol]])
+    assert len(readback) == len(days)
+    assert readback["ts"].min() == pd.Timestamp("2015-01-01")
+    assert readback["ts"].max() == pd.Timestamp(str(days[-1].date()))
+
+    _cleanup_bars(store_client, ids[unique_symbol])
+    store_conn.execute("DELETE FROM ingest_runs WHERE run_id = %s", (run_id,))
+    store_conn.execute(
+        "DELETE FROM instruments WHERE instrument_id = %s", (ids[unique_symbol],)
     )
     store_conn.commit()
 

@@ -65,6 +65,7 @@ from .conn import (
     session,
 )
 from .ingest import IngestReport, ingest_corporate_actions, ingest_prices
+from .macro import ingest_macro_series, series_to_bars
 from .seed import seed_warehouse
 from .migrate import (
     CH_MIGRATIONS_DIR,
@@ -103,6 +104,7 @@ __all__ = [
     "ensure_instruments",
     "finish_run",
     "ingest_corporate_actions",
+    "ingest_macro_series",
     "ingest_prices",
     "instrument_ids",
     "latest_snapshot",
@@ -119,6 +121,7 @@ __all__ = [
     "record_rejects",
     "run_history",
     "seed_warehouse",
+    "series_to_bars",
     "session",
     "snapshot_members",
     "snapshot_universe",

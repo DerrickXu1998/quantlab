@@ -24,7 +24,7 @@ END     ?=
 PROVIDERS ?= yahoo stooq
 
 .PHONY: help up down build seed logs shell docker-shell test smoke hash dump-hash gen-api \
-	check-contract sync-contract migrate ingest seed-warehouse coverage signals store-test \
+	check-contract sync-contract migrate ingest seed-warehouse ingest-macro coverage signals store-test \
 	replay-publish db-shell ch-shell destroy
 
 help: ## Show available targets
@@ -60,6 +60,14 @@ ingest: ## Ingest real history (override SYMBOLS/START/END/PROVIDERS)
 
 seed-warehouse: ## Seed the warehouse with deterministic synthetic bars (no network)
 	$(COMPOSE) run --rm ingest seed-synthetic
+
+# BoE macro history (FX fixings, Bank Rate, gilt yield, M4 growth) as
+# pseudo-instrument bars. Long default start: sterling history is the point.
+MACRO_START ?= 2010-01-01
+
+ingest-macro: ## Load BoE macro series as pseudo-instrument bars (override MACRO_START/END)
+	$(COMPOSE) run --rm ingest ingest-macro \
+		--start $(MACRO_START) $(if $(END),--end $(END),)
 
 coverage: ## What is in the store, where it came from, and how well it compresses
 	$(COMPOSE) run --rm ingest coverage

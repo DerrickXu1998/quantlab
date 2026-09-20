@@ -32,6 +32,12 @@ VIEW = "price_bars_current"
 
 _BAR_COLUMNS = ("open", "high", "low", "close", "volume", "adj_close")
 
+# The table is partitioned by toYYYYMM(ts), and ClickHouse refuses an insert
+# block touching more than max_partitions_per_insert_block (default 100)
+# partitions. A chunk of a full year stays comfortably under the default while
+# keeping the number of round-trips small for multi-decade backfills.
+MAX_PARTITIONS_PER_INSERT = 12
+
 _INSERT_COLUMNS = [
     "instrument_id",
     "frequency",
@@ -96,6 +102,30 @@ def validate(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     rejected = frame[bad].copy()
     rejected["reason"] = reason[bad]
     return frame[~bad].copy(), rejected
+
+
+def partition_chunks(
+    frame: pd.DataFrame,
+    *,
+    ts_column: str = "ts",
+    max_partitions: int = MAX_PARTITIONS_PER_INSERT,
+) -> list[pd.DataFrame]:
+    """Split a payload into chunks each touching at most `max_partitions`
+    calendar months of `ts` -- one chunk per `toYYYYMM` partition batch.
+
+    ClickHouse rejects an insert block spanning more partitions than
+    max_partitions_per_insert_block (default 100), so a long backfill must not
+    go in as one block. Chunks follow month boundaries so each insert is as
+    large as the limit safely allows. Pure: no client, no I/O.
+    """
+    if frame.empty:
+        return []
+    months = frame[ts_column].dt.to_period("M")
+    codes, uniques = pd.factorize(months, sort=True)
+    return [
+        frame[(codes >= start) & (codes < start + max_partitions)]
+        for start in range(0, len(uniques), max_partitions)
+    ]
 
 
 def write_bars(
@@ -165,10 +195,17 @@ def write_bars(
         payload["adj_close"].notna(), None
     )
 
-    client.insert_df(TABLE, payload)
+    # Chunk by partition month: a long backfill in one block trips
+    # max_partitions_per_insert_block. Chunks insert in calendar order; a
+    # mid-way failure leaves the run marked failed, and a re-run supersedes
+    # whatever landed (ReplacingMergeTree).
+    written = 0
+    for chunk in partition_chunks(payload):
+        client.insert_df(TABLE, chunk)
+        written += len(chunk)
 
     return WriteResult(
-        written=len(payload),
+        written=written,
         rejected=rejected,
         symbols_ok=int(accepted["symbol"].nunique()),
     )
