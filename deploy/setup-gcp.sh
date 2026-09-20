@@ -142,6 +142,19 @@ for role in roles/compute.osAdminLogin roles/iap.tunnelResourceAccessor roles/co
 		--member="serviceAccount:${DEPLOYER_SA}" --role="$role" --condition=None >/dev/null
 done
 
+# actAs on the INSTANCE's service account. Easy to assume this is only needed to
+# create a VM with a service account attached, but `gcloud compute ssh` requires
+# it too: connecting to an instance means borrowing the identity it runs as.
+# Without it the deploy authenticates fine, reaches IAP, and is refused at the
+# door with "User does not have iam.serviceAccounts.actAs permission" -- after
+# the images have already been built and pushed.
+#
+# Granted on the VM account specifically rather than project-wide, so the
+# deployer can impersonate this one identity and no other.
+gcloud iam service-accounts add-iam-policy-binding "$VM_SA" \
+	--member="serviceAccount:${DEPLOYER_SA}" \
+	--role=roles/iam.serviceAccountUser >/dev/null
+
 # --- 5. Workload Identity Federation -----------------------------------------
 log "workload identity pool ${POOL_ID}"
 ok_if_exists gcloud iam workload-identity-pools create "$POOL_ID" \
