@@ -23,7 +23,7 @@ START   ?= 2015-01-01
 END     ?=
 PROVIDERS ?= yahoo stooq
 
-.PHONY: help up down build seed logs shell docker-shell test smoke hash dump-hash gen-api \
+.PHONY: help up down build seed logs shell docker-shell test smoke check-warehouse hash dump-hash gen-api \
 	check-contract sync-contract migrate ingest seed-warehouse ingest-macro coverage signals store-test \
 	replay-publish db-shell ch-shell destroy
 
@@ -114,6 +114,9 @@ test: check-contract ## Run backend pytest and frontend vitest inside containers
 
 smoke: ## Run the end-to-end smoke check (health, seeded data, per-rule signals, UI)
 	bash scripts/smoke.sh
+
+check-warehouse: ## Assert the API serves the warehouse, not the silent synthetic fallback
+	bash scripts/check-warehouse.sh
 
 dump-hash: ## SHA-256 of the ordered dump of every table in the SQLite DB (determinism proof)
 	@$(COMPOSE) exec -T backend python -c 'import os, sqlite3; \

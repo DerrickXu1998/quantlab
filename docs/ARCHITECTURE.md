@@ -439,6 +439,21 @@ the document and the app drift apart.
 
 Read from the environment; **values live in `.env`, which is gitignored and must stay that way.**
 
+`docker-compose.yml` substitutes rather than hardcodes: `${QUANTLAB_CH_URL:-clickhouse://…@clickhouse:8123/quantlab}`.
+Unset, every service uses the local containers; set, they follow the override. Compose reads
+`.env` automatically, so a value there redirects the whole stack.
+
+**Set `QUANTLAB_DB_URL` and `QUANTLAB_CH_URL` together or not at all.** Setting only the
+ClickHouse URL points the bar store at one environment while the catalog stays in another:
+instruments resolve, every price query returns empty, and nothing errors. Setting neither is
+worse in a different way — `select_backend()` falls back to the synthetic demo *silently* and
+serves fictitious instruments and prices that look entirely real.
+
+`make check-warehouse` (`scripts/check-warehouse.sh`) is the guard for both. It asserts the
+dataset the API reports, that the catalog is populated, and that the first instrument actually
+returns bars — which is the assertion that catches a split bar-store/catalog pair. Run it after
+every deploy; `BACKEND_URL` and `EXPECT_DATASET` make it work against any environment.
+
 | Variable | Effect |
 |---|---|
 | `QUANTLAB_DB_URL` | Postgres catalog. With `QUANTLAB_CH_URL`, selects the warehouse |
