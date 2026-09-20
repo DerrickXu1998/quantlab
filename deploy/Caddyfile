@@ -1,12 +1,14 @@
-# QuantLab edge. One site block, address supplied by the environment:
+# QuantLab edge. This VM serves the API only -- the SPA lives on Vercel.
 #
-#   QUANTLAB_SITE_ADDRESS=quantlab.example.com  -> automatic Let's Encrypt TLS
-#   QUANTLAB_SITE_ADDRESS=:80                   -> plain HTTP (the default)
+#   QUANTLAB_SITE_ADDRESS=api.example.com  -> automatic Let's Encrypt TLS
+#   QUANTLAB_SITE_ADDRESS=:80              -> plain HTTP (the default)
 #
-# The default exists so the stack is reachable at http://<VM-IP>/ the moment it
-# boots, before any DNS record exists. Point a record at the VM, set the
-# hostname, redeploy, and Caddy provisions a certificate on first request --
-# nothing else changes, because the SPA and API are same-origin either way.
+# The `:80` default is for bringing the stack up and curling it from the VM
+# before DNS exists. It is NOT a usable production state: Vercel serves the SPA
+# over HTTPS, and a browser on an HTTPS page refuses to call an HTTP API
+# (mixed content). A hostname is therefore required in practice, and it must be
+# a hostname rather than the VM's IP -- no certificate authority will issue for
+# a bare address.
 
 {
 	# ACME registration contact. Let's Encrypt uses it for expiry warnings.
@@ -16,11 +18,12 @@
 {$QUANTLAB_SITE_ADDRESS::80} {
 	encode zstd gzip
 
-	# The whole app -- SPA and /api/ alike -- sits behind the frontend's nginx,
-	# which already history-falls-back unknown paths to index.html and proxies
-	# /api/ to the backend. Caddy does not need to know that routing exists;
-	# duplicating it here would mean two places to keep in sync.
-	reverse_proxy frontend:8080 {
+	# Straight to uvicorn. There is no nginx in this path any more: nginx only
+	# ever existed to serve the SPA and proxy /api/ to the backend, and Vercel
+	# does the first half now. FastAPI answers /api/v1/* and its own /docs;
+	# anything else it 404s as JSON, which is the correct answer from a host
+	# that is an API and nothing else.
+	reverse_proxy backend:8000 {
 		# Server-Sent Events: GET /api/v1/replay/live/stream holds a response
 		# open indefinitely. Without this Caddy buffers it and the client sees
 		# nothing until the stream ends, which it never does.

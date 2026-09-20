@@ -138,6 +138,10 @@ QUANTLAB_CH_PASSWORD=${ch_pw}
 QUANTLAB_DB_URL=postgresql://quantlab:${pg_pw}@postgres:5432/quantlab
 QUANTLAB_CH_URL=clickhouse://quantlab:${ch_pw}@clickhouse:8123/quantlab
 
+# REQUIRED -- the stack will not start until this is set, and empty counts as
+# missing. The SPA is on Vercel, so every browser call to this API is
+# cross-origin; unset, the API answers curl fine and the app sees only CORS
+# errors. Exact origins, comma-separated, no wildcards, no trailing slash.
 QUANTLAB_CORS_ORIGINS=
 
 QUANTLAB_USER_AGENT=quantlab/0.1 (research)
@@ -156,8 +160,8 @@ fi
 if [ ! -f "$APP_DIR/.env.images" ]; then
 	cat >"$APP_DIR/.env.images" <<'IMAGES'
 # Written by .github/workflows/deploy.yml on every deploy. Do not edit by hand.
+# Two images: the SPA is served by Vercel, so no frontend image runs here.
 QUANTLAB_BACKEND_IMAGE=
-QUANTLAB_FRONTEND_IMAGE=
 QUANTLAB_INGEST_IMAGE=
 IMAGES
 	chown "$DEPLOY_USER:$DEPLOY_USER" "$APP_DIR/.env.images"
@@ -216,10 +220,18 @@ Bootstrap complete.
   registry: ${AR_REGION}-docker.pkg.dev
 
 Next:
-  1. Add your ingest API keys to ${APP_DIR}/.env  (SEC_USER_AGENT, FRED_API_KEY, ...)
-  2. Push to main, or run the "deploy" workflow by hand. It copies the compose
+  1. REQUIRED: set QUANTLAB_CORS_ORIGINS in ${APP_DIR}/.env to your Vercel
+     origin (e.g. https://your-project.vercel.app). The stack will not start
+     without it. This VM serves the API only -- the SPA is on Vercel, so every
+     browser call is cross-origin and an empty allow-list blocks all of them.
+  2. REQUIRED for a working app: point a DNS record at this VM and set
+     QUANTLAB_SITE_ADDRESS to that hostname. Vercel serves the SPA over HTTPS
+     and a browser will not let an HTTPS page call an HTTP API, so the plain-HTTP
+     default is only good for curling the box from itself.
+  3. Add your ingest API keys to ${APP_DIR}/.env  (SEC_USER_AGENT, FRED_API_KEY, ...)
+  4. In Vercel, set VITE_API_BASE_URL to https://<that-hostname>/api/v1 so the
+     SPA calls this VM instead of its own origin.
+  5. Push to main, or run the "deploy" workflow by hand. It copies the compose
      file here, writes ${APP_DIR}/.env.images, and starts the stack.
-  3. Once DNS points at this VM, set QUANTLAB_SITE_ADDRESS to the hostname and
-     redeploy for automatic HTTPS.
 
 DONE

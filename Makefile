@@ -198,11 +198,21 @@ prod-ip: require-zone ## Print the VM's external IP
 	@gcloud compute instances describe $(GCP_INSTANCE) --zone $(GCP_ZONE) \
 		--format='value(networkInterfaces[0].accessConfigs[0].natIP)'
 
+# Once QUANTLAB_SITE_ADDRESS is a hostname, Caddy serves that name and nothing
+# else -- a request to the bare IP matches no site block and gets a 404. Set
+# PROD_URL (export PROD_URL=https://api.example.com) and these targets follow it;
+# the IP fallback is only right for the pre-DNS, plain-HTTP state.
+PROD_URL ?=
+
+prod-url: require-zone ## Print the API base URL (PROD_URL if set, else the VM's IP)
+	@if [ -n "$(PROD_URL)" ]; then echo "$(PROD_URL)"; \
+	else echo "http://$$($(MAKE) -s prod-ip)"; fi
+
 prod-health: require-zone ## Hit the public health endpoint
-	@curl -fsS "http://$$($(MAKE) -s prod-ip)/api/v1/health"; echo
+	@curl -fsS "$$($(MAKE) -s prod-url)/api/v1/health"; echo
 
 prod-check: require-zone ## Assert production serves the warehouse, not the synthetic fallback
-	@BACKEND_URL="http://$$($(MAKE) -s prod-ip)" bash scripts/check-warehouse.sh
+	@BACKEND_URL="$$($(MAKE) -s prod-url)" bash scripts/check-warehouse.sh
 
 prod-coverage: require-zone ## What production has ingested, and how well it compresses
 	$(call prod_ssh,cd $(PROD_DIR) && $(PROD_COMPOSE) --profile ingest run --rm ingest coverage)
@@ -223,5 +233,5 @@ prod-rollback: require-zone ## Roll production back to the previous image tags
 	$(call prod_ssh,cd $(PROD_DIR) && sudo cp .env.images.prev .env.images && sudo systemctl restart quantlab)
 	@echo "rolled back; check with 'make prod-ps'"
 
-.PHONY: require-zone prod-ssh prod-ps prod-logs prod-ip prod-health prod-check \
+.PHONY: require-zone prod-ssh prod-ps prod-logs prod-ip prod-url prod-health prod-check \
 	prod-coverage prod-ingest prod-signals prod-restart prod-rollback

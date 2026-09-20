@@ -4,7 +4,11 @@
 # GitHub Actions copies this file, docker-compose.prod.yml, the Caddyfile and
 # clickhouse-limits.xml into a staging directory, then runs:
 #
-#     sudo bash remote-deploy.sh <backend-image> <frontend-image> <ingest-image>
+#     sudo bash remote-deploy.sh <backend-image> <ingest-image>
+#
+# Two images, not three: the SPA is served by Vercel, so this VM runs the API
+# only. The ingest image is not optional -- the `migrate` service runs from it,
+# and the backend will not start until that container has exited successfully.
 #
 # It lives here rather than inline in the workflow YAML so it can be read,
 # linted and run by hand during an incident -- when the last thing you want is
@@ -21,9 +25,8 @@ STAGE_DIR="${STAGE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 HEALTH_TRIES="${HEALTH_TRIES:-60}"
 HEALTH_INTERVAL="${HEALTH_INTERVAL:-5}"
 
-BACKEND_IMAGE="${1:?usage: remote-deploy.sh <backend-image> <frontend-image> <ingest-image>}"
-FRONTEND_IMAGE="${2:?missing frontend image}"
-INGEST_IMAGE="${3:?missing ingest image}"
+BACKEND_IMAGE="${1:?usage: remote-deploy.sh <backend-image> <ingest-image>}"
+INGEST_IMAGE="${2:?missing ingest image}"
 
 log() { printf '\n=== %s\n' "$*"; }
 fail() { printf 'DEPLOY FAIL: %s\n' "$*" >&2; exit 1; }
@@ -54,7 +57,6 @@ cat >"$APP_DIR/.env.images" <<IMAGES
 # Written by deploy/remote-deploy.sh at $(date -u +%Y-%m-%dT%H:%M:%SZ). Do not edit by hand.
 # Rollback: cp .env.images.prev .env.images && systemctl restart quantlab
 QUANTLAB_BACKEND_IMAGE=${BACKEND_IMAGE}
-QUANTLAB_FRONTEND_IMAGE=${FRONTEND_IMAGE}
 QUANTLAB_INGEST_IMAGE=${INGEST_IMAGE}
 IMAGES
 chmod 0644 "$APP_DIR/.env.images"
@@ -67,7 +69,7 @@ compose config >/dev/null || fail "the compose file does not resolve with this e
 # Pull before touching the running stack: a registry or permission failure then
 # leaves the current version serving, rather than a half-stopped one.
 log "pulling images"
-compose pull --quiet backend frontend || fail "could not pull the new images"
+compose pull --quiet backend || fail "could not pull $BACKEND_IMAGE"
 docker pull --quiet "$INGEST_IMAGE" >/dev/null || fail "could not pull $INGEST_IMAGE"
 
 # --- 4. start -----------------------------------------------------------------
@@ -92,14 +94,31 @@ for i in $(seq 1 "$HEALTH_TRIES"); do
 done
 
 # --- 6. prove the edge serves it ---------------------------------------------
-# Container health only says uvicorn answers. This is the path a browser takes:
-# Caddy -> nginx -> uvicorn. A broken Caddyfile or nginx proxy fails only here.
+# Container health only says uvicorn answers on its own port. This is the path a
+# browser takes: Caddy -> uvicorn. A broken Caddyfile fails only here.
 log "checking the edge"
-curl -fsS --max-time 15 -o /dev/null http://localhost/ ||
-	fail "Caddy did not serve the SPA at http://localhost/"
 health="$(curl -fsS --max-time 15 http://localhost/api/v1/health)" ||
 	fail "Caddy did not proxy /api/v1/health"
 printf 'health: %s\n' "$health"
+
+# The SPA is on Vercel and calls this API cross-origin, so a missing or wrong
+# allow-list breaks the whole app while leaving every server-side check green:
+# curl has no Origin header, so it never notices. The configured origin comes
+# from .env -- the API does not report it -- but the assertion is a real
+# preflight against the running service, not a re-read of the file.
+log "checking CORS"
+origin="$(sed -n 's/^QUANTLAB_CORS_ORIGINS=//p' "$APP_DIR/.env" |
+	head -1 | cut -d, -f1 | tr -d ' "'"'"'')"
+[ -n "$origin" ] ||
+	fail "QUANTLAB_CORS_ORIGINS is empty in $APP_DIR/.env; set it to the Vercel origin or the SPA cannot call this API"
+allowed="$(curl -fsS --max-time 15 -o /dev/null -w '%{http_code}' \
+	-H "Origin: ${origin}" \
+	-H 'Access-Control-Request-Method: POST' \
+	-H 'Access-Control-Request-Headers: content-type' \
+	-X OPTIONS http://localhost/api/v1/runs || true)"
+[ "$allowed" = "200" ] ||
+	fail "preflight from ${origin} returned ${allowed}, not 200 -- the SPA will be blocked by the browser"
+printf 'preflight from %s: ok\n' "$origin"
 
 # The silent-fallback guard. select_backend() drops to the synthetic SQLite demo
 # when either warehouse URL is missing, and serves fictitious prices that look
