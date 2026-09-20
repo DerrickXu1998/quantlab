@@ -33,7 +33,7 @@ cid="$("${COMPOSE[@]}" ps -q "$SERVICE" 2>/dev/null || true)"
 
 # Pick a shell the image actually ships (nginx:alpine has no bash).
 SHELL_BIN=bash
-docker exec "$cid" sh -c 'command -v bash >/dev/null 2>&1' || SHELL_BIN=sh
+docker exec "$cid" sh -c 'command -v bash >/dev/null 2>&1' || SHELL_BIN='sh'
 
 # Without a TTY (CI, pipes) `compose exec` must be told not to allocate one.
 TTY_FLAG=()
