@@ -17,9 +17,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from quantlab import auth
 from quantlab.api import routes
 from quantlab.logging import get_logger
-from quantlab.storage import backends, experiments
+from quantlab.storage import backends, experiments, strategies
 
 DEFAULT_DB_PATH = "/data/quantlab.db"
 
@@ -60,6 +61,10 @@ def create_app(db_path: str | Path | None = None, backend=None) -> FastAPI:
     app.state.backend = backend or backends.select_backend(app.state.db_path)
     # Mirrors select_backend: the warehouse when configured, else the demo.
     app.state.experiments = experiments.select_experiment_store(app.state.db_path)
+    # Identity and saved strategies. Both live with the demo database rather
+    # than the bar store: they are small, mutable, and want foreign keys.
+    app.state.auth = auth.AuthService(auth.select_user_store(app.state.db_path))
+    app.state.strategies = strategies.select_strategy_store(app.state.db_path)
     app.include_router(routes.router, prefix="/api/v1")
 
     origins = resolve_cors_origins()
@@ -67,9 +72,33 @@ def create_app(db_path: str | Path | None = None, backend=None) -> FastAPI:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=origins,
-            allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-            allow_headers=["content-type"],
+            # Credentials are carried in an Authorization header, never a
+            # cookie, so the browser never attaches them to a cross-site
+            # request on its own and there is no CSRF surface to defend.
+            # allow_credentials stays off deliberately.
+            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+            allow_headers=["content-type", "authorization"],
         )
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        """Headers that cost nothing and close whole classes of attack.
+
+        No Content-Security-Policy: the SPA is served by nginx, not by this
+        app, so a policy set here would apply only to the JSON API and to the
+        docs page, and would give a false impression of coverage. That belongs
+        in the frontend's nginx config, and is recorded as such in
+        docs/SECURITY.md.
+        """
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        # An authenticated response must not be cached by a shared proxy and
+        # then served to somebody else.
+        if "authorization" in request.headers:
+            response.headers.setdefault("Cache-Control", "no-store")
+        return response
 
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
@@ -91,8 +120,21 @@ def create_app(db_path: str | Path | None = None, backend=None) -> FastAPI:
             "db_path": app.state.db_path,
             "backend": app.state.backend.name,
             "cors_origins": origins,
+            "auth_required": auth.auth_required(),
         },
     )
+    if not auth.auth_required():
+        # Loud, because an operator who forgets this in production has an API
+        # where every caller is the same user and nothing is private.
+        logger.warning(
+            "auth_disabled",
+            extra={
+                "detail": (
+                    "QUANTLAB_AUTH_REQUIRED is false: every request is attributed "
+                    "to the built-in local account and no data is private"
+                )
+            },
+        )
     return app
 
 

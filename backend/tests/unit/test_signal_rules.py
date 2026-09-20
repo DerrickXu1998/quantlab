@@ -177,4 +177,9 @@ def test_engine_orders_output_deterministically():
     assert [(s.symbol, s.date, s.rule_name) for s in signals] == sorted(
         (s.symbol, s.date, s.rule_name) for s in signals
     )
-    assert [s.rule_name for s in signals] == ["breakout-20d"]
+    # A 5% jump after a flat run trips the breakout. Which *other* rules also
+    # fire is a property of the catalogue, not of the ordering under test.
+    assert "breakout-20d" in [s.rule_name for s in signals]
+    # Filters describe a state and emit every bar; they must never reach a
+    # table of materialised signals.
+    assert "rsi-zone" not in [s.rule_name for s in signals]

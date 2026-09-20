@@ -43,6 +43,9 @@ quantlab run examples/config.example.yaml --out features.parquet
 | **[docs/DATA_SOURCES.md](docs/DATA_SOURCES.md)** | Every free source, verified Sept 2026: limits, coverage, licensing, and what to skip. |
 | **[docs/INDICATORS.md](docs/INDICATORS.md)** | All 92 features, with an opinion on which ones actually earn their place. |
 | **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | Panel shape, plugin contracts, point-in-time enforcement, performance. |
+| **[docs/EXECUTION_MODEL.md](docs/EXECUTION_MODEL.md)** | What actually executes a trade: which bar, which price field, and why a stop beats a target inside one bar. Includes what the backtester still is not. |
+| **[docs/STRATEGY_GUIDE.md](docs/STRATEGY_GUIDE.md)** | Signals vs strategies, the three roles, the four combination modes, every execution criterion and its failure mode, four worked starter strategies. |
+| **[docs/SECURITY.md](docs/SECURITY.md)** | Threat model, the auth design and why those choices, an honest list of what is still missing, and the pre-exposure checklist. |
 | **[examples/](examples/)** | Quickstart script, full pipeline config, and a complete third-party plugin. |
 | **[docs/SIGNAL_VIEWER_DEMO.md](docs/SIGNAL_VIEWER_DEMO.md)** | The dockerized signal viewer demo: `make up`, `make docker-shell`, and the rest of the target list. |
 | **[docs/DEPLOY.md](docs/DEPLOY.md)** | Running it for real: one Compute Engine VM, images from Artifact Registry, deploys from GitHub Actions. What it costs and how to roll back. |
@@ -83,6 +86,52 @@ sells.
 fiscal period end, and every externally-sourced feature declares a publication lag the
 engine enforces. A test asserts no `external` feature ships with `lag=0`, and another sweeps
 all 70 indicators for accidental look-ahead.
+
+## Strategies, execution criteria and accounts
+
+The demo app has a second contract on top of the indicator library:
+[`docs/CONTRACT_V2.md`](docs/CONTRACT_V2.md), covering strategies, execution and
+identity. It is in progress: the strategy, execution and signal-catalogue
+libraries exist under `backend/src/quantlab/`, the API routes do not call them
+yet, and identity is not started.
+[`docs/EXECUTION_MODEL.md`](docs/EXECUTION_MODEL.md) §10 tracks exactly what is
+built and what is left.
+
+**A signal is not a strategy.** A signal rule maps bars to directional events —
+a date and a direction, nothing else. A *strategy* assigns several rules a role
+(`entry`, `exit`, `filter`), combines them (`all` / `any` / `majority` /
+`weighted`), and attaches the execution criteria that turn a decision into
+orders. Filters gate entries and never exits: a filter turning off must not trap
+a position in the book.
+
+**Execution criteria are fields, not assumptions.** Fill timing
+(`signal_close` or `next_open`), commission and slippage in basis points per
+side, stops (fixed, trailing, or ATR-scaled), take-profits, holding-period
+bounds, cooldowns, sizing mode and position caps. Every one of them is reported
+back on the run, so a result carries the assumptions that produced it rather
+than a fixed caveat string.
+
+**One thing worth knowing before you read a number.** When a stop and a target
+both sit inside a single bar's high–low range, the engine takes the stop. A
+daily bar does not record which came first, and assuming the favourable one adds
+a positive bias concentrated in the widest bars — which is exactly where a
+parameter sweep will push you. The pessimistic reading is the only one that
+survives contact with real money.
+[`docs/EXECUTION_MODEL.md`](docs/EXECUTION_MODEL.md) works the arithmetic
+through five bars, both ways: −2.60% or +4.89% on one trade.
+
+**Authentication.** Opaque bearer tokens, not JWTs — a session is a database row,
+so logout genuinely revokes it. Only the token's SHA-256 is stored, so a database
+read does not yield a usable credential. Passwords use PBKDF2-HMAC-SHA256 from
+the standard library rather than adding an argon2 dependency; argon2id would be
+better and the trade-off is written down in
+[`docs/SECURITY.md`](docs/SECURITY.md) rather than assumed. Login answers `401`
+identically for an unknown email and a wrong password, and reading another user's
+row is `404` rather than `403`, because a `403` confirms the row exists.
+
+`QUANTLAB_AUTH_REQUIRED=false` restores the open local demo by binding every
+request to a built-in `local` user. It is not a deployment mode — on a public
+host every visitor shares that one account.
 
 ## Adding your own
 

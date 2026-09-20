@@ -17,12 +17,14 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import StreamingResponse
 
-from quantlab.api import schemas
+from quantlab import auth as auth_lib
+from quantlab.api import schemas, security
+from quantlab.api.security import CurrentUser, owner_scope
 from quantlab.replay import engine as replay_engine
 from quantlab.research import errors as research_errors
 from quantlab.research import performance, runner
-from quantlab.signals import builtins as _builtins  # noqa: F401  (registers builtin rules)
 from quantlab.signals import registry as signal_registry
+from quantlab.strategy import StrategySpec, StrategyValidationError, templates
 from quantlab.streaming import bus as streaming_bus
 from quantlab.streaming import live as streaming_live
 
@@ -44,6 +46,15 @@ def experiments(request: Request):
     return request.app.state.experiments
 
 
+def strategies_store(request: Request):
+    """Where saved strategies are kept. Every method takes an owner."""
+    return request.app.state.strategies
+
+
+def auth_service(request: Request):
+    return request.app.state.auth
+
+
 def require_seeded(request: Request) -> None:
     """Guard for data routes: 503 until there is data to serve (FR-003)."""
     has_data, _ = backend(request).health()
@@ -61,7 +72,12 @@ def get_health(request: Request) -> schemas.Health:
     active = backend(request)
     has_data, signal_count = active.health()
     return schemas.Health(
-        dataset=active.name, seeded=has_data, signal_count=signal_count
+        dataset=active.name,
+        seeded=has_data,
+        signal_count=signal_count,
+        # Unauthenticated on purpose: the SPA has to know whether to show a
+        # sign-in gate before it can possibly have a token.
+        auth_required=auth_lib.auth_required(),
     )
 
 
@@ -159,6 +175,9 @@ def _model_to_schema(rule) -> dict:
         "lookback_days": rule.lookback_days,
         "scale_class": rule.scale_class,
         "direction_semantics": rule.direction_semantics,
+        "category": rule.category,
+        "summary": rule.summary,
+        "roles": list(rule.roles),
     }
 
 
@@ -185,12 +204,52 @@ def _is_registered(model_name: str, model_version: str) -> bool:
 
 def _run_response(run: dict, dataset: str = "sqlite") -> dict:
     run = dict(run)
+    run.pop("owner_id", None)  # internal; the caller is the owner by construction
     run["model_available"] = _is_registered(run["model_name"], run["model_version"])
     run.setdefault("dataset", dataset)
     # A run recorded against a different dataset stays readable but cannot be
     # reproduced as recorded.
     run["re_runnable"] = run["dataset"] == dataset
     return run
+
+
+def _resolve_request_strategy(request: Request, body: schemas.RunRequest, user) -> dict | None:
+    """The strategy a run request names, whichever way it names it.
+
+    Exactly one of the three forms is accepted. Silently preferring one when
+    two are given would run something other than what the caller wrote.
+    """
+    given = [
+        name
+        for name, value in (
+            ("model_name", body.model_name),
+            ("strategy_id", body.strategy_id),
+            ("strategy", body.strategy),
+        )
+        if value
+    ]
+    if len(given) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail=f"give exactly one of model_name, strategy_id or strategy; got {given}",
+        )
+    if not given:
+        raise HTTPException(
+            status_code=400,
+            detail="a run needs one of model_name, strategy_id or strategy",
+        )
+
+    if body.strategy_id:
+        saved = strategies_store(request).get(owner_scope(user) or user.id, body.strategy_id)
+        if saved is None:
+            # Another user's strategy reads as absent, never as forbidden.
+            raise HTTPException(
+                status_code=404, detail=f"unknown strategy: {body.strategy_id}"
+            )
+        return saved
+    if body.strategy is not None:
+        return body.strategy.model_dump()
+    return None
 
 
 @router.post(
@@ -201,18 +260,22 @@ def _run_response(run: dict, dataset: str = "sqlite") -> dict:
     operation_id="createRun",
     dependencies=[Depends(require_seeded)],
 )
-def create_run(request: Request, body: schemas.RunRequest) -> dict:
+def create_run(request: Request, body: schemas.RunRequest, user: CurrentUser) -> dict:
     active = backend(request)
     store = experiments(request)
+    spec = _resolve_request_strategy(request, body, user)
     try:
         result = runner.run_experiment(
             active,
+            strategy=spec,
             model_name=body.model_name,
             model_version=body.model_version,
             overrides=body.parameters,
+            execution=body.execution.model_dump() if body.execution else None,
             symbols=body.symbols,
             start_date=body.start_date,
             end_date=body.end_date,
+            owner_id=user.id,
         )
     except research_errors.UnknownModelError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -228,7 +291,7 @@ def create_run(request: Request, body: schemas.RunRequest) -> dict:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     store.save_run(result)
-    stored = store.get_run(result.id)
+    stored = store.get_run(result.id, owner_scope(user))
     return _run_response(stored, active.name)
 
 
@@ -239,8 +302,10 @@ def create_run(request: Request, body: schemas.RunRequest) -> dict:
     operation_id="listRuns",
     dependencies=[Depends(require_seeded)],
 )
-def list_runs(request: Request, saved_only: bool = False) -> dict:
-    result = experiments(request).list_runs(saved_only=saved_only)
+def list_runs(request: Request, user: CurrentUser, saved_only: bool = False) -> dict:
+    result = experiments(request).list_runs(
+        saved_only=saved_only, owner_id=owner_scope(user)
+    )
     active = backend(request).name
     return {"total": result["total"], "items": [_run_response(r, active) for r in result["items"]]}
 
@@ -252,9 +317,9 @@ def list_runs(request: Request, saved_only: bool = False) -> dict:
     operation_id="getRun",
     dependencies=[Depends(require_seeded)],
 )
-def get_run(request: Request, run_id: str) -> dict:
+def get_run(request: Request, run_id: str, user: CurrentUser) -> dict:
     store = experiments(request)
-    run = store.get_run(run_id)
+    run = store.get_run(run_id, owner_scope(user))
     if run is None:
         raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
     signals = store.get_run_signals(run_id)
@@ -267,11 +332,11 @@ def get_run(request: Request, run_id: str) -> dict:
     operation_id="getRunPerformance",
     dependencies=[Depends(require_seeded)],
 )
-def get_run_performance(request: Request, run_id: str) -> dict:
+def get_run_performance(request: Request, run_id: str, user: CurrentUser) -> dict:
     """Still a thin handler: the analytics live in research.performance, which
     is where the frontend cannot reach them (Constitution V)."""
     store = experiments(request)
-    run = store.get_run(run_id)
+    run = store.get_run(run_id, owner_scope(user))
     if run is None:
         raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
     # A failed run has no performance. Zeroed figures would read as a flat
@@ -281,14 +346,18 @@ def get_run_performance(request: Request, run_id: str) -> dict:
         raise HTTPException(status_code=409, detail=f"run {run_id} failed; it has no performance")
 
     symbols = list(run["symbols"])
-    # The reported window only: warm-up bars are inputs to the signals, not
-    # part of the period being measured.
-    bars = backend(request).load_bars_for(symbols, run["start_date"], run["end_date"])
+    # Bars are loaded from the warm-up start, not the window start: a stop set
+    # from an ATR on the first session of the window needs the sessions behind
+    # it. Nothing can happen in the warm-up -- no signal is dated there.
+    signals, bars = replay_engine.load_replay_inputs(backend(request), store, run)
     result = performance.compute_performance(
         run_id=run_id,
-        signals=store.get_run_signals(run_id),
+        signals=signals,
         bars_by_symbol=bars,
         symbols=symbols,
+        execution=runner.execution_config_for(run),
+        window_start=run["start_date"],
+        window_end=run["end_date"],
     )
     return asdict(result)
 
@@ -300,11 +369,13 @@ def get_run_performance(request: Request, run_id: str) -> dict:
     operation_id="saveRun",
     dependencies=[Depends(require_seeded)],
 )
-def save_run(request: Request, run_id: str, body: schemas.RunNameRequest) -> dict:
+def save_run(
+    request: Request, run_id: str, body: schemas.RunNameRequest, user: CurrentUser
+) -> dict:
     store = experiments(request)
-    if not store.set_run_name(run_id, body.name):
+    if not store.set_run_name(run_id, body.name, owner_scope(user)):
         raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
-    run = store.get_run(run_id)
+    run = store.get_run(run_id, owner_scope(user))
     return _run_response(run, backend(request).name)
 
 
@@ -315,8 +386,8 @@ def save_run(request: Request, run_id: str, body: schemas.RunNameRequest) -> dic
     operation_id="deleteRun",
     dependencies=[Depends(require_seeded)],
 )
-def delete_run(request: Request, run_id: str) -> None:
-    if not experiments(request).delete_run(run_id):
+def delete_run(request: Request, run_id: str, user: CurrentUser) -> None:
+    if not experiments(request).delete_run(run_id, owner_scope(user)):
         raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
 
 
@@ -327,9 +398,9 @@ def delete_run(request: Request, run_id: str) -> None:
 # and frame the events.
 
 
-def _replayable_run(request: Request, run_id: str) -> dict:
+def _replayable_run(request: Request, run_id: str, user) -> dict:
     store = experiments(request)
-    run = store.get_run(run_id)
+    run = store.get_run(run_id, owner_scope(user))
     if run is None:
         raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
     # A failed run has nothing to replay; as with performance, zeroed output
@@ -348,11 +419,12 @@ def _replayable_run(request: Request, run_id: str) -> dict:
 def stream_run_replay(
     request: Request,
     run_id: str,
+    user: CurrentUser,
     interval_ms: Annotated[int, Query(ge=0, le=10_000)] = 0,
     max_events: Annotated[int, Query(ge=1, le=5_000_000)] = 250_000,
     step: Annotated[int, Query(ge=1)] = 1,
 ) -> StreamingResponse:
-    run = _replayable_run(request, run_id)
+    run = _replayable_run(request, run_id, user)
     signals, bars = replay_engine.load_replay_inputs(backend(request), experiments(request), run)
 
     def frames():
@@ -386,8 +458,8 @@ def stream_run_replay(
     operation_id="getRunReplaySummary",
     dependencies=[Depends(require_seeded)],
 )
-def get_run_replay_summary(request: Request, run_id: str) -> dict:
-    run = _replayable_run(request, run_id)
+def get_run_replay_summary(request: Request, run_id: str, user: CurrentUser) -> dict:
+    run = _replayable_run(request, run_id, user)
     signals, bars = replay_engine.load_replay_inputs(backend(request), experiments(request), run)
     return asdict(replay_engine.replay_summary(run, signals, bars))
 
@@ -485,3 +557,215 @@ def stream_live_replay(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# --- Identity ---------------------------------------------------------------
+#
+# Thin handlers again: every security decision lives in quantlab.auth, and this
+# only maps a typed failure to a status code. The one rule enforced here is
+# that registration is helpful about *why* a request failed and login is not --
+# a login that explains itself is an account-enumeration oracle.
+
+
+@router.post(
+    "/auth/register",
+    response_model=schemas.SessionOut,
+    status_code=201,
+    tags=["auth"],
+    operation_id="register",
+)
+def register(request: Request, body: schemas.Credentials) -> dict:
+    try:
+        session = auth_service(request).register(body.email, body.password)
+    except auth_lib.EmailAlreadyRegistered as exc:
+        # A 409 here does disclose that an address is registered. That is
+        # unavoidable for a self-service signup form -- refusing to say so
+        # would mean silently not creating the account -- and it is why the
+        # *login* path is the one hardened against enumeration.
+        raise HTTPException(
+            status_code=409, detail="that email address is already registered"
+        ) from exc
+    except auth_lib.PasswordPolicyError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "user": session.user.to_dict(),
+        "token": session.token,
+        "expires_at": session.expires_at,
+    }
+
+
+@router.post(
+    "/auth/login",
+    response_model=schemas.SessionOut,
+    tags=["auth"],
+    operation_id="login",
+)
+def login(request: Request, body: schemas.Credentials) -> dict:
+    try:
+        session = auth_service(request).login(body.email, body.password)
+    except auth_lib.RateLimited as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=str(exc),
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+    except auth_lib.AuthError as exc:
+        raise HTTPException(
+            status_code=401,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+    return {
+        "user": session.user.to_dict(),
+        "token": session.token,
+        "expires_at": session.expires_at,
+    }
+
+
+@router.post(
+    "/auth/logout",
+    status_code=204,
+    tags=["auth"],
+    operation_id="logout",
+)
+def logout(request: Request, user: CurrentUser) -> None:
+    """Revoke this session and no other.
+
+    Possible only because a session is a row. A signed stateless token could
+    not be withdrawn before it expired, which would make this endpoint a
+    gesture rather than a control.
+    """
+    token = security.bearer_token(request.headers.get("authorization"))
+    if token:
+        auth_service(request).logout(token)
+
+
+@router.get(
+    "/auth/me",
+    response_model=schemas.UserOut,
+    tags=["auth"],
+    operation_id="getCurrentUser",
+)
+def get_current_user(user: CurrentUser) -> dict:
+    return user.to_dict()
+
+
+# --- Strategies -------------------------------------------------------------
+#
+# Every handler is scoped to the caller. A strategy that is not theirs reads as
+# absent rather than forbidden: a 403 confirms the row exists.
+
+
+def _strategy_response(stored: dict) -> dict:
+    """Attach the warnings a spec generates about itself.
+
+    Computed rather than stored: a strategy with no exit component was legal
+    when it was saved and is still legal, but what is worth flagging about it
+    can change as the engine does, and a stored copy would go stale.
+    """
+    body = dict(stored)
+    try:
+        body["warnings"] = StrategySpec.from_dict(stored).warnings
+    except (StrategyValidationError, ValueError):
+        # A stored spec this build can no longer validate is still readable;
+        # saying so is more useful than refusing to list it at all.
+        body["warnings"] = [
+            "This strategy cannot be validated by this version of QuantLab and "
+            "may not be runnable."
+        ]
+    return body
+
+
+def _parse_strategy(body: schemas.StrategyRequest) -> StrategySpec:
+    try:
+        return StrategySpec.from_dict(body.model_dump())
+    except (StrategyValidationError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get(
+    "/strategies",
+    response_model=schemas.StrategyList,
+    tags=["strategies"],
+    operation_id="listStrategies",
+)
+def list_strategies(request: Request, user: CurrentUser) -> dict:
+    result = strategies_store(request).list(user.id)
+    return {
+        "total": result["total"],
+        "items": [_strategy_response(item) for item in result["items"]],
+    }
+
+
+@router.post(
+    "/strategies",
+    response_model=schemas.Strategy,
+    status_code=201,
+    tags=["strategies"],
+    operation_id="createStrategy",
+)
+def create_strategy(
+    request: Request, body: schemas.StrategyRequest, user: CurrentUser
+) -> dict:
+    spec = _parse_strategy(body)
+    return _strategy_response(strategies_store(request).create(user.id, spec))
+
+
+@router.get(
+    "/strategies/{strategy_id}",
+    response_model=schemas.Strategy,
+    tags=["strategies"],
+    operation_id="getStrategy",
+)
+def get_strategy(request: Request, strategy_id: str, user: CurrentUser) -> dict:
+    stored = strategies_store(request).get(user.id, strategy_id)
+    if stored is None:
+        raise HTTPException(status_code=404, detail=f"unknown strategy: {strategy_id}")
+    return _strategy_response(stored)
+
+
+@router.put(
+    "/strategies/{strategy_id}",
+    response_model=schemas.Strategy,
+    tags=["strategies"],
+    operation_id="replaceStrategy",
+)
+def replace_strategy(
+    request: Request,
+    strategy_id: str,
+    body: schemas.StrategyRequest,
+    user: CurrentUser,
+) -> dict:
+    spec = _parse_strategy(body)
+    stored = strategies_store(request).replace(user.id, strategy_id, spec)
+    if stored is None:
+        raise HTTPException(status_code=404, detail=f"unknown strategy: {strategy_id}")
+    return _strategy_response(stored)
+
+
+@router.delete(
+    "/strategies/{strategy_id}",
+    status_code=204,
+    tags=["strategies"],
+    operation_id="deleteStrategy",
+)
+def delete_strategy(request: Request, strategy_id: str, user: CurrentUser) -> None:
+    if not strategies_store(request).delete(user.id, strategy_id):
+        raise HTTPException(status_code=404, detail=f"unknown strategy: {strategy_id}")
+
+
+@router.get(
+    "/strategy-templates",
+    response_model=schemas.StrategyTemplateList,
+    tags=["strategies"],
+    operation_id="listStrategyTemplates",
+)
+def list_strategy_templates() -> dict:
+    """Complete starter strategies, for a builder that would otherwise be a wall.
+
+    Unauthenticated: they are identical for everyone and contain nothing of
+    anybody's. Assembled at request time, so adding a template needs no change
+    here.
+    """
+    items = templates.catalogue()
+    return {"total": len(items), "items": items}

@@ -1,10 +1,12 @@
 import { AlertTriangle, TriangleAlert } from 'lucide-react';
 import { useState } from 'react';
-import type { Run, RunDetail } from '../api/client';
+import type { Run } from '../api/client';
+import type { ExecutionConfig, RunDetailV2 } from '../api/types';
 import { navigate } from '../chrome/router';
 import { useRunPerformance } from '../quantlab/data/useRunPerformance';
 import { EquityCurve } from '../quantlab/charts/EquityCurve';
 import { Assumptions } from '../quantlab/panels/Assumptions';
+import { ExitBreakdown } from '../quantlab/panels/ExitBreakdown';
 import { StatRow } from '../quantlab/panels/StatRow';
 import { TradeLog } from '../quantlab/panels/TradeLog';
 import { useRuns } from '../runs/RunsContext';
@@ -58,7 +60,7 @@ function Coverage({ run }: { run: Run }) {
   );
 }
 
-function Provenance({ run }: { run: RunDetail }) {
+function Provenance({ run }: { run: RunDetailV2 }) {
   return (
     <p className="mt-1 text-xs text-muted-foreground">
       <span
@@ -67,7 +69,11 @@ function Provenance({ run }: { run: RunDetail }) {
       >
         {run.dataset === 'warehouse' ? 'live history' : 'demo data'}
       </span>
-      · {run.model_name} v{run.model_version} · {run.start_date} → {run.end_date} ·{' '}
+      · {run.model_name} v{run.model_version} ·{' '}
+      <span className="tabular-nums">
+        {run.start_date} → {run.end_date}
+      </span>{' '}
+      ·{' '}
       <span className="font-mono">
         {Object.entries(run.parameters)
           .map(([key, value]) => `${key}=${String(value)}`)
@@ -78,7 +84,7 @@ function Provenance({ run }: { run: RunDetail }) {
 }
 
 /** Naming a run is what keeps it: saved experiments survive the session. */
-function SaveExperiment({ run }: { run: RunDetail }) {
+function SaveExperiment({ run }: { run: RunDetailV2 }) {
   const { save } = useRuns();
   const [name, setName] = useState('');
   const [saving, setSaving] = useState(false);
@@ -136,7 +142,7 @@ function SaveExperiment({ run }: { run: RunDetail }) {
  * Failed, empty and populated are three visibly different states. A run that
  * found nothing is a result and is not dressed as an error.
  */
-export function RunResultsView({ run }: { run: RunDetail }) {
+export function RunResultsView({ run }: { run: RunDetailV2 }) {
   const performance = useRunPerformance(
     run.status === 'completed' && run.signal_count > 0 ? run.id : null,
   );
@@ -201,6 +207,8 @@ export function RunResultsView({ run }: { run: RunDetail }) {
         </div>
       ) : null}
 
+      {run.strategy ? <StrategyProvenance run={run} /> : null}
+
       {run.status === 'failed' ? (
         <EmptyState
           testId="run-failed"
@@ -237,7 +245,14 @@ export function RunResultsView({ run }: { run: RunDetail }) {
                 benchmarkLabel="Buy & hold"
                 height={220}
               />
+              {/* Above the trade log, not below it: the assumptions are now
+                  derived from the execution criteria this run was actually
+                  given, so they are the context the numbers above are read in. */}
               <Assumptions assumptions={performance.performance.assumptions} />
+              <ExitBreakdown
+                performance={performance.performance}
+                summary={run.execution_summary}
+              />
               <Panel title="Trade log" bodyClassName="p-0">
                 <TradeLog trades={performance.performance.trades} />
               </Panel>
@@ -279,5 +294,81 @@ export function RunResultsView({ run }: { run: RunDetail }) {
         </>
       )}
     </div>
+  );
+}
+
+/** The execution fields worth stating on a result, in one line. */
+function executionChips(execution: ExecutionConfig): string[] {
+  const chips: string[] = [];
+  chips.push(execution.fill_timing === 'next_open' ? 'fills next open' : 'fills at signal close');
+  chips.push(`${execution.position_sizing.replace(/_/g, ' ')} sizing`);
+  if (execution.max_positions !== null) chips.push(`max ${execution.max_positions} positions`);
+  if (execution.commission_bps > 0) chips.push(`${execution.commission_bps} bps commission`);
+  if (execution.slippage_bps > 0) chips.push(`${execution.slippage_bps} bps slippage`);
+  if (execution.stop_loss_pct !== null) chips.push(`${execution.stop_loss_pct * 100}% stop`);
+  if (execution.take_profit_pct !== null) chips.push(`${execution.take_profit_pct * 100}% target`);
+  if (execution.trailing_stop_pct !== null) {
+    chips.push(`${execution.trailing_stop_pct * 100}% trailing stop`);
+  }
+  if (execution.max_holding_days !== null) chips.push(`${execution.max_holding_days} bar max hold`);
+  if (execution.cooldown_days > 0) chips.push(`${execution.cooldown_days} bar cooldown`);
+  chips.push(execution.allow_shorts ? 'shorts allowed' : 'long only');
+  return chips;
+}
+
+/**
+ * The composed strategy the run actually executed.
+ *
+ * Read from the run's own `strategy` and `execution` -- the fully resolved
+ * spec, per the contract -- and never from whatever is currently in the
+ * builder. A result has to describe the thing that produced it, including
+ * after the builder has moved on to the next idea.
+ */
+function StrategyProvenance({ run }: { run: RunDetailV2 }) {
+  const strategy = run.strategy;
+  if (!strategy) return null;
+  const execution = run.execution ?? null;
+
+  return (
+    <section
+      data-testid="run-strategy"
+      aria-label="Strategy executed"
+      className="mt-3 border border-border bg-card p-3"
+    >
+      <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+        Strategy executed
+      </p>
+      <p className="mt-1 text-xs">{strategy.name}</p>
+      <ul className="mt-2 space-y-1">
+        {strategy.components.map((component, index) => (
+          <li
+            key={`${component.rule_name}-${component.role}-${index}`}
+            className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground"
+          >
+            <StatusBadge tone={component.role === 'entry' ? 'active' : 'idle'}>
+              {component.role}
+            </StatusBadge>
+            <span className="font-mono">{component.rule_name}</span>
+            <span className="font-mono tabular-nums">
+              {Object.entries(component.parameters ?? {})
+                .map(([key, value]) => `${key}=${String(value)}`)
+                .join(', ')}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 text-[11px] text-muted-foreground">
+        <span className="font-mono uppercase tracking-[0.12em]">{strategy.entry_logic}</span> to
+        enter,{' '}
+        <span className="font-mono uppercase tracking-[0.12em]">{strategy.exit_logic}</span> to
+        exit, agreement window{' '}
+        <span className="font-mono tabular-nums">{strategy.combine_window_days}</span>
+      </p>
+      {execution ? (
+        <p data-testid="run-execution" className="mt-1 text-[11px] text-muted-foreground">
+          {executionChips(execution).join(' \u00b7 ')}
+        </p>
+      ) : null}
+    </section>
   );
 }

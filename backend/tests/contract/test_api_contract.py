@@ -263,6 +263,9 @@ def test_unseeded_database_returns_503_except_health(tmp_path):
             "dataset": "sqlite",
             "seeded": False,
             "signal_count": 0,
+            # The SPA has to learn this before it can hold a token, so it
+            # rides on the one endpoint that never needs one.
+            "auth_required": False,
         }
         for path in ("/api/v1/instruments", "/api/v1/instruments/ZZTRND/prices", "/api/v1/signals"):
             response = client.get(path)

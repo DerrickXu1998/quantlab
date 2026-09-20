@@ -99,4 +99,12 @@ def test_seed_marks_meta_seeded(tmp_path):
             json.loads(params)  # valid JSON
         for (name,) in conn.execute("SELECT DISTINCT rule_name FROM signals"):
             rule_names[name] += 1
-    assert set(rule_names) == {"sma-crossover", "rsi-threshold", "breakout-20d"}
+    # Every rule that materialises is a tradeable one, and no filter is: a
+    # filter describes a state and emits on every bar, so storing one would
+    # bury the real signals under gate rows.
+    from quantlab.signals.registry import list_rules, tradeable_rules
+
+    assert set(rule_names) <= {rule.name for rule in tradeable_rules()}
+    assert {"sma-crossover", "rsi-threshold", "breakout-20d"} <= set(rule_names)
+    filters = {r.name for r in list_rules() if set(r.roles) == {"filter"}}
+    assert filters and not (filters & set(rule_names))
