@@ -1,0 +1,255 @@
+# QuantLab — production stack for a single Compute Engine VM (e2-standard-2).
+#
+# This file is deliberately NOT an override of the repository's
+# docker-compose.yml. That one builds from source and publishes database ports
+# to the host for local work; this one only ever pulls pre-built images from
+# Artifact Registry and keeps the datastores off the public interface. Mixing
+# the two with `-f a.yml -f b.yml` would inherit the build contexts (absent on
+# the VM) and the public port bindings, so the production host runs this file
+# alone:
+#
+#     docker compose -f docker-compose.prod.yml --env-file .env up -d
+#
+# Memory budget (host has 8 GiB): clickhouse 2.5G + postgres 1G + backend 1G
+# + caddy 128M leaves ~3.4 GiB for the kernel page cache and the on-demand
+# ingest container. ClickHouse in particular will happily size its
+# caches to the whole machine and then be OOM-killed alongside everything else,
+# so the limits below are load-bearing, not decoration.
+
+name: quantlab
+
+x-logging: &logging
+  # The boot disk is the only disk. Unbounded JSON logs fill it in a week and
+  # every service fails at once, which is a confusing way to discover disk.
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # --------------------------------------------------------------------------
+  # Edge. Terminates TLS and is the only service bound to a public port.
+  #
+  # This VM serves the API only -- the SPA is built and served by Vercel from
+  # the same repository, so shipping a second copy here would be two builds of
+  # one artefact. That makes the browser's request cross-origin, which has two
+  # consequences the same-origin arrangement did not have:
+  #
+  #   1. QUANTLAB_CORS_ORIGINS must list the Vercel origin, or every call is
+  #      blocked by the browser. It is required below, not optional.
+  #   2. QUANTLAB_SITE_ADDRESS must be a real hostname, not an IP. Vercel serves
+  #      the SPA over HTTPS and browsers refuse mixed content, so the API has to
+  #      be HTTPS too -- and no certificate authority issues for a bare IP.
+  # --------------------------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      QUANTLAB_SITE_ADDRESS: ${QUANTLAB_SITE_ADDRESS:-:80}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - quantlab-caddy-data:/data     # certificates and ACME account keys
+      - quantlab-caddy-config:/config
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"                 # HTTP/3
+    depends_on:
+      backend:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    logging: *logging
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # Bars. Append-only, columnar. Port 8123 is bound to the loopback interface
+  # so `gcloud compute ssh --tunnel-through-iap -- -L 8123:localhost:8123`
+  # reaches it and the internet does not.
+  # --------------------------------------------------------------------------
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    environment:
+      CLICKHOUSE_USER: ${QUANTLAB_CH_USER:?set QUANTLAB_CH_USER in .env}
+      # Bare `:?`, unlike its neighbours, and deliberately so: secret scanners
+      # read `PASSWORD: <anything>` as a literal and flag the :? error message
+      # as a hardcoded credential. Compose still aborts on a missing value, with
+      # its own "required variable ... is missing a value". Do not add a message
+      # back -- it buys a hint and costs a false positive on every PR.
+      CLICKHOUSE_PASSWORD: ${QUANTLAB_CH_PASSWORD:?}
+      CLICKHOUSE_DB: quantlab
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - quantlab-chdata:/var/lib/clickhouse
+      - ./clickhouse-limits.xml:/etc/clickhouse-server/config.d/limits.xml:ro
+    ports:
+      - "127.0.0.1:8123:8123"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      # 127.0.0.1, not localhost: inside the container localhost resolves to
+      # ::1 and the server listens on IPv4, so the probe would never connect.
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2560M
+    logging: *logging
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # Catalog. Instruments, vendor symbol maps, universe snapshots, provenance.
+  # --------------------------------------------------------------------------
+  postgres:
+    image: postgres:17-alpine
+    command:
+      - postgres
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=768MB
+      - -c
+      - max_connections=50
+    environment:
+      POSTGRES_USER: ${QUANTLAB_PG_USER:?set QUANTLAB_PG_USER in .env}
+      # Bare `:?` -- see the note on CLICKHOUSE_PASSWORD above.
+      POSTGRES_PASSWORD: ${QUANTLAB_PG_PASSWORD:?}
+      POSTGRES_DB: quantlab
+      # Deterministic collation: index order must not depend on the host locale.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - quantlab-pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d quantlab"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
+    logging: *logging
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # Schema owner. Runs to completion on every deploy, before the new backend
+  # is allowed to serve. Shares the ingest image (same Dockerfile) -- pin the
+  # same tag or the two drift and this one applies an out-of-date schema.
+  # --------------------------------------------------------------------------
+  migrate:
+    image: ${QUANTLAB_INGEST_IMAGE:?set QUANTLAB_INGEST_IMAGE in .env}
+    command: ["migrate"]
+    environment:
+      QUANTLAB_DB_URL: ${QUANTLAB_DB_URL:?set QUANTLAB_DB_URL in .env}
+      QUANTLAB_CH_URL: ${QUANTLAB_CH_URL:?set QUANTLAB_CH_URL in .env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    logging: *logging
+    restart: "no"
+
+  # --------------------------------------------------------------------------
+  # Historical data ingest. Never part of `up` -- it reaches the network, so it
+  # runs on demand (`make prod-ingest SYMBOLS="AAPL.US"` from your laptop, or
+  # `docker compose run --rm ingest ...` on the VM).
+  # --------------------------------------------------------------------------
+  ingest:
+    image: ${QUANTLAB_INGEST_IMAGE:?set QUANTLAB_INGEST_IMAGE in .env}
+    profiles: ["ingest"]
+    environment:
+      QUANTLAB_DB_URL: ${QUANTLAB_DB_URL}
+      QUANTLAB_CH_URL: ${QUANTLAB_CH_URL}
+      QUANTLAB_HOME: /var/lib/quantlab
+      QUANTLAB_USER_AGENT: ${QUANTLAB_USER_AGENT:-quantlab/0.1 (research)}
+      SEC_USER_AGENT: ${SEC_USER_AGENT:-}
+      FRED_API_KEY: ${FRED_API_KEY:-}
+      COMPANIES_HOUSE_API_KEY: ${COMPANIES_HOUSE_API_KEY:-}
+    volumes:
+      - quantlab-cache:/var/lib/quantlab
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 2048M
+    logging: *logging
+    restart: "no"
+
+  backend:
+    image: ${QUANTLAB_BACKEND_IMAGE:?set QUANTLAB_BACKEND_IMAGE in .env}
+    # Two workers for two vCPUs. The image's default CMD runs a single one,
+    # which leaves half the machine idle under concurrent requests.
+    command: >
+      uvicorn quantlab.api.app:app --host 0.0.0.0 --port 8000 --workers 2
+    environment:
+      # With both URLs set the API serves real ingested history. Unset them and
+      # it silently falls back to the synthetic SQLite demo dataset -- which is
+      # exactly the failure `make check-warehouse` exists to catch.
+      QUANTLAB_DB_URL: ${QUANTLAB_DB_URL}
+      QUANTLAB_CH_URL: ${QUANTLAB_CH_URL}
+      QUANTLAB_DB: /data/quantlab.db
+      QUANTLAB_DB_PATH: /data/quantlab.db
+      # Required, and empty counts as missing. The SPA is on Vercel and the API
+      # is here, so every browser call is cross-origin: unset this and the API
+      # answers curl perfectly while the actual app sees nothing but CORS
+      # errors. That failure is invisible from the server side, so it is worth
+      # refusing to start over.
+      QUANTLAB_CORS_ORIGINS: ${QUANTLAB_CORS_ORIGINS:?}
+    volumes:
+      - quantlab-data:/data
+    expose:
+      - "8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health', timeout=5)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
+    logging: *logging
+    restart: unless-stopped
+
+  # There is no `frontend` service. The SPA is built from frontend/ and served
+  # by Vercel, which deploys from this same repository on every push; running a
+  # second copy here would be two builds and two deploys of one artefact. The
+  # nginx image and frontend/nginx.conf still exist for local `make up`, where
+  # same-origin keeps development free of CORS entirely.
+
+volumes:
+  quantlab-chdata:        # ClickHouse bars
+  quantlab-pgdata:        # Postgres catalog
+  quantlab-cache:         # provider HTTP cache + Parquet exports
+  quantlab-data:          # synthetic demo SQLite (fallback dataset)
+  quantlab-caddy-data:    # TLS certificates -- losing this re-issues them
+  quantlab-caddy-config:

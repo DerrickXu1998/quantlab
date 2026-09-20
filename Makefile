@@ -186,7 +186,10 @@ test: check-contract ## Run backend pytest and frontend vitest inside containers
 	$(COMPOSE) build backend
 	$(COMPOSE) run --rm --no-deps backend python -m pytest -q
 	docker build --target build -t quantlab-frontend-test ./frontend
-	docker run --rm quantlab-frontend-test npx vitest run
+	# --maxWorkers=2: one jsdom worker per CPU starves the suite badly enough
+	# that findBy* queries time out -- six tests fail, none of them real. Capping
+	# it is both deterministic and faster. CI runs the identical command.
+	docker run --rm quantlab-frontend-test npx vitest run --maxWorkers=2 --minWorkers=1
 
 smoke: ## Run the end-to-end smoke check (health, seeded data, per-rule signals, UI)
 	bash scripts/smoke.sh
@@ -219,3 +222,83 @@ sync-contract: ## Refresh backend/contracts/openapi.yaml from the authored spec
 gen-api: ## Regenerate frontend/src/api/schema.d.ts from the OpenAPI contract (node runs in a container)
 	docker run --rm -v "$(CURDIR)":/work -w /work node:22 \
 		npx -y openapi-typescript quantlab_specs/specs/006-warehouse-experiments/contracts/openapi.yaml -o frontend/src/api/schema.d.ts
+
+# --- Production: the single Compute Engine VM -------------------------------
+#
+# Thin wrappers over `gcloud compute ssh --tunnel-through-iap`, so day-two
+# operations are the same two words as the local ones. Deploys are NOT here:
+# they belong to .github/workflows/deploy.yml, and a Makefile target that also
+# deployed would be a second, divergent way to change production.
+#
+# Set these once in your shell (they match the GitHub repository variables):
+#   export GCP_INSTANCE=quantlab GCP_ZONE=europe-west2-c
+#
+# See docs/DEPLOY.md.
+
+GCP_INSTANCE ?= quantlab
+GCP_ZONE     ?=
+PROD_DIR     := /opt/quantlab
+PROD_COMPOSE := sudo docker compose --env-file $(PROD_DIR)/.env --env-file $(PROD_DIR)/.env.images -f $(PROD_DIR)/docker-compose.prod.yml
+
+# Every target below needs a zone and there is no sane default -- failing here
+# beats a gcloud error three layers down.
+require-zone:
+	@[ -n "$(GCP_ZONE)" ] || { \
+		echo "ERROR: set GCP_ZONE (e.g. export GCP_ZONE=europe-west2-c)." >&2; exit 1; }
+
+# $(1) is run on the VM, through the IAP tunnel -- port 22 is closed to the internet.
+define prod_ssh
+	gcloud compute ssh $(GCP_INSTANCE) --zone $(GCP_ZONE) --tunnel-through-iap --quiet --command "$(1)"
+endef
+
+prod-ssh: require-zone ## Open a shell on the production VM (through IAP)
+	gcloud compute ssh $(GCP_INSTANCE) --zone $(GCP_ZONE) --tunnel-through-iap
+
+prod-ps: require-zone ## What is running in production
+	$(call prod_ssh,cd $(PROD_DIR) && $(PROD_COMPOSE) ps)
+
+prod-logs: require-zone ## Follow production logs (SERVICE=backend to narrow)
+	gcloud compute ssh $(GCP_INSTANCE) --zone $(GCP_ZONE) --tunnel-through-iap \
+		--command "cd $(PROD_DIR) && $(PROD_COMPOSE) logs -f --tail 100 $(SERVICE)"
+
+prod-ip: require-zone ## Print the VM's external IP
+	@gcloud compute instances describe $(GCP_INSTANCE) --zone $(GCP_ZONE) \
+		--format='value(networkInterfaces[0].accessConfigs[0].natIP)'
+
+# Once QUANTLAB_SITE_ADDRESS is a hostname, Caddy serves that name and nothing
+# else -- a request to the bare IP matches no site block and gets a 404. Set
+# PROD_URL (export PROD_URL=https://api.example.com) and these targets follow it;
+# the IP fallback is only right for the pre-DNS, plain-HTTP state.
+PROD_URL ?=
+
+prod-url: require-zone ## Print the API base URL (PROD_URL if set, else the VM's IP)
+	@if [ -n "$(PROD_URL)" ]; then echo "$(PROD_URL)"; \
+	else echo "http://$$($(MAKE) -s prod-ip)"; fi
+
+prod-health: require-zone ## Hit the public health endpoint
+	@curl -fsS "$$($(MAKE) -s prod-url)/api/v1/health"; echo
+
+prod-check: require-zone ## Assert production serves the warehouse, not the synthetic fallback
+	@BACKEND_URL="$$($(MAKE) -s prod-url)" bash scripts/check-warehouse.sh
+
+prod-coverage: require-zone ## What production has ingested, and how well it compresses
+	$(call prod_ssh,cd $(PROD_DIR) && $(PROD_COMPOSE) --profile ingest run --rm ingest coverage)
+
+# Ingest reaches the network and is never part of a deploy, so it is run by hand.
+# Overrides match the local targets: make prod-ingest SYMBOLS="AAPL.US" START=2015-01-01
+prod-ingest: require-zone ## Ingest history on the production VM (override SYMBOLS/START/END/PROVIDERS)
+	$(call prod_ssh,cd $(PROD_DIR) && $(PROD_COMPOSE) --profile ingest run --rm ingest \
+		ingest $(SYMBOLS) --start $(START) $(if $(END),--end $(END),) --providers $(PROVIDERS))
+
+prod-signals: require-zone ## Recompute production signals from warehouse bars
+	$(call prod_ssh,cd $(PROD_DIR) && $(PROD_COMPOSE) exec -T backend python -m quantlab.signals.materialize)
+
+prod-restart: require-zone ## Restart the production stack (systemd unit, survives reboot)
+	$(call prod_ssh,sudo systemctl restart quantlab && sleep 5 && systemctl is-active quantlab)
+
+prod-rollback: require-zone ## Roll production back to the previous image tags
+	$(call prod_ssh,cd $(PROD_DIR) && sudo cp .env.images.prev .env.images && sudo systemctl restart quantlab)
+	@echo "rolled back; check with 'make prod-ps'"
+
+.PHONY: require-zone prod-ssh prod-ps prod-logs prod-ip prod-url prod-health prod-check \
+	prod-coverage prod-ingest prod-signals prod-restart prod-rollback

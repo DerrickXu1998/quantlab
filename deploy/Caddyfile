@@ -1,0 +1,46 @@
+# QuantLab edge. This VM serves the API only -- the SPA lives on Vercel.
+#
+#   QUANTLAB_SITE_ADDRESS=api.example.com  -> automatic Let's Encrypt TLS
+#   QUANTLAB_SITE_ADDRESS=:80              -> plain HTTP (the default)
+#
+# The `:80` default is for bringing the stack up and curling it from the VM
+# before DNS exists. It is NOT a usable production state: Vercel serves the SPA
+# over HTTPS, and a browser on an HTTPS page refuses to call an HTTP API
+# (mixed content). A hostname is therefore required in practice, and it must be
+# a hostname rather than the VM's IP -- no certificate authority will issue for
+# a bare address.
+
+# No global `email` block. Let's Encrypt treats the ACME account address as
+# optional, and Caddy registers happily without one -- you forgo expiry
+# reminders, which matter little when renewal is automatic and unattended.
+#
+# The alternative was a placeholder default, and `admin@localhost` is not a
+# deliverable address: Let's Encrypt rejects it and certificate issuance fails
+# outright. A broken default is worse than no default.
+#
+# To receive expiry mail, add a global block above this one:
+#
+#     {
+#         email you@example.com
+#     }
+
+{$QUANTLAB_SITE_ADDRESS::80} {
+	encode zstd gzip
+
+	# Straight to uvicorn. There is no nginx in this path any more: nginx only
+	# ever existed to serve the SPA and proxy /api/ to the backend, and Vercel
+	# does the first half now. FastAPI answers /api/v1/* and its own /docs;
+	# anything else it 404s as JSON, which is the correct answer from a host
+	# that is an API and nothing else.
+	reverse_proxy backend:8000 {
+		# Server-Sent Events: GET /api/v1/replay/live/stream holds a response
+		# open indefinitely. Without this Caddy buffers it and the client sees
+		# nothing until the stream ends, which it never does.
+		flush_interval -1
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

@@ -31,6 +31,10 @@ quantlab-data/
 .idea/
 .env*
 !.env.example
+# The production template. Named .env.prod.example so it reads next to the real
+# file it describes (/opt/quantlab/.env on the VM); the .env* rule above would
+# otherwise swallow it. It holds no secrets -- bootstrap-vm.sh generates those.
+!deploy/.env.prod.example
 .quantlab/*
 
 # Agent-managed git worktrees: a full nested checkout, never part of a commit.
