@@ -201,10 +201,16 @@ if gcloud compute instances describe "$INSTANCE" --zone "$ZONE" >/dev/null 2>&1;
 	fi
 
 	# Not disks[0]: an instance with a data disk attached may list it first, and
-	# snapshotting or measuring the wrong disk would be silently useless.
+	# measuring the wrong disk would be silently useless.
+	#
+	# `describe` has no --filter (that is a `list` flag, and passing it here is a
+	# usage error, not an empty result), so the boot flag is selected after the
+	# fact. || true because this is advisory: a failure here must not abort a
+	# setup run that has already created real resources.
 	BOOT_DISK_NAME="$(gcloud compute instances describe "$INSTANCE" --zone "$ZONE" \
-		--flatten="disks[]" --filter="disks.boot=true" \
-		--format="value(disks.source.basename())" 2>/dev/null | head -1)"
+		--flatten="disks[]" \
+		--format="value(disks.boot, disks.source.basename())" 2>/dev/null |
+		awk -F'\t' '$1 == "True" { print $2; exit }' || true)"
 
 	# OS Login is what makes the deployer SA's IAM roles grant SSH access;
 	# without it the VM expects keys in project metadata instead.
