@@ -348,7 +348,7 @@ def cmd_replay_publish(args) -> int:
     import os
 
     from . import store
-    from .streaming import DEFAULT_TOPIC, create_producer, publish_replay
+    from .streaming import DEFAULT_TOPIC, create_producer, ensure_topic, publish_replay
 
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
     if not symbols:
@@ -358,6 +358,10 @@ def cmd_replay_publish(args) -> int:
     if not brokers.strip():
         raise SystemExit("no brokers: pass --brokers or set QUANTLAB_KAFKA_BROKERS")
     topic = args.topic or os.environ.get("QUANTLAB_KAFKA_TOPIC", "") or DEFAULT_TOPIC
+
+    # Pin the topic to one partition before the first send, so the broker's
+    # own auto-create default never decides the replay's ordering for us.
+    ensure_topic(brokers, topic)
 
     with store.session(args.db_url) as conn, store.ch_session(args.ch_url) as client:
         producer = create_producer(brokers)
