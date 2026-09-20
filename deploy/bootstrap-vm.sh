@@ -162,8 +162,9 @@ if [ ! -f "$APP_DIR/.env" ]; then
 # The passwords below are baked into the Postgres and ClickHouse data volumes on
 # first start. Changing them here alone will NOT change them in the databases.
 
+# A hostname here makes Caddy get a Let's Encrypt certificate. With no DNS of
+# your own, <vm-ip>.sslip.io is a real resolvable name that LE will issue for.
 QUANTLAB_SITE_ADDRESS=:80
-QUANTLAB_ACME_EMAIL=
 
 QUANTLAB_PG_USER=quantlab
 QUANTLAB_PG_PASSWORD=${pg_pw}

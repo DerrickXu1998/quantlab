@@ -146,9 +146,23 @@ TLS. Point an A record at the VM's external IP (`make prod-ip`), then:
 
 ```bash
 sudo sed -i 's/^QUANTLAB_SITE_ADDRESS=.*/QUANTLAB_SITE_ADDRESS=api.example.com/' /opt/quantlab/.env
-sudo sed -i 's/^QUANTLAB_ACME_EMAIL=.*/QUANTLAB_ACME_EMAIL=you@example.com/'     /opt/quantlab/.env
 sudo sed -i 's|^QUANTLAB_CORS_ORIGINS=.*|QUANTLAB_CORS_ORIGINS=https://your-project.vercel.app|' /opt/quantlab/.env
 ```
+
+**No domain of your own?** A wildcard DNS resolver gives you a real, publicly
+resolvable hostname for any IP, and Let's Encrypt issues certificates for it:
+
+```bash
+sudo sed -i 's/^QUANTLAB_SITE_ADDRESS=.*/QUANTLAB_SITE_ADDRESS=34.133.64.130.sslip.io/' /opt/quantlab/.env
+```
+
+That is enough for a working HTTPS API today. It depends on a third party
+resolving the name, so move to a domain you control before anything depends on
+it — the change is one line here and one environment variable in Vercel.
+
+ACME registration e-mail lives in `deploy/Caddyfile`, not in `.env`. There is no
+default: Let's Encrypt treats it as optional, and a placeholder like
+`admin@localhost` is not deliverable, so issuance would fail outright.
 
 Set the hostname *only* after DNS resolves to the VM — ACME failures are
 rate-limited, and Caddy provisions the certificate on the first request.
