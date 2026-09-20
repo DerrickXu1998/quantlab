@@ -20,4 +20,8 @@ VOLUME ["/data"]
 
 EXPOSE 8000
 
-CMD ["uvicorn", "quantlab.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+# Shell form, deliberately: a container platform (Cloud Run, Fly, Render)
+# injects $PORT and health-checks that port, and exec-form CMD does not expand
+# variables -- uvicorn would receive the literal string "${PORT}". The default
+# keeps docker-compose, which sets no $PORT, working unchanged.
+CMD uvicorn quantlab.api.app:app --host 0.0.0.0 --port ${PORT:-8000}
