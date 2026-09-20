@@ -96,9 +96,40 @@ done
 # --- 6. prove the edge serves it ---------------------------------------------
 # Container health only says uvicorn answers on its own port. This is the path a
 # browser takes: Caddy -> uvicorn. A broken Caddyfile fails only here.
-log "checking the edge"
-health="$(curl -fsS --max-time 15 http://localhost/api/v1/health)" ||
-	fail "Caddy did not proxy /api/v1/health"
+#
+# The probe goes to the configured site address, never http://localhost: with a
+# hostname set, Caddy's automatic HTTPS answers every plain-HTTP request with a
+# 308 redirect, and a redirect is not a curl -f failure -- the check would pass
+# on an empty body while proving nothing. --resolve pins the name to loopback,
+# so the real TLS handshake and certificate are exercised from the VM itself,
+# without waiting on public DNS propagation.
+site="$(sed -n 's/^QUANTLAB_SITE_ADDRESS=//p' "$APP_DIR/.env" | head -1 | tr -d ' "'"'"'')"
+[ -n "$site" ] || fail "QUANTLAB_SITE_ADDRESS is empty in $APP_DIR/.env"
+
+if [ "$site" = ":80" ]; then
+	edge="http://127.0.0.1"
+	edge_args=()
+else
+	edge="https://$site"
+	edge_args=(--resolve "$site:443:127.0.0.1")
+fi
+
+log "checking the edge ($edge)"
+health=""
+for i in $(seq 1 "$HEALTH_TRIES"); do
+	if health="$(curl -fsS --max-time 15 "${edge_args[@]}" "$edge/api/v1/health" 2>/dev/null)"; then
+		break
+	fi
+	health=""
+	if [ "$i" -eq "$HEALTH_TRIES" ]; then
+		compose logs --tail 40 caddy >&2 || true
+		fail "Caddy did not proxy $edge/api/v1/health"
+	fi
+	# On a first deploy Caddy is still obtaining the certificate from Let's
+	# Encrypt; issuance takes seconds, occasionally longer, so this retries on
+	# the same budget as the backend healthcheck.
+	sleep "$HEALTH_INTERVAL"
+done
 printf 'health: %s\n' "$health"
 
 # The SPA is on Vercel and calls this API cross-origin, so a missing or wrong
@@ -112,10 +143,11 @@ origin="$(sed -n 's/^QUANTLAB_CORS_ORIGINS=//p' "$APP_DIR/.env" |
 [ -n "$origin" ] ||
 	fail "QUANTLAB_CORS_ORIGINS is empty in $APP_DIR/.env; set it to the Vercel origin or the SPA cannot call this API"
 allowed="$(curl -fsS --max-time 15 -o /dev/null -w '%{http_code}' \
+	"${edge_args[@]}" \
 	-H "Origin: ${origin}" \
 	-H 'Access-Control-Request-Method: POST' \
 	-H 'Access-Control-Request-Headers: content-type' \
-	-X OPTIONS http://localhost/api/v1/runs || true)"
+	-X OPTIONS "$edge/api/v1/runs" || true)"
 [ "$allowed" = "200" ] ||
 	fail "preflight from ${origin} returned ${allowed}, not 200 -- the SPA will be blocked by the browser"
 printf 'preflight from %s: ok\n' "$origin"
