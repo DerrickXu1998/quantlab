@@ -1,12 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { getPrices, type Instrument, type Model, type RunRequest } from '../api/client';
+import { useEffect, useMemo, useState } from 'react';
+import type { Instrument, Model, RunRequest } from '../api/client';
 import { coerce, defaultValues, localError } from '../workbench/paramSpec';
+import { useDataWindow } from '../workbench/useDataWindow';
 import { Button } from './ui/button';
 import { fieldClasses, Input, Label, Select } from './ui/field';
 import { StatusBadge } from './ui/status-badge';
-
-/** Used when the data extent cannot be read: the demo dataset's window. */
-const FALLBACK_WINDOW = { start: '2024-01-01', end: '2024-12-31' };
 
 const NO_PREFILL: Record<string, string> = {};
 
@@ -44,34 +42,11 @@ export function RunConfigForm({
     ...initialValues,
   }));
   const [symbols, setSymbols] = useState<string[]>([]);
-  const [startDate, setStartDate] = useState(FALLBACK_WINDOW.start);
-  const [endDate, setEndDate] = useState(FALLBACK_WINDOW.end);
-  // The extent backfill must not steamroll edits the researcher already made.
-  const datesTouched = useRef(false);
+  const { startDate, endDate, setStartDate, setEndDate } = useDataWindow(instruments);
 
   useEffect(() => {
     setValues({ ...defaultValues(model.parameters), ...initialValues });
   }, [model, initialValues]);
-
-  useEffect(() => {
-    const first = instruments[0]?.symbol;
-    if (!first) return;
-    let cancelled = false;
-    getPrices(first)
-      .then((bars) => {
-        if (cancelled || datesTouched.current || bars.items.length === 0) return;
-        const firstBar = bars.items[0];
-        const lastBar = bars.items[bars.items.length - 1];
-        setStartDate(firstBar.date);
-        setEndDate(lastBar.date);
-      })
-      .catch(() => {
-        // The fallback window stays; a missing extent is not an error here.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [instruments]);
 
   const fieldErrors = useMemo(() => {
     const errors: Record<string, string> = {};
@@ -120,10 +95,7 @@ export function RunConfigForm({
             type="date"
             className={fieldClasses}
             value={startDate}
-            onChange={(event) => {
-              datesTouched.current = true;
-              setStartDate(event.target.value);
-            }}
+            onChange={(event) => setStartDate(event.target.value)}
           />
         </div>
         <div className="space-y-1">
@@ -135,10 +107,7 @@ export function RunConfigForm({
             type="date"
             className={fieldClasses}
             value={endDate}
-            onChange={(event) => {
-              datesTouched.current = true;
-              setEndDate(event.target.value);
-            }}
+            onChange={(event) => setEndDate(event.target.value)}
           />
         </div>
       </div>

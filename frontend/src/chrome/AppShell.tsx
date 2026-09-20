@@ -10,6 +10,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { UserMenu } from '../auth/UserMenu';
 import { DataDisclaimer } from '../components/DataDisclaimer';
 import { Button } from '../components/ui/button';
 import { StatusBadge } from '../components/ui/status-badge';
@@ -133,6 +134,7 @@ export function AppShell() {
               <Clock />
               <DatasetBadge />
               <ThemeToggle />
+              <UserMenu />
             </div>
           </header>
 

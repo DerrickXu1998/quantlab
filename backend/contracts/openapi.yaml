@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: QuantLab Signal Viewer API
-  version: 0.5.0
+  version: 0.6.0
   description: >
     Typed API boundary for the QuantLab demo. This document is the authored
     single source of truth (Constitution V): the FastAPI app is validated
@@ -15,6 +15,15 @@ info:
     branch on which, and every run records which one produced it. Running a
     model remains the one state-changing operation, and it writes only to
     experiment storage -- never to a curated or materialised signal set.
+
+    Version 0.6.0 adds identity, strategies and execution criteria. Three
+    things that were previously impossible become expressible: a caller owns
+    their own runs rather than sharing one global table; a strategy is several
+    signals combined rather than a single rule; and the rules that turn a
+    signal into a trade -- sizing, fill timing, costs, stops -- are request
+    fields rather than hardcoded behaviour disclosed in prose. Nothing is
+    removed or renamed: a request that was valid at 0.5.0 is valid here and
+    produces the same answer, which is what makes stored runs reproducible.
 servers:
   - url: /api/v1
 tags:
@@ -24,6 +33,8 @@ tags:
   - name: models
   - name: runs
   - name: replay
+  - name: auth
+  - name: strategies
 
 paths:
   /health:
@@ -593,7 +604,266 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /auth/register:
+    post:
+      tags: [auth]
+      operationId: register
+      summary: Create an account and return a session
+      description: >
+        A 409 does disclose that an address is registered. That is unavoidable
+        for a self-service signup -- refusing to say so would mean silently not
+        creating the account -- and it is why the *login* path, not this one, is
+        hardened against enumeration.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Credentials"
+      responses:
+        "201":
+          description: The new account and its first session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "409":
+          description: That email address is already registered
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: The password does not meet the policy
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      summary: Exchange credentials for a session
+      description: >
+        An unknown address and a wrong password produce the same status, the
+        same body and the same timing -- the unknown-address path still performs
+        a full key derivation against a dummy hash. Skipping that work would
+        make "does this person have an account?" answerable with a stopwatch.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Credentials"
+      responses:
+        "200":
+          description: A new session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "401":
+          description: Invalid email or password -- deliberately says no more
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          description: Too many failed attempts against this address
+          headers:
+            Retry-After:
+              schema: { type: integer }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      summary: Revoke the calling session
+      security: [{ bearerAuth: [] }]
+      description: >
+        Revokes this session and no other. Possible only because a session is a
+        row rather than a signed token: a stateless token cannot be withdrawn
+        before it expires, which would make this endpoint a gesture.
+      responses:
+        "204":
+          description: Revoked
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /auth/me:
+    get:
+      tags: [auth]
+      operationId: getCurrentUser
+      summary: The authenticated user
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The caller
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /strategies:
+    get:
+      tags: [strategies]
+      operationId: listStrategies
+      summary: The caller's saved strategies
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Strategies belonging to the caller, newest first
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StrategyList"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    post:
+      tags: [strategies]
+      operationId: createStrategy
+      summary: Save a strategy
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StrategyRequest"
+      responses:
+        "201":
+          description: The saved strategy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Strategy"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: >
+            The spec cannot be executed. The detail names the offending
+            component index and field, e.g.
+            `components[0].parameters.period: must be <= 100`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /strategies/{strategy_id}:
+    parameters:
+      - name: strategy_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [strategies]
+      operationId: getStrategy
+      summary: One strategy
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The strategy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Strategy"
+        "404":
+          description: >
+            Unknown, or not the caller's. Another user's strategy reads as
+            absent rather than forbidden: a 403 would confirm that the row
+            exists, which the caller has not earned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    put:
+      tags: [strategies]
+      operationId: replaceStrategy
+      summary: Replace a strategy
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StrategyRequest"
+      responses:
+        "200":
+          description: The updated strategy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Strategy"
+        "404":
+          description: Unknown, or not the caller's
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: The spec cannot be executed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    delete:
+      tags: [strategies]
+      operationId: deleteStrategy
+      summary: Delete a strategy
+      security: [{ bearerAuth: [] }]
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Unknown, or not the caller's
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /strategy-templates:
+    get:
+      tags: [strategies]
+      operationId: listStrategyTemplates
+      summary: Complete starter strategies
+      description: >
+        Unauthenticated: they are identical for everyone and contain nothing of
+        anybody's. Assembled from the registry at request time, so a template
+        can only ever name rules that actually exist. Each carries realistic
+        costs -- a starter that charged nothing would teach a new user that
+        turnover is free, which is the most expensive lesson to unlearn.
+      responses:
+        "200":
+          description: The template catalogue
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StrategyTemplateList"
+
+
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: >
+        An opaque session token, not a JWT. The session is a row, so logout
+        genuinely revokes it and only its SHA-256 is stored -- reading the
+        database yields no usable credential. Required on every path except
+        `/health`, `/models`, `/strategy-templates` and the two `/auth` entry
+        points, unless the deployment sets `QUANTLAB_AUTH_REQUIRED=false`, in
+        which case every request is bound to a built-in local account.
+
   schemas:
     Dataset:
       type: string
@@ -644,6 +914,13 @@ components:
         signal_count:
           type: integer
           minimum: 0
+        auth_required:
+          type: boolean
+          default: true
+          description: >
+            Whether this deployment demands a bearer token. Carried on the one
+            endpoint that never needs one, because a client has to learn this
+            before it can possibly hold a token.
 
     Direction:
       type: string
@@ -825,6 +1102,26 @@ components:
           enum: [scale_free, price_scaled]
         direction_semantics:
           type: string
+        category:
+          type: string
+          enum: [trend, momentum, mean_reversion, volatility, volume]
+          default: trend
+          description: Presentation metadata; nothing in the engine branches on it.
+        summary:
+          type: string
+          description: One line, for a catalogue card.
+        roles:
+          type: array
+          default: [entry, exit]
+          items:
+            type: string
+            enum: [entry, exit, filter]
+          description: >
+            Which slots in a strategy this rule may fill. A rule that reports a
+            *regime* rather than a tradeable event -- ADX above a threshold --
+            advertises `[filter]` only, and a strategy naming it as an entry is
+            refused. Without this a user can build a strategy that enters on
+            every bar with no way to see why.
 
     ModelList:
       type: object
@@ -841,7 +1138,14 @@ components:
     RunRequest:
       type: object
       additionalProperties: false
-      required: [model_name, symbols, start_date, end_date]
+      required: [symbols, start_date, end_date]
+      description: >
+        Exactly one of `model_name`, `strategy_id` or `strategy` identifies what
+        to run; giving two is a 400, because silently preferring one would run
+        something other than what the caller wrote. The single-model form is
+        unchanged and still supported -- it is promoted internally into a
+        one-rule strategy, so there is one execution path rather than a legacy
+        branch that slowly stops matching the real one.
       properties:
         model_name:
           type: string
@@ -866,6 +1170,13 @@ components:
         end_date:
           type: string
           format: date
+        strategy_id:
+          type: string
+          description: A saved strategy of the caller's.
+        strategy:
+          $ref: "#/components/schemas/StrategyRequest"
+        execution:
+          $ref: "#/components/schemas/ExecutionConfig"
 
     RunCoverage:
       type: object
@@ -976,6 +1287,23 @@ components:
           description: >
             False when the run's recorded dataset is not the active one. The
             run stays readable; it simply cannot be reproduced as recorded.
+        strategy:
+          oneOf:
+            - $ref: "#/components/schemas/StrategyRequest"
+            - type: "null"
+          description: >
+            The fully resolved strategy that actually ran. Null on runs recorded
+            before strategies existed; the API reports that rather than
+            inventing a spec those runs never had.
+        execution:
+          oneOf:
+            - $ref: "#/components/schemas/ExecutionConfig"
+            - type: "null"
+          description: The fully resolved execution criteria that actually ran.
+        execution_summary:
+          oneOf:
+            - $ref: "#/components/schemas/ExecutionSummary"
+            - type: "null"
         model_available:
           type: boolean
           description: >
@@ -1015,6 +1343,16 @@ components:
           description: >
             Latest bar date used as input; always <= date (point-in-time proof,
             Constitution VII).
+        kind:
+          type: string
+          enum: [entry, exit, both]
+          default: both
+          description: >
+            Whether this opens a position, closes one, or does both. `both` is
+            one rule wearing both hats, which is exactly what a single-model run
+            is -- and what rows recorded before strategies existed mean. Emitted
+            as one decision rather than two so a legacy run records exactly the
+            signals it always did.
 
     RunDetail:
       allOf:
@@ -1075,6 +1413,24 @@ components:
             True when the position was still held at the end of the window. An
             open trade is marked to market, not realised, and never counts
             toward the win rate.
+        side:
+          type: string
+          enum: [long, short]
+          default: long
+        qty:
+          type: number
+          default: 0
+        exit_reason:
+          allOf:
+            - $ref: "#/components/schemas/ExitReason"
+          default: signal
+        pnl:
+          type: number
+          default: 0
+          description: Net of this trade's own commission, both sides.
+        fees:
+          type: number
+          default: 0
 
     PerformanceMetrics:
       type: object
@@ -1167,6 +1523,355 @@ components:
             Every simplification applied. These figures are not tradeable and
             must never be presented as if they were.
 
+    # --- Identity -----------------------------------------------------------
+        costs:
+          $ref: "#/components/schemas/CostBreakdown"
+        exit_reasons:
+          type: object
+          additionalProperties:
+            type: integer
+          description: >
+            Closed-position counts by reason. Sums to the number of trades.
+
+    Credentials:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 12
+          maxLength: 256
+          description: >
+            At least 12 characters. Hashed with PBKDF2-HMAC-SHA256 at 600,000
+            iterations with a 16-byte salt, both recorded in the stored hash so
+            the cost can be raised later without a mass password reset. See
+            docs/SECURITY.md for why a stdlib KDF rather than argon2.
+
+    User:
+      type: object
+      additionalProperties: false
+      required: [id, email, created_at]
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        created_at:
+          type: string
+
+    Session:
+      type: object
+      additionalProperties: false
+      required: [user, token, expires_at]
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        token:
+          type: string
+          description: >
+            Send as `Authorization: Bearer <token>`. 32 bytes of CSPRNG output;
+            only its SHA-256 is stored.
+        expires_at:
+          type: string
+          description: Absolute, not sliding -- a stolen token cannot be kept alive by use.
+
+    # --- Strategies ---------------------------------------------------------
+
+    StrategyComponent:
+      type: object
+      additionalProperties: false
+      required: [rule_name]
+      description: One signal rule doing one job inside a strategy.
+      properties:
+        rule_name:
+          type: string
+        rule_version:
+          type: string
+          description: Omit to use the highest registered version.
+        parameters:
+          type: object
+          additionalProperties: true
+          description: Overrides only; omitted parameters take the rule's default.
+        role:
+          type: string
+          enum: [entry, exit, filter]
+          default: entry
+          description: >
+            **Filters gate, they never fire.** A filter contributes no entry of
+            its own and can only prevent one, whichever direction the entry
+            points -- "there is a trend here" qualifies a short as much as a
+            long. Filters deliberately do *not* gate exits: a filter switching
+            off must never trap a position in the book at the exact moment the
+            regime has changed.
+        weight:
+          type: number
+          exclusiveMinimum: 0
+          default: 1
+          description: Read only by `weighted` logic.
+        invert:
+          type: boolean
+          default: false
+          description: >
+            Swap this component's two directions. How a long-biased filter
+            becomes a short-biased one without needing a second rule.
+
+    StrategyRequest:
+      type: object
+      additionalProperties: false
+      required: [name, components]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+          default: ""
+        components:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/StrategyComponent"
+        entry_logic:
+          type: string
+          enum: [all, any, majority, weighted]
+          default: all
+        exit_logic:
+          type: string
+          enum: [all, any, majority, weighted]
+          default: any
+        entry_threshold:
+          type: number
+          exclusiveMinimum: 0
+          default: 1
+          description: Net weight needed to fire, under `weighted` logic only.
+        exit_threshold:
+          type: number
+          exclusiveMinimum: 0
+          default: 1
+        combine_window_days:
+          type: integer
+          minimum: 1
+          default: 1
+          description: >
+            How many sessions components have to agree within. 1 means "the
+            same bar", which is strict enough that two oscillators almost never
+            coincide; a window of 3 lets a confirmation arrive a little late.
+        execution:
+          $ref: "#/components/schemas/ExecutionConfig"
+
+    Strategy:
+      allOf:
+        - $ref: "#/components/schemas/StrategyRequest"
+        - type: object
+          required: [id, created_at, updated_at]
+          properties:
+            id:
+              type: string
+            owner_id:
+              type: [string, "null"]
+            created_at:
+              type: string
+            updated_at:
+              type: string
+            warnings:
+              type: array
+              items:
+                type: string
+              description: >
+                Legal but probably not what the user meant -- no exit component,
+                a combination that can never occur, filters gating shorts.
+                Computed per request rather than stored, because what is worth
+                flagging changes as the engine does and a stored copy goes
+                stale. Reported, never enforced.
+
+    StrategyList:
+      type: object
+      additionalProperties: false
+      required: [total, items]
+      properties:
+        total:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Strategy"
+
+    StrategyTemplate:
+      allOf:
+        - $ref: "#/components/schemas/StrategyRequest"
+        - type: object
+          required: [id]
+          properties:
+            id:
+              type: string
+              enum:
+                - rsi-mean-reversion
+                - macd-trend-following
+                - donchian-breakout
+                - dual-confirmation
+
+    StrategyTemplateList:
+      type: object
+      additionalProperties: false
+      required: [total, items]
+      properties:
+        total:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/StrategyTemplate"
+
+    # --- Execution ----------------------------------------------------------
+
+    ExecutionConfig:
+      type: object
+      additionalProperties: false
+      description: >
+        What turns a signal into a trade. Every field was previously hardcoded
+        and merely disclosed in prose.
+
+        Ordering within a bar is fixed, because two criteria can both be
+        satisfiable on the same bar and a backtest that resolves them
+        arbitrarily is not reproducible: mark, then orders queued yesterday
+        fill at today's open, then protective exits (stop, trailing stop,
+        target, holding limit, in that order), then signal exits, then entries.
+
+        Gaps resolve pessimistically in both directions, which is not symmetric
+        arithmetic. A **stop** the session gapped through fills at the open,
+        worse than the level. A **target** the session gapped through fills at
+        the target, declining the windfall -- collecting every favourable gap
+        adds up to an edge no live book ever earns.
+      properties:
+        initial_capital:
+          type: number
+          exclusiveMinimum: 0
+          default: 100000
+        position_sizing:
+          type: string
+          enum: [equal_weight, fixed_fraction, fixed_notional, volatility_target]
+          default: equal_weight
+          description: >
+            `equal_weight` gives each instrument its own cash sleeve, which is
+            what the pre-execution engine did and what makes a legacy run
+            reproduce exactly. The other three draw on one shared pool, so
+            `max_positions` and cash rejections behave differently between them.
+        sizing_value:
+          type: [number, "null"]
+          description: >
+            Fraction of equity (`fixed_fraction`), cash per trade
+            (`fixed_notional`), or target annualised volatility
+            (`volatility_target`). Rejected rather than ignored under
+            `equal_weight`: silently discarding a number the user typed is how a
+            run quietly does something other than what the form said.
+        max_positions:
+          type: [integer, "null"]
+          minimum: 1
+        max_position_pct:
+          type: number
+          exclusiveMinimum: 0
+          maximum: 1
+          default: 1
+        fill_timing:
+          type: string
+          enum: [signal_close, next_open]
+          default: signal_close
+        commission_bps:
+          type: number
+          minimum: 0
+          default: 0
+          description: Charged per side, on notional.
+        slippage_bps:
+          type: number
+          minimum: 0
+          default: 0
+          description: Moves the fill price against the trade, per side.
+        stop_loss_pct:
+          type: [number, "null"]
+          exclusiveMinimum: 0
+          maximum: 1
+          description: >
+            A fraction, not a percentage: 0.05 is five percent. Bounded because
+            a user who types `5` meaning "five percent" would otherwise get a
+            stop 500% away that never triggers, and the backtest would look
+            like the stop simply never helped.
+        take_profit_pct:
+          type: [number, "null"]
+          exclusiveMinimum: 0
+          maximum: 1
+        trailing_stop_pct:
+          type: [number, "null"]
+          exclusiveMinimum: 0
+          maximum: 1
+          description: Measured from the best close seen while the position was held.
+        atr_stop_multiple:
+          type: [number, "null"]
+          exclusiveMinimum: 0
+          description: >
+            Stop at entry -/+ k x ATR as at the entry bar. Set alongside
+            `stop_loss_pct`, the tighter of the two binds.
+        atr_period:
+          type: integer
+          minimum: 2
+          default: 14
+        max_holding_days:
+          type: [integer, "null"]
+          minimum: 1
+        min_holding_days:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Suppresses signal exits only; protective exits still fire.
+        cooldown_days:
+          type: integer
+          minimum: 0
+          default: 0
+        allow_shorts:
+          type: boolean
+          default: false
+
+    ExecutionSummary:
+      type: object
+      additionalProperties: false
+      description: >
+        What the engine did, including what it refused to do. The rejection
+        counters matter as much as the fills: a strategy whose signals were
+        mostly dropped for want of a free slot has not been tested, and without
+        these it looks identical to one that simply signalled rarely.
+      properties:
+        orders: { type: integer }
+        fills: { type: integer }
+        rejected_no_cash: { type: integer }
+        rejected_max_positions: { type: integer }
+        rejected_cooldown: { type: integer }
+        rejected_shorts_disabled: { type: integer }
+        dropped_no_bar: { type: integer }
+        total_commission: { type: number }
+        total_slippage: { type: number }
+        contradictions:
+          type: integer
+          description: >
+            Dates where the entry logic said both "long" and "short", and so
+            said nothing. Neither side was taken.
+
+    CostBreakdown:
+      type: object
+      additionalProperties: false
+      properties:
+        commission: { type: number }
+        slippage: { type: number }
+
+    ExitReason:
+      type: string
+      enum: [signal, stop_loss, take_profit, trailing_stop, max_holding, end_of_window]
+      description: >
+        Why a position closed. "The strategy said so" and "the stop caught it"
+        are different facts about a strategy, and averaging them into one win
+        rate hides which one is doing the work.
+
     ReplaySummary:
       type: object
       additionalProperties: false
@@ -1231,3 +1936,14 @@ components:
             Every simplification applied, shared with the performance report.
             These figures are not tradeable and must never be presented as if
             they were.
+        exit_reasons:
+          type: object
+          nullable: true
+          additionalProperties:
+            type: integer
+        total_commission:
+          type: number
+          default: 0
+        total_slippage:
+          type: number
+          default: 0

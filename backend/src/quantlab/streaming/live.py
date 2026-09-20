@@ -25,6 +25,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Any
 
+from quantlab.execution import Decision, ExecutionConfig, ExecutionSimulator
 from quantlab.replay import engine as replay_engine
 from quantlab.replay.engine import (
     ReplayBar,
@@ -33,9 +34,7 @@ from quantlab.replay.engine import (
     ReplayFill,
     ReplaySignal,
 )
-from quantlab.replay.portfolio import PortfolioSimulator
 from quantlab.research import errors, performance, runner
-from quantlab.signals import builtins as _builtins  # noqa: F401  (registers builtin rules)
 
 # The input shape the signal rules are documented against (date + OHLCV,
 # ascending). Reused rather than redeclared so the bus payload and the
@@ -49,8 +48,8 @@ def resolve_rule(model_name: str, overrides: dict[str, Any]):
     Public so the API layer can validate a request eagerly (404/422) before
     opening a stream, without touching the bus first.
     """
-    rule = runner._resolve_model(model_name, None)
-    effective = runner._validate_overrides(rule, dict(overrides))
+    rule = runner.resolve_model(model_name, None)
+    effective = runner.validate_overrides(rule, dict(overrides))
     return rule, effective
 
 
@@ -82,7 +81,11 @@ def live_replay_events(
         raise errors.UnknownSymbolError([])
     selected = set(symbols)
 
-    sim = PortfolioSimulator(symbols, initial_cash)
+    # The same engine the batch replay drives, stepped one date at a time as
+    # bars arrive. A live replay and a batch one over the same window cannot
+    # disagree about what the strategy did, because there is only one engine.
+    config = ExecutionConfig(initial_capital=initial_cash)
+    sim = ExecutionSimulator(symbols, {symbol: [] for symbol in symbols}, config)
     windows: dict[str, list[Bar]] = {symbol: [] for symbol in symbols}
     seen_bars: dict[str, set[str]] = {symbol: set() for symbol in symbols}
     fired: set[tuple[str, str]] = set()  # (symbol, signal date)
@@ -93,7 +96,7 @@ def live_replay_events(
         mark -- the batch engine's per-date order, exactly."""
         closes = {symbol: bar.close for symbol, bar in sorted(todays.items())}
         yield ReplayBar(date=day, closes=closes)
-        sim.mark(closes)
+
         new: list[tuple[str, Any]] = []
         for symbol in sorted(todays):
             window = windows[symbol]
@@ -109,6 +112,7 @@ def live_replay_events(
                 # land on `day`; an out-of-window date is warm-up history.
                 if start <= event.date <= day:
                     new.append((symbol, event))
+
         for symbol, event in new:  # already (symbol)-ordered by the scan above
             yield ReplaySignal(
                 date=event.date,
@@ -116,27 +120,46 @@ def live_replay_events(
                 direction=event.direction,
                 trigger_values=dict(event.trigger_values),
                 data_window_end=event.data_window_end,
+                kind="both",
             )
-            fill = sim.apply_signal(event.date, symbol, event.direction, closes.get(symbol))
-            if fill is not None:
-                yield ReplayFill(
-                    date=fill.date,
-                    symbol=fill.symbol,
-                    side=fill.side,
-                    qty=fill.qty,
-                    price=fill.price,
-                    value=fill.value,
-                    realized_pnl=fill.realized_pnl,
+
+        # One rule filling both roles, which is what a single-model run is:
+        # bullish opens, bearish closes.
+        state = sim.step_day(
+            day,
+            [
+                Decision(
+                    date=event.date,
+                    symbol=symbol,
+                    kind="both",
+                    direction=event.direction,
+                    trigger_values=dict(event.trigger_values),
+                    data_window_end=event.data_window_end,
                 )
-        equity = sim.equity()
+                for symbol, event in new
+            ],
+        )
+        for fill in state.fills:
+            yield ReplayFill(
+                date=fill.date,
+                symbol=fill.symbol,
+                side=fill.side,
+                qty=fill.qty,
+                price=fill.price,
+                value=fill.value,
+                realized_pnl=fill.realized_pnl,
+                reason=fill.reason,
+                commission=fill.commission,
+                slippage=fill.slippage,
+            )
         yield ReplayEquity(
             date=day,
-            equity=equity,
-            cash=sim.cash,
-            positions=len(sim.open_positions()),
-            realized_pnl=sim.realized_pnl(),
+            equity=state.equity,
+            cash=state.cash,
+            positions=state.positions,
+            realized_pnl=state.realized_pnl,
         )
-        curve.append(performance.EquityPoint(date=day, value=equity))
+        curve.append(performance.EquityPoint(date=day, value=state.equity))
 
     def generate() -> Iterator[ReplayEvent]:
         pending_date: str | None = None
@@ -169,6 +192,7 @@ def live_replay_events(
                 volume=int(message["volume"]),
             )
             windows[symbol].append(bar)
+            sim.ingest(symbol, bar)
             if date < start:
                 continue  # warm-up: feeds the compute window, emits nothing
             pending_date = date

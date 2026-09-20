@@ -21,7 +21,7 @@ from pathlib import Path
 
 from quantlab.logging import get_logger
 from quantlab.signals import engine
-from quantlab.signals.registry import list_rules
+from quantlab.signals.registry import tradeable_rules
 from quantlab.storage import db, repository
 from quantlab.synthetic import generator
 
@@ -51,8 +51,13 @@ def run(db_path: str | os.PathLike) -> dict[str, int]:
                 conn.execute(f"DELETE FROM {table}")
             instrument_count = repository.upsert_instruments(conn)
             bar_count = repository.insert_bars(conn, bars_by_symbol)
-            rule_count = repository.mirror_rules(conn, list_rules())
-            signals = engine.compute_signals(bars_by_symbol)
+            # Filters are excluded: they describe a state and emit on every
+            # bar, so materialising them would bury the actual signals under
+            # tens of thousands of "the gate is shut" rows. They are still
+            # fully available to strategies, which is where they belong.
+            rules = tradeable_rules()
+            rule_count = repository.mirror_rules(conn, rules)
+            signals = engine.compute_signals(bars_by_symbol, rules=rules)
             signal_count = repository.insert_signals(conn, signals)
             db.set_meta(conn, "seeded", "1")
         counts = db.table_counts(conn)

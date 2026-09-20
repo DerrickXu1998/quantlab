@@ -19,6 +19,8 @@ vi.mock('../../src/api/client', async (importOriginal) => {
     getPrices: vi.fn(),
     listSignals: vi.fn(),
     listModels: vi.fn(),
+    listStrategies: vi.fn(),
+    listStrategyTemplates: vi.fn(),
     listRuns: vi.fn(),
     getRun: vi.fn(),
     createRun: vi.fn(),
@@ -57,6 +59,8 @@ beforeEach(() => {
   });
   vi.mocked(apiClient.listSignals).mockResolvedValue({ total: 0, items: [] });
   vi.mocked(apiClient.listModels).mockResolvedValue({ total: 1, items: [model] });
+  vi.mocked(apiClient.listStrategies).mockResolvedValue({ total: 0, items: [] });
+  vi.mocked(apiClient.listStrategyTemplates).mockResolvedValue({ total: 0, items: [] });
   vi.mocked(apiClient.listRuns).mockResolvedValue({ total: 1, items: [makeRun()] });
   vi.mocked(apiClient.getRun).mockResolvedValue(makeRun());
   vi.mocked(apiClient.getRunPerformance).mockResolvedValue(makePerformance());
@@ -74,10 +78,16 @@ function renderApp() {
   );
 }
 
+/**
+ * Strategies opens on the builder now, so the single-model surface these
+ * assertions are about is one tab across. The handoff case (`?model=`) lands
+ * on the signal lab directly and has its own test below.
+ */
 async function openStrategies() {
   const user = userEvent.setup();
   renderApp();
   await user.click(screen.getByRole('button', { name: /strategies/i }));
+  await user.click(screen.getByRole('tab', { name: /signal lab/i }));
   return user;
 }
 
@@ -203,12 +213,15 @@ describe('Overview', () => {
     expect(screen.getAllByTestId('simulated-tag').length).toBeGreaterThan(0);
   });
 
-  it('ships the backtest caveats alongside the figures', async () => {
+  it('ships the backtest caveats alongside the figures, open rather than folded away', async () => {
     renderApp();
 
+    // Derived from the run's own execution config now, so they are real
+    // information about this run and are not hidden behind a disclosure.
     const caveats = await screen.findByTestId('performance-assumptions');
-    expect(caveats).toHaveTextContent(/not a tradeable backtest/i);
+    expect(caveats).toHaveTextContent(/what this run assumed/i);
     expect(caveats).toHaveTextContent(/no transaction costs/i);
+    expect(caveats.querySelector('details')).toBeNull();
   });
 
   it('makes saved runs the primary content of the rail', async () => {

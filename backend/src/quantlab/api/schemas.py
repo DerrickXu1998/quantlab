@@ -16,6 +16,10 @@ class Health(BaseModel):
     dataset: Dataset
     seeded: bool
     signal_count: int
+    #: Whether this deployment demands a bearer token. The SPA reads it to
+    #: decide whether to show a sign-in gate at all, so the local demo still
+    #: boots straight into the app.
+    auth_required: bool = True
 
 
 class Instrument(BaseModel):
@@ -92,6 +96,15 @@ class Model(BaseModel):
     lookback_days: int
     scale_class: Literal["scale_free", "price_scaled"]
     direction_semantics: str
+    # Catalogue metadata, so a builder can group and gate rules without
+    # hardcoding anything about any of them (Constitution II).
+    category: Literal[
+        "trend", "momentum", "mean_reversion", "volatility", "volume"
+    ] = "trend"
+    summary: str = ""
+    #: Which strategy slots this rule may fill. A rule that reports a regime
+    #: rather than a tradeable event advertises ["filter"] only.
+    roles: list[Literal["entry", "exit", "filter"]] = ["entry", "exit"]
 
 
 class ModelList(BaseModel):
@@ -100,12 +113,24 @@ class ModelList(BaseModel):
 
 
 class RunRequest(BaseModel):
-    model_name: str
+    """Either shape of run request.
+
+    Exactly one of ``model_name``, ``strategy_id`` or ``strategy`` identifies
+    what to run. The single-model form is unchanged and still supported; it is
+    promoted internally into a one-rule strategy so there is one execution path
+    and not a legacy branch that slowly stops matching the real one.
+    """
+
+    model_name: str | None = None
     model_version: str | None = None
     parameters: dict[str, Any] = {}
     symbols: list[str]
     start_date: str
     end_date: str
+    strategy_id: str | None = None
+    strategy: StrategyRequest | None = None
+    #: Overrides the strategy's own execution criteria for this run only.
+    execution: ExecutionConfigModel | None = None
 
 
 class CorporateActionNotice(BaseModel):
@@ -147,6 +172,11 @@ class Run(BaseModel):
     corporate_actions: list[CorporateActionNotice] = []
     re_runnable: bool = True
     model_available: bool = True
+    # The strategy and criteria that actually ran, and what the engine did with
+    # them. Null on runs recorded before either existed.
+    strategy: dict[str, Any] | None = None
+    execution: dict[str, Any] | None = None
+    execution_summary: ExecutionSummaryModel | None = None
 
 
 class RunList(BaseModel):
@@ -160,6 +190,10 @@ class ExperimentSignal(BaseModel):
     direction: Literal["bullish", "bearish"]
     trigger_values: dict[str, Any]
     data_window_end: str
+    #: Whether this opens a position, closes one, or both. "both" is what a
+    #: single-model run produces, and is what rows recorded before strategies
+    #: existed mean.
+    kind: Literal["entry", "exit", "both"] = "both"
 
 
 class RunDetail(Run):
@@ -183,6 +217,17 @@ class Trade(BaseModel):
     exit_price: float
     return_pct: float
     open: bool
+    side: Literal["long", "short"] = "long"
+    qty: float = 0.0
+    #: Why the position closed. "the strategy said so" and "the stop caught it"
+    #: are different facts about a strategy, and averaging them into one win
+    #: rate hides which one is doing the work.
+    exit_reason: Literal[
+        "signal", "stop_loss", "take_profit", "trailing_stop", "max_holding",
+        "end_of_window",
+    ] = "signal"
+    pnl: float = 0.0
+    fees: float = 0.0
 
 
 class PerformanceMetrics(BaseModel):
@@ -197,6 +242,11 @@ class PerformanceMetrics(BaseModel):
     losing_trades: int
 
 
+class CostBreakdown(BaseModel):
+    commission: float = 0.0
+    slippage: float = 0.0
+
+
 class RunPerformance(BaseModel):
     run_id: str
     initial_capital: float
@@ -204,8 +254,13 @@ class RunPerformance(BaseModel):
     benchmark: list[EquityPoint]
     metrics: PerformanceMetrics
     trades: list[Trade]
-    # Carried in the payload so the caveats cannot be lost by a UI refactor.
+    # Carried in the payload so the caveats cannot be lost by a UI refactor,
+    # and now generated from the execution criteria that actually ran -- so a
+    # result can no longer claim "no transaction costs" while having charged
+    # them.
     assumptions: list[str]
+    costs: CostBreakdown = CostBreakdown()
+    exit_reasons: dict[str, int] = {}
 
 
 # --- Historical replay ------------------------------------------------------
@@ -229,3 +284,134 @@ class ReplaySummary(BaseModel):
     winning_trades: int
     losing_trades: int
     assumptions: list[str]
+    exit_reasons: dict[str, int] | None = None
+    total_commission: float = 0.0
+    total_slippage: float = 0.0
+
+
+# --- Identity ---------------------------------------------------------------
+
+
+class Credentials(BaseModel):
+    email: str
+    password: str
+
+
+class UserOut(BaseModel):
+    id: str
+    email: str
+    created_at: str
+
+
+class SessionOut(BaseModel):
+    user: UserOut
+    token: str
+    expires_at: str
+
+
+# --- Strategies and execution ----------------------------------------------
+
+
+class StrategyComponentModel(BaseModel):
+    rule_name: str
+    rule_version: str | None = None
+    parameters: dict[str, Any] = {}
+    role: Literal["entry", "exit", "filter"] = "entry"
+    weight: float = 1.0
+    invert: bool = False
+
+
+class ExecutionConfigModel(BaseModel):
+    """Mirrors quantlab.execution.ExecutionConfig.
+
+    Deliberately permissive here and strict in the library: the dataclass
+    validates, and its ValueError becomes a 422 naming the field. Duplicating
+    the bounds as pydantic constraints would mean two places to change and one
+    of them eventually forgotten.
+    """
+
+    initial_capital: float = 100_000.0
+    position_sizing: Literal[
+        "equal_weight", "fixed_fraction", "fixed_notional", "volatility_target"
+    ] = "equal_weight"
+    sizing_value: float | None = None
+    max_positions: int | None = None
+    max_position_pct: float = 1.0
+    fill_timing: Literal["signal_close", "next_open"] = "signal_close"
+    commission_bps: float = 0.0
+    slippage_bps: float = 0.0
+    stop_loss_pct: float | None = None
+    take_profit_pct: float | None = None
+    trailing_stop_pct: float | None = None
+    atr_stop_multiple: float | None = None
+    atr_period: int = 14
+    max_holding_days: int | None = None
+    min_holding_days: int = 0
+    cooldown_days: int = 0
+    allow_shorts: bool = False
+
+
+class StrategyRequest(BaseModel):
+    name: str
+    description: str = ""
+    components: list[StrategyComponentModel]
+    entry_logic: Literal["all", "any", "majority", "weighted"] = "all"
+    exit_logic: Literal["all", "any", "majority", "weighted"] = "any"
+    entry_threshold: float = 1.0
+    exit_threshold: float = 1.0
+    combine_window_days: int = 1
+    execution: ExecutionConfigModel = ExecutionConfigModel()
+
+
+class Strategy(StrategyRequest):
+    id: str
+    owner_id: str | None = None
+    created_at: str
+    updated_at: str
+    #: Legal but probably unintended: no exit component, an unreachable
+    #: combination, filters gating shorts. Reported rather than refused.
+    warnings: list[str] = []
+
+
+class StrategyList(BaseModel):
+    total: int
+    items: list[Strategy]
+
+
+class StrategyTemplate(StrategyRequest):
+    id: str
+
+
+class StrategyTemplateList(BaseModel):
+    total: int
+    items: list[StrategyTemplate]
+
+
+class ExecutionSummaryModel(BaseModel):
+    """What the engine did, including what it refused to do.
+
+    The rejection counters matter as much as the fills: a strategy whose
+    signals were mostly dropped for want of a free slot has not been tested,
+    and without these it looks identical to one that signalled rarely.
+    """
+
+    orders: int = 0
+    fills: int = 0
+    rejected_no_cash: int = 0
+    rejected_max_positions: int = 0
+    rejected_cooldown: int = 0
+    rejected_shorts_disabled: int = 0
+    dropped_no_bar: int = 0
+    total_commission: float = 0.0
+    total_slippage: float = 0.0
+    #: Dates where the entry logic said both "long" and "short", and so said
+    #: nothing. Neither side was taken.
+    contradictions: int = 0
+
+
+# RunRequest and Run reference StrategyRequest, ExecutionConfigModel and
+# ExecutionSummaryModel, which are defined below them. Rebuilding here resolves
+# those forward references now rather than on first request.
+RunRequest.model_rebuild()
+Run.model_rebuild()
+RunDetail.model_rebuild()

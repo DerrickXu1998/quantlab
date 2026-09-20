@@ -24,6 +24,23 @@ DIRECTIONS: tuple[str, ...] = ("bullish", "bearish")
 SCALE_CLASSES: tuple[str, ...] = ("scale_free", "price_scaled")
 PARAM_TYPES: tuple[str, ...] = ("int", "float", "bool", "enum")
 
+#: How a rule is grouped in the catalogue. Presentation metadata, not
+#: behaviour: nothing in the engine branches on it.
+CATEGORIES: tuple[str, ...] = (
+    "trend",
+    "momentum",
+    "mean_reversion",
+    "volatility",
+    "volume",
+)
+
+#: Which slots in a strategy a rule may occupy. A rule that reports a *regime*
+#: rather than a tradeable event -- ADX above a threshold, say -- advertises
+#: ("filter",) only, and the strategy validator refuses to wire it as an entry.
+#: Without this a user can build a strategy that enters every single bar and
+#: has no way to see why.
+ROLES: tuple[str, ...] = ("entry", "exit", "filter")
+
 _NUMERIC_TYPES: tuple[str, ...] = ("int", "float")
 
 
@@ -136,6 +153,11 @@ class SignalRule:
     scale_class: str
     direction_semantics: str
     compute: Callable[..., list[SignalEvent]]
+    #: Catalogue metadata. Defaulted so every rule registered before the
+    #: catalogue existed keeps registering unchanged.
+    category: str = "trend"
+    summary: str = ""
+    roles: tuple[str, ...] = ("entry", "exit")
 
     @property
     def params(self) -> dict[str, Any]:
@@ -178,11 +200,21 @@ def register_signal_rule(
     lookback_days: int,
     scale_class: str,
     direction_semantics: str,
+    category: str = "trend",
+    summary: str = "",
+    roles: tuple[str, ...] = ("entry", "exit"),
 ) -> Callable:
     if lookback_days < 1:
         raise ValueError("lookback_days must be >= 1")
     if scale_class not in SCALE_CLASSES:
         raise ValueError(f"invalid scale_class {scale_class!r}; expected one of {SCALE_CLASSES}")
+    if category not in CATEGORIES:
+        raise ValueError(f"invalid category {category!r}; expected one of {CATEGORIES}")
+    if not roles:
+        raise ValueError(f"{name}: roles must name at least one of {ROLES}")
+    unknown_roles = [role for role in roles if role not in ROLES]
+    if unknown_roles:
+        raise ValueError(f"{name}: invalid roles {unknown_roles}; expected from {ROLES}")
 
     param_specs = _normalise_params(params)
 
@@ -212,6 +244,9 @@ def register_signal_rule(
             scale_class=scale_class,
             direction_semantics=direction_semantics,
             compute=fn,
+            category=category,
+            summary=summary or (fn.__doc__ or "").strip().split("\n")[0],
+            roles=tuple(roles),
         )
         return fn
 
@@ -229,3 +264,15 @@ def get_rule(name: str, version: str | None = None) -> SignalRule:
 
 def list_rules() -> list[SignalRule]:
     return [_REGISTRY[key] for key in sorted(_REGISTRY)]
+
+
+def tradeable_rules() -> list[SignalRule]:
+    """Rules that emit events, excluding the pure filters.
+
+    A filter describes a *state*, so it emits on every single bar. That is
+    correct for gating a strategy and wrong for anything that materialises
+    signals into a table: twelve instruments over three years of a filter is
+    tens of thousands of "the gate is shut" rows, which would bury the actual
+    signals in the viewer and inflate every count on the page.
+    """
+    return [rule for rule in list_rules() if set(rule.roles) & {"entry", "exit"}]

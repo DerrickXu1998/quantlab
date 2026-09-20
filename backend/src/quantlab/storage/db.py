@@ -112,7 +112,72 @@ CREATE TABLE IF NOT EXISTS experiment_signals (
 
 CREATE INDEX IF NOT EXISTS idx_experiment_signals_run
     ON experiment_signals (run_id, symbol, date);
+
+-- Identity. Until this existed every run lived in one global table, so any
+-- caller could list, rename and delete every other caller's work.
+CREATE TABLE IF NOT EXISTS users (
+    id            TEXT PRIMARY KEY,
+    email         TEXT NOT NULL UNIQUE,
+    -- pbkdf2_sha256$<iterations>$<salt_b64>$<hash_b64>; the cost travels with
+    -- the hash so it can be raised without a mass password reset.
+    password_hash TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    disabled      INTEGER NOT NULL DEFAULT 0 CHECK (disabled IN (0, 1))
+);
+
+-- Sessions are rows, not signed tokens: a row can be deleted, so signing out
+-- and revoking a stolen token actually mean something. Only the SHA-256 of the
+-- token is stored, so reading this table yields no usable credential.
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    CHECK (created_at <= expires_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions (expires_at);
+
+-- Saved strategies. The spec is stored as canonical JSON rather than shredded
+-- into columns: it is validated on the way in and on the way out, its shape is
+-- owned by quantlab.strategy, and a schema migration per new execution setting
+-- would be a tax on every future one.
+CREATE TABLE IF NOT EXISTS strategies (
+    id          TEXT PRIMARY KEY,
+    owner_id    TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    spec        TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_strategies_owner ON strategies (owner_id, name);
 """
+
+#: Columns added to tables that predate them.
+#:
+#: ``CREATE TABLE IF NOT EXISTS`` is a no-op against an existing table, so the
+#: bootstrap DDL above cannot add a column to a database that already has
+#: ``experiment_runs``. Without this, an existing demo database silently keeps
+#: the old schema and every insert fails at runtime with a column-count error.
+#: Each entry is ``(table, column, definition)`` and is applied only when the
+#: column is absent, so running it repeatedly is safe.
+_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    # Ownership (see `users`). Null on rows that predate accounts; those are
+    # visible only in single-user mode, which is the honest outcome -- there is
+    # no way to know retroactively whose they were.
+    ("experiment_runs", "owner_id", "TEXT"),
+    # The resolved strategy and execution config that actually ran. Null on
+    # runs recorded before strategies existed.
+    ("experiment_runs", "strategy", "TEXT"),
+    ("experiment_runs", "execution", "TEXT"),
+    ("experiment_runs", "execution_summary", "TEXT"),
+    # Whether a stored signal opens, closes, or (for a single-model run) does
+    # both. Defaulted so existing rows keep their meaning exactly.
+    ("experiment_signals", "kind", "TEXT NOT NULL DEFAULT 'both'"),
+)
 
 # Fixed table + ordering for the deterministic dump hash.
 #
@@ -183,9 +248,42 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
 
 
 def bootstrap(conn: sqlite3.Connection) -> None:
-    """Apply the idempotent schema bootstrap."""
+    """Apply the idempotent schema bootstrap, then any pending column adds."""
     conn.executescript(BOOTSTRAP_DDL)
+    migrate(conn)
     conn.commit()
+
+
+def migrate(conn: sqlite3.Connection) -> list[str]:
+    """Add columns that this database is missing, and report what was added.
+
+    Runs as part of ``bootstrap`` rather than as a separate step somebody has to
+    remember: a database that is opened is a database that is up to date. Every
+    change here is additive, so an older build still reads a migrated file --
+    which matters because a rollback must not require a restore.
+    """
+    applied: list[str] = []
+    for table, column, definition in _ADDED_COLUMNS:
+        if not _table_exists(conn, table):
+            continue
+        if column in _columns_of(conn, table):
+            continue
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        applied.append(f"{table}.{column}")
+    return applied
+
+
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+    ).fetchone()
+    return row is not None
+
+
+def _columns_of(conn: sqlite3.Connection, table: str) -> set[str]:
+    # The table name cannot be bound as a parameter in a PRAGMA; it is never
+    # user-supplied here, only ever a literal from _ADDED_COLUMNS.
+    return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
 
 
 def upsert_instruments(conn: sqlite3.Connection, rows: list[InstrumentRow]) -> None:

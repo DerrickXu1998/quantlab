@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from quantlab.signals import builtins as _builtins  # noqa: F401  (registers builtin rules)
-from quantlab.signals.registry import SignalRule, list_rules
+from quantlab.signals.registry import SignalRule, tradeable_rules
 
 
 @dataclass(frozen=True)
@@ -37,7 +37,13 @@ def compute_signals(
     recorded on each signal — recording the bare defaults while executing
     overrides would make the record unreproducible (Constitution VI).
     """
-    rules = list(rules) if rules is not None else list_rules()
+    # Filters are excluded by default. This function *materialises* signals --
+    # into the demo seed, into the warehouse catalog -- and a filter describes
+    # a state rather than an event, so it emits on every single bar. Including
+    # them by default would bury real signals under an order of magnitude more
+    # "the gate is shut" rows in every table that stores this output. Strategy
+    # composition does not come through here; it evaluates filters directly.
+    rules = list(rules) if rules is not None else tradeable_rules()
     # Resolved once per rule so an unknown override key fails immediately,
     # rather than after part of the universe has already been processed.
     effective_by_rule = {

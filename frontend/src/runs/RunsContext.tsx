@@ -11,32 +11,40 @@ import {
 import {
   ApiError,
   createRun,
+  createStrategyRun,
   deleteRun,
   getRun,
   listModels,
   listRuns,
   saveRun,
-  type Model,
   type Run,
-  type RunDetail,
   type RunRequest,
 } from '../api/client';
+import {
+  asCatalogModel,
+  type CatalogModel,
+  type RawCatalogModel,
+  type RunDetailV2,
+  type StrategyRunRequest,
+} from '../api/types';
 
 export type LoadStatus = 'loading' | 'ready' | 'error';
 
 /** A registered model joined to its run history, newest first. */
 export interface ModelEntry {
-  model: Model;
+  model: RawCatalogModel;
   runs: Run[];
   latest: Run | null;
 }
 
 export interface RunsContextValue {
   // The model registry.
-  models: Model[];
+  models: RawCatalogModel[];
+  /** The same registry with the contract-v2 fields normalised (§2). */
+  catalog: CatalogModel[];
   modelsStatus: LoadStatus;
-  selectedModel: Model | null;
-  selectModel: (model: Model | null) => void;
+  selectedModel: RawCatalogModel | null;
+  selectModel: (model: RawCatalogModel | null) => void;
   /** Models joined with their run history (the old useStrategies join). */
   modelEntries: ModelEntry[];
 
@@ -47,10 +55,12 @@ export interface RunsContextValue {
 
   // Session state: runs started here, and the one being inspected.
   sessionRuns: Run[];
-  activeRun: RunDetail | null;
+  activeRun: RunDetailV2 | null;
   inFlight: boolean;
   runError: string | null;
   start: (request: RunRequest) => Promise<void>;
+  /** The same run machinery, given a composed strategy instead of one model. */
+  startStrategyRun: (request: StrategyRunRequest) => Promise<void>;
   cancel: () => void;
   select: (runId: string) => Promise<void>;
   clearActiveRun: () => void;
@@ -78,16 +88,16 @@ function byRecency(a: Run, b: Run): number {
  * over to Strategies, and a saved run is the same object everywhere.
  */
 export function RunsProvider({ children }: { children: ReactNode }) {
-  const [models, setModels] = useState<Model[]>([]);
+  const [models, setModels] = useState<RawCatalogModel[]>([]);
   const [modelsStatus, setModelsStatus] = useState<LoadStatus>('loading');
-  const [selectedModel, setSelectedModel] = useState<Model | null>(null);
+  const [selectedModel, setSelectedModel] = useState<RawCatalogModel | null>(null);
 
   const [allRuns, setAllRuns] = useState<Run[]>([]);
   const [runsStatus, setRunsStatus] = useState<LoadStatus>('loading');
   const [runsNonce, setRunsNonce] = useState(0);
 
   const [sessionRuns, setSessionRuns] = useState<Run[]>([]);
-  const [activeRun, setActiveRun] = useState<RunDetail | null>(null);
+  const [activeRun, setActiveRun] = useState<RunDetailV2 | null>(null);
   const [inFlight, setInFlight] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -138,13 +148,16 @@ export function RunsProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const start = useCallback(async (request: RunRequest) => {
+  // One body for both request shapes: §5 promotes a legacy single-model
+  // request to a one-component strategy server-side, so there is one execution
+  // path there and there is one here too.
+  const runWith = useCallback(async (submit: (signal: AbortSignal) => Promise<Run>) => {
     const controller = new AbortController();
     abortRef.current = controller;
     setInFlight(true);
     setRunError(null);
     try {
-      const run = await createRun(request, controller.signal);
+      const run = await submit(controller.signal);
       // A new run never replaces an earlier one (FR-012).
       setSessionRuns((current) => [run, ...current]);
       setAllRuns((current) => [run, ...current]);
@@ -157,6 +170,16 @@ export function RunsProvider({ children }: { children: ReactNode }) {
       setInFlight(false);
     }
   }, []);
+
+  const start = useCallback(
+    (request: RunRequest) => runWith((signal) => createRun(request, signal)),
+    [runWith],
+  );
+
+  const startStrategyRun = useCallback(
+    (request: StrategyRunRequest) => runWith((signal) => createStrategyRun(request, signal)),
+    [runWith],
+  );
 
   // Aborts the client's wait. The server finishes the computation it started —
   // at this data scale that costs milliseconds, and the UI must not claim
@@ -192,6 +215,8 @@ export function RunsProvider({ children }: { children: ReactNode }) {
     [models, allRuns],
   );
 
+  const catalog = useMemo<CatalogModel[]>(() => models.map(asCatalogModel), [models]);
+
   const latestCompleted = useMemo(
     () => allRuns.filter((run) => run.status === 'completed').sort(byRecency)[0] ?? null,
     [allRuns],
@@ -199,6 +224,7 @@ export function RunsProvider({ children }: { children: ReactNode }) {
 
   const value: RunsContextValue = {
     models,
+    catalog,
     modelsStatus,
     selectedModel,
     selectModel: setSelectedModel,
@@ -211,6 +237,7 @@ export function RunsProvider({ children }: { children: ReactNode }) {
     inFlight,
     runError,
     start,
+    startStrategyRun,
     cancel,
     select,
     clearActiveRun,

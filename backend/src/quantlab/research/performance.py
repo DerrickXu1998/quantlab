@@ -52,6 +52,15 @@ class Trade:
     exit_price: float
     return_pct: float
     open: bool
+    # Everything below is additive, and defaulted so the pre-execution shape of
+    # this record still constructs. A run that predates execution criteria has
+    # no stop to have been caught by, so "signal" is the truthful default
+    # rather than a placeholder.
+    side: str = "long"
+    qty: float = 0.0
+    exit_reason: str = "signal"
+    pnl: float = 0.0
+    fees: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -76,6 +85,12 @@ class PerformanceMetrics:
 
 
 @dataclass(frozen=True)
+class CostBreakdown:
+    commission: float = 0.0
+    slippage: float = 0.0
+
+
+@dataclass(frozen=True)
 class RunPerformance:
     run_id: str
     initial_capital: float
@@ -84,6 +99,12 @@ class RunPerformance:
     metrics: PerformanceMetrics
     trades: list[Trade] = field(default_factory=list)
     assumptions: list[str] = field(default_factory=lambda: list(ASSUMPTIONS))
+    #: What the trading cost, and why each position was closed. Both are new
+    #: with execution criteria: "the strategy said so" and "the stop caught it"
+    #: are different facts, and averaging them into one win rate hides which is
+    #: doing the work.
+    costs: CostBreakdown = field(default_factory=CostBreakdown)
+    exit_reasons: dict[str, int] = field(default_factory=dict)
 
 
 def _closes(bars: list[Any]) -> dict[str, float]:
@@ -288,23 +309,120 @@ def metrics(equity: list[EquityPoint], trades: list[Trade]) -> PerformanceMetric
     )
 
 
+def to_decisions(signals: list[dict]) -> list[Any]:
+    """Stored signals, as the execution engine's input.
+
+    A row recorded before strategies existed has no ``kind``; it came from a
+    single-model run, where one rule both opened and closed, which is exactly
+    what ``both`` means.
+    """
+    from quantlab.execution import Decision
+
+    return [
+        Decision(
+            date=item["date"],
+            symbol=item["symbol"],
+            kind=item.get("kind") or "both",
+            direction=item["direction"],
+            trigger_values=item.get("trigger_values") or {},
+            data_window_end=item.get("data_window_end", item["date"]),
+        )
+        for item in signals
+    ]
+
+
+def _within(bars: list[Any], start: str | None, end: str | None) -> list[Any]:
+    return [
+        bar
+        for bar in bars
+        if (start is None or bar.date >= start) and (end is None or bar.date <= end)
+    ]
+
+
 def compute_performance(
     *,
     run_id: str,
     signals: list[dict],
     bars_by_symbol: dict[str, list[Any]],
     symbols: list[str],
-    initial_capital: float = INITIAL_CAPITAL,
+    initial_capital: float | None = None,
+    execution: Any = None,
+    window_start: str | None = None,
+    window_end: str | None = None,
 ) -> RunPerformance:
-    """The whole answer for one run, from its signals and its window's bars."""
-    trades = pair_trades(signals, bars_by_symbol)
-    equity = equity_series(trades, bars_by_symbol, symbols, initial_capital)
+    """The whole answer for one run, from its signals and its window's bars.
+
+    Re-executed rather than re-derived: the stored decisions are replayed
+    through the same simulator the run itself used, under the same criteria.
+    Because that simulator is deterministic (Constitution VI), this reproduces
+    the original run exactly instead of approximating it with a second
+    implementation -- which is what the two hand-kept copies of this logic used
+    to do, and how they drifted.
+    """
+    from quantlab.execution import ExecutionConfig, simulate
+
+    config = execution or ExecutionConfig()
+    if initial_capital is not None and initial_capital != config.initial_capital:
+        from dataclasses import replace
+
+        config = replace(config, initial_capital=initial_capital)
+
+    # Simulated over everything supplied -- a stop set from an ATR on the first
+    # session of the window needs the sessions behind it -- but *reported* over
+    # the window only. Warm-up bars are inputs to the signals, not part of the
+    # period being measured, and a curve that began in the warm-up would put a
+    # flat stretch of untraded capital at the front of every result.
+    result = simulate(symbols, bars_by_symbol, to_decisions(signals), config)
+
+    trades = [
+        Trade(
+            symbol=t.symbol,
+            entry_date=t.entry_date,
+            entry_price=t.entry_price,
+            exit_date=t.exit_date,
+            exit_price=t.exit_price,
+            return_pct=t.return_pct,
+            open=t.open,
+            side=t.side,
+            qty=t.qty,
+            exit_reason=t.exit_reason,
+            pnl=t.pnl,
+            fees=t.fees,
+        )
+        for t in result.trades
+    ]
+    curve = [
+        EquityPoint(date=p.date, value=p.value)
+        for p in result.equity
+        if (window_start is None or p.date >= window_start)
+        and (window_end is None or p.date <= window_end)
+    ]
+
+    # The benchmark is normalised from the window's first close, not the
+    # warm-up's, or buy-and-hold would be credited with a move that happened
+    # before the period under test.
+    in_window = {
+        symbol: _within(bars, window_start, window_end)
+        for symbol, bars in bars_by_symbol.items()
+    }
+
+    reasons: dict[str, int] = {}
+    for trade in trades:
+        reasons[trade.exit_reason] = reasons.get(trade.exit_reason, 0) + 1
+
     return RunPerformance(
         run_id=run_id,
-        initial_capital=initial_capital,
-        equity=equity,
-        benchmark=benchmark_series(bars_by_symbol, symbols, initial_capital),
-        metrics=metrics(equity, trades),
+        initial_capital=config.initial_capital,
+        equity=curve,
+        benchmark=benchmark_series(in_window, symbols, config.initial_capital),
+        metrics=metrics(curve, trades),
         trades=trades,
-        assumptions=list(ASSUMPTIONS),
+        # Generated from the config that actually ran, so the caveats can no
+        # longer contradict the numbers they ship with.
+        assumptions=result.assumptions,
+        costs=CostBreakdown(
+            commission=result.summary.total_commission,
+            slippage=result.summary.total_slippage,
+        ),
+        exit_reasons=dict(sorted(reasons.items())),
     )

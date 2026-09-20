@@ -4,6 +4,14 @@
 the running stack on 2026-09-20 ~11:45 UTC.** Where the code and the older docs disagreed, the
 code won.
 
+> **Addendum, not a re-verification.** Strategies, execution criteria and accounts landed after
+> that commit and are not reflected in the diagrams below: `quantlab.execution` and
+> `quantlab.strategy` are new packages between `signals` and `research`, `auth` is new beside
+> them, and the rule count has gone from 3 to 13. Everything else here still holds, but it has
+> not been re-measured against the current tree — read
+> [EXECUTION_MODEL.md](EXECUTION_MODEL.md) for how a signal now becomes a trade, and
+> [CONTRACT_V2.md](CONTRACT_V2.md) for the API surface.
+
 This document has two jobs: describe the hierarchy of the application, and say which data
 sources are ingested. Treat those differently. **The hierarchy is stable; the ingest figures are
 a photograph of live state and go stale quickly** — an earlier draft recorded a warehouse
@@ -39,7 +47,7 @@ quantlab/
 ├── backend/src/quantlab/    TIER 2  the demo application (a *separate* package)
 │   ├── api/                 FastAPI: app, routes, Pydantic schemas
 │   ├── storage/             two seams: StorageBackend + ExperimentStore
-│   ├── signals/             signal rule registry + engine (3 builtin rules)
+│   ├── signals/             signal rule registry + engine (13 rules: 10 tradeable, 3 filters)
 │   ├── research/            runner, performance, typed errors
 │   ├── replay/              deterministic replay engine + portfolio simulator
 │   ├── streaming/           Kafka consumer → live replay
@@ -154,7 +162,7 @@ The demo path is guarded by test: `backend/tests/unit/test_demo_fallback.py` mak
                         ▼               ▼                ▼
                  StorageBackend   ExperimentStore   signals.registry
                         │               │                │
-              ClickHouse/Postgres   experiment_*     3 builtin rules
+              ClickHouse/Postgres   experiment_*     13 rules
                  or SQLite            tables
                         │
                         └──▶ research.runner ──▶ research.performance

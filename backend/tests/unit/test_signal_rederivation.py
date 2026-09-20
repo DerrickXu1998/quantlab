@@ -64,4 +64,9 @@ def test_rederivation_covers_every_rule_and_instrument(tmp_path):
     stored = Counter((symbol, rule) for symbol, _, rule, *_ in _stored_signals(db_path))
     recomputed = Counter((symbol, rule) for symbol, _, rule, *_ in _recomputed_signals(db_path))
     assert stored == recomputed
-    assert {rule for _, rule in stored} == {"sma-crossover", "rsi-threshold", "breakout-20d"}
+    from quantlab.signals.registry import tradeable_rules
+
+    assert {rule for _, rule in stored} <= {rule.name for rule in tradeable_rules()}
+    assert {"sma-crossover", "rsi-threshold", "breakout-20d"} <= {
+        rule for _, rule in stored
+    }

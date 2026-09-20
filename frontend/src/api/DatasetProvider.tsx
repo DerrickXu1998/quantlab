@@ -1,9 +1,10 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { ApiError, getHealth, type Health } from './client';
+import { ApiError, getHealth } from './client';
+import type { HealthV2 } from './types';
 
 export type DatasetState =
   | { status: 'loading' }
-  | { status: 'ready'; health: Health }
+  | { status: 'ready'; health: HealthV2 }
   | { status: 'unreachable'; message: string };
 
 const DatasetContext = createContext<DatasetState | null>(null);

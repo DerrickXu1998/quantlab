@@ -16,6 +16,9 @@ from quantlab.signals.registry import ParamSpec, SignalEvent, register_signal_ru
 @register_signal_rule(
     name="sma-crossover",
     version="1.0.0",
+    category="trend",
+    summary="Fast SMA crossing the slow SMA.",
+    roles=("entry", "exit"),
     params={
         "fast": ParamSpec(
             name="fast", type="int", default=20, minimum=2, maximum=200,
@@ -65,6 +68,9 @@ def sma_crossover(bars, fast: int = 20, slow: int = 50) -> list[SignalEvent]:
 @register_signal_rule(
     name="rsi-threshold",
     version="1.0.0",
+    category="mean_reversion",
+    summary="RSI leaving the overbought or oversold zone.",
+    roles=("entry", "exit"),
     params={
         "period": ParamSpec(
             name="period", type="int", default=14, minimum=2, maximum=100,
@@ -117,6 +123,9 @@ def rsi_threshold(
 @register_signal_rule(
     name="breakout-20d",
     version="1.0.0",
+    category="volatility",
+    summary="Close breaking the prior N-session high or low.",
+    roles=("entry", "exit"),
     params={
         "window": ParamSpec(
             name="window", type="int", default=20, minimum=2, maximum=250,
