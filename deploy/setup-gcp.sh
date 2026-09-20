@@ -38,6 +38,7 @@ PROVIDER_ID="${PROVIDER_ID:-github-oidc}"
 VM_SA_ID="${VM_SA_ID:-quantlab-vm}"
 DEPLOYER_SA_ID="${DEPLOYER_SA_ID:-quantlab-deployer}"
 NETWORK_TAG="${NETWORK_TAG:-quantlab}"
+STATIC_IP_NAME="${STATIC_IP_NAME:-quantlab-api}"
 
 log() { printf '\n=== %s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -179,6 +180,25 @@ ok_if_exists gcloud compute firewall-rules create "quantlab-allow-ssh-iap" \
 # --- 7. Attach the service account and tag to the existing VM ----------------
 if gcloud compute instances describe "$INSTANCE" --zone "$ZONE" >/dev/null 2>&1; then
 	log "configuring instance ${INSTANCE}"
+
+	# Reserve the external IP BEFORE anything stops the instance. A default VM
+	# gets an *ephemeral* address, which is released on stop and replaced on
+	# start -- so the resize below would silently move the API to a new IP and
+	# break the DNS record pointing at it. Promoting the address it already has
+	# keeps the current value and costs the same as any other static IP.
+	current_ip="$(gcloud compute instances describe "$INSTANCE" --zone "$ZONE" \
+		--format='value(networkInterfaces[0].accessConfigs[0].natIP)' 2>/dev/null || true)"
+	ip_kind="$(gcloud compute addresses list --filter="address=${current_ip}" \
+		--format='value(addressType)' 2>/dev/null | head -1)"
+
+	if [ -n "$current_ip" ] && [ -z "$ip_kind" ]; then
+		log "reserving ${current_ip} as a static address (it is currently ephemeral)"
+		ok_if_exists gcloud compute addresses create "${STATIC_IP_NAME}" \
+			--addresses="$current_ip" --region="$REGION" \
+			--description="QuantLab API, promoted from ephemeral"
+	else
+		printf '  external IP %s is already reserved (%s)\n' "${current_ip:-none}" "${ip_kind:-unknown}"
+	fi
 
 	# Not disks[0]: an instance with a data disk attached may list it first, and
 	# snapshotting or measuring the wrong disk would be silently useless.
