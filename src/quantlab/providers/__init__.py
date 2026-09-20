@@ -11,7 +11,7 @@ import logging
 
 log = logging.getLogger(__name__)
 
-_MODULES = ("csvfile", "stooq", "sec_edgar", "companies_house", "boe", "fred", "openfigi", "yahoo")
+_MODULES = ("csvfile", "stooq", "sec_edgar", "companies_house", "boe", "fred", "openfigi", "yahoo", "finra", "fca")
 _REGISTERED = False
 
 

@@ -5,7 +5,7 @@ rather than by convenience.
 
 | | ClickHouse | Postgres |
 |---|---|---|
-| Holds | `price_bars` | instruments, symbol maps, universe snapshots, ingest runs, rejects, corporate actions, signals |
+| Holds | `price_bars` | instruments, symbol maps, universe snapshots, ingest runs, rejects, corporate actions, fundamentals, signals |
 | Shape | append-only, enormous, scan-heavy | small, mutable, relational |
 | Why there | columnar scans, 10–30× compression, built for time series | foreign keys, unique/exclusion constraints, transactions |
 
@@ -49,6 +49,28 @@ what makes a 100× pence/pound error detectable after the fact.
 **Universe membership is append-only,** enforced by a trigger. A snapshot you
 can edit after the fact is not a snapshot, and reconstructing the historical
 universe is the only free defence against survivorship bias.
+`make universe-snapshot` archives the currently ingested universe (real
+instruments with bars; synthetic and macro pseudo-instruments excluded).
+
+**Fundamentals are point-in-time by `filed_at`.** The `fundamentals` table
+(migration 004) holds raw XBRL facts from SEC EDGAR and Companies House: one
+row per (instrument, taxonomy, tag, unit, fiscal period, filing). Identity
+includes the filing's accession/document id, so restatements land as new rows
+with a later `filed_at` — never edits — and re-ingesting one filing is a no-op
+via `ON CONFLICT DO NOTHING`. A backtest at as-of date D reads
+`filed_at <= D` and takes the latest filing per concept; the `CONCEPT_TAGS` /
+`UK_TAGS` fallback chains are resolved at read time, not stored. CIK and
+company number live on `instruments` (and can bind through `symbol_map`), so
+no separate identifier bridge table exists.
+
+The same table also carries two daily metric series, modelled as publications
+rather than filings: FINRA short *volume* (`provider='finra'`, tags
+`short_volume`/`short_exempt_volume`/`total_volume` in shares, `period_end =
+filed_at =` trade date, `accession` the file name) and FCA net short *interest*
+(`provider='fca'`, tag `net_short_position_pct`, one row per holder disclosure
+with the holder as accession, `filed_at =` position date + 2 business days for
+the T+2 basis). Both are idempotent on the same row identity and never touch
+ClickHouse.
 
 **Provenance is per batch.** Every bar carries `run_id`, a foreign key in
 spirit to `ingest_runs`. That is ~8 bytes a row instead of duplicating source
@@ -136,6 +158,7 @@ make migrate     # apply pending migrations to both stores
 make ingest      # SYMBOLS="AAPL.US HSBA.LON" START=2015-01-01
 make seed-warehouse  # deterministic synthetic bars, no network
 make map-identifiers  # OpenFIGI FIGIs for every real instrument (keyless, resumable)
+make universe-snapshot  # archive the current ingested universe (append-only)
 make coverage    # what is held, where it came from, compression ratios
 make signals     # recompute signals from bars into the catalog
 make store-test  # store test suite against the live stack

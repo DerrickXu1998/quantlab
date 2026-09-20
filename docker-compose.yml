@@ -96,6 +96,12 @@ services:
       QUANTLAB_HOME: /var/lib/quantlab
       # SEC and other sources want a real contact address; override in .env.
       QUANTLAB_USER_AGENT: ${QUANTLAB_USER_AGENT:-quantlab/0.1 (research)}
+      # Credentialed ingest jobs read these from the environment; set them in
+      # .env (all free to obtain -- see docs/DATA_SOURCES.md). Empty means the
+      # job fails fast with a clear "set ..." message.
+      SEC_USER_AGENT: ${SEC_USER_AGENT:-}
+      FRED_API_KEY: ${FRED_API_KEY:-}
+      COMPANIES_HOUSE_API_KEY: ${COMPANIES_HOUSE_API_KEY:-}
     volumes:
       - quantlab-cache:/var/lib/quantlab
     depends_on:

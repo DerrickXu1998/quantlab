@@ -152,6 +152,41 @@ def cmd_universe(args) -> int:
     return 0
 
 
+def cmd_universe_snapshot(args) -> int:
+    """Archive the currently ingested universe as an append-only snapshot.
+
+    Membership is every real equity instrument that has bars in the store --
+    synthetic fixtures (ZX*) and macro pseudo-instruments (*.BOE) are excluded.
+    """
+    from . import store
+
+    with store.session(args.db_url) as conn, store.ch_session(args.ch_url) as client:
+        if not args.no_migrate:
+            store.migrate(conn)
+
+        have_bars = set(store.coverage(conn, client)["symbol"])
+        securities = store.load_securities(conn)
+        symbols = store.real_equity_symbols(securities, with_bars=sorted(have_bars))
+        if not symbols:
+            print("nothing to snapshot: no real instruments with bars", file=sys.stderr)
+            return 1
+
+        ids = store.instrument_ids(conn, symbols)
+        snapshot_id = store.snapshot_universe(
+            conn,
+            args.name,
+            symbols,
+            ids,
+            snapshot_date=args.snapshot_date or None,
+            source="warehouse",
+        )
+        conn.commit()
+
+        members = store.snapshot_members(conn, snapshot_id)
+        print(f"snapshot {snapshot_id}: {args.name}, {len(members)} members")
+    return 0
+
+
 def cmd_doctor(args) -> int:
     """Check the environment: plugins loaded, keys present, sources reachable."""
     from .config import settings
@@ -268,10 +303,12 @@ def cmd_seed_synthetic(args) -> int:
 
 def cmd_ingest_macro(args) -> int:
     from . import store
-    from .store.macro import parse_series_args
+    from .schema import Currency, ProviderError
+    from .store.macro import FRED_MAPPING, FRED_NAMES, parse_series_args
 
+    is_fred = args.provider == "fred"
     try:
-        mapping = parse_series_args(args.series)
+        mapping = parse_series_args(args.series, defaults=FRED_MAPPING if is_fred else None)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 
@@ -279,13 +316,21 @@ def cmd_ingest_macro(args) -> int:
         if not args.no_migrate:
             store.migrate_all(conn, client)
 
-        report = store.ingest_macro_series(
-            conn,
-            client,
-            mapping,
-            start=args.start,
-            end=args.end,
-        )
+        try:
+            report = store.ingest_macro_series(
+                conn,
+                client,
+                mapping,
+                start=args.start,
+                end=args.end,
+                source="fred" if is_fred else "boe",
+                names=FRED_NAMES if is_fred else None,
+                currencies={code: Currency.USD for code in mapping} if is_fred else None,
+                country="US" if is_fred else "GB",
+            )
+        except ProviderError as exc:
+            # e.g. "FRED needs a free API key; set FRED_API_KEY"
+            raise SystemExit(str(exc)) from exc
         print(report.summary())
 
         if args.optimize:
@@ -293,6 +338,154 @@ def cmd_ingest_macro(args) -> int:
             store.optimize(client)
 
     return 0 if report.status in ("ok", "partial") else 1
+
+
+def cmd_map_sec_tickers(args) -> int:
+    """Bind SEC CIKs to catalog .US instruments (company_tickers.json)."""
+    from . import store
+    from .schema import ProviderError
+
+    # Catalog-only: CIK bindings live in Postgres, no bars involved.
+    with store.session(args.db_url) as conn:
+        if not args.no_migrate:
+            store.migrate(conn)
+
+        try:
+            report = store.map_sec_tickers(
+                conn,
+                limit=args.limit,
+                only_missing=args.only_missing,
+            )
+        except (ValueError, ProviderError) as exc:
+            # SecEdgarProvider raises ValueError when SEC_USER_AGENT has no email.
+            raise SystemExit(str(exc)) from exc
+        print(report.summary())
+
+    return 0 if report.status in ("ok", "partial") else 1
+
+
+def cmd_ingest_sec_fundamentals(args) -> int:
+    from . import store
+    from .schema import ProviderError
+
+    with store.session(args.db_url) as conn:
+        if not args.no_migrate:
+            store.migrate(conn)
+
+        try:
+            report = store.ingest_sec_fundamentals(
+                conn,
+                limit=args.limit,
+                only_missing=args.only_missing,
+            )
+        except (ValueError, ProviderError) as exc:
+            raise SystemExit(str(exc)) from exc
+        print(report.summary())
+
+    return 0 if report.status in ("ok", "partial") else 1
+
+
+def cmd_map_ch_companies(args) -> int:
+    """Bind Companies House company numbers to catalog .LON instruments."""
+    from . import store
+    from .schema import ProviderError
+
+    # Catalog-only: company_number bindings live in Postgres, no bars involved.
+    with store.session(args.db_url) as conn:
+        if not args.no_migrate:
+            store.migrate(conn)
+
+        try:
+            report = store.map_ch_companies(
+                conn,
+                limit=args.limit,
+                only_missing=args.only_missing,
+            )
+        except (ValueError, ProviderError) as exc:
+            # CompaniesHouseProvider raises ProviderError without a key.
+            raise SystemExit(str(exc)) from exc
+        print(report.summary())
+
+    return 0 if report.status in ("ok", "partial") else 1
+
+
+def cmd_ingest_ch_fundamentals(args) -> int:
+    from . import store
+    from .schema import ProviderError
+
+    with store.session(args.db_url) as conn:
+        if not args.no_migrate:
+            store.migrate(conn)
+
+        try:
+            report = store.ingest_ch_fundamentals(
+                conn,
+                limit=args.limit,
+                only_missing=args.only_missing,
+            )
+        except (ValueError, ProviderError) as exc:
+            # CompaniesHouseProvider raises ProviderError without a key.
+            raise SystemExit(str(exc)) from exc
+        print(report.summary())
+
+    return 0 if report.status in ("ok", "partial") else 1
+
+
+def cmd_ingest_finra_shorts(args) -> int:
+    """Load FINRA daily short volume into the fundamentals table."""
+    from . import store
+    from .schema import ProviderError
+
+    if args.date:
+        start = end = _parse_day(args.date)
+    else:
+        end = _parse_day(args.end) if args.end else pd.Timestamp.today().date()
+        start = _parse_day(args.start) if args.start else end - pd.Timedelta(days=31)
+
+    with store.session(args.db_url) as conn:
+        if not args.no_migrate:
+            store.migrate(conn)
+
+        try:
+            report = store.ingest_finra_shorts(
+                conn, start=start, end=end, limit=args.limit
+            )
+        except (ValueError, ProviderError) as exc:
+            raise SystemExit(str(exc)) from exc
+        print(report.summary())
+
+    return 0 if report.status in ("ok", "partial") else 1
+
+
+def cmd_ingest_fca_shorts(args) -> int:
+    """Load FCA disclosed net short positions into the fundamentals table."""
+    from . import store
+    from .schema import ProviderError
+
+    with store.session(args.db_url) as conn:
+        if not args.no_migrate:
+            store.migrate(conn)
+
+        try:
+            report = store.ingest_fca_shorts(conn, limit=args.limit)
+        except (ValueError, ProviderError) as exc:
+            raise SystemExit(str(exc)) from exc
+        print(report.summary())
+
+    return 0 if report.status in ("ok", "partial") else 1
+
+
+def _parse_day(value: str):
+    """Accept YYYYMMDD or YYYY-MM-DD."""
+    import datetime as dt
+
+    value = value.strip()
+    if len(value) == 8 and value.isdigit():
+        return dt.date(int(value[:4]), int(value[4:6]), int(value[6:8]))
+    try:
+        return dt.date.fromisoformat(value)
+    except ValueError:
+        raise SystemExit(f"bad date {value!r}: expected YYYYMMDD or YYYY-MM-DD") from None
 
 
 def cmd_map_identifiers(args) -> int:
@@ -467,6 +660,19 @@ def build_parser() -> argparse.ArgumentParser:
     u.add_argument("--tail", type=int, default=25)
     u.set_defaults(func=cmd_universe)
 
+    us = sub.add_parser(
+        "universe-snapshot",
+        help="archive the currently ingested universe as an append-only snapshot",
+    )
+    us.add_argument("name", help="snapshot universe name, e.g. liquid-500-ftse-core")
+    us.add_argument("--snapshot-date", default="",
+                    help="snapshot date (default: today); an existing (name, date) is left untouched")
+    us.add_argument("--db-url", default="", help="Postgres catalog; overrides $QUANTLAB_DB_URL")
+    us.add_argument("--ch-url", default="", help="ClickHouse bars; overrides $QUANTLAB_CH_URL")
+    us.add_argument("--no-migrate", action="store_true",
+                    help="skip the automatic migrate step")
+    us.set_defaults(func=cmd_universe_snapshot)
+
     d = sub.add_parser("doctor", help="check plugins, keys and paths")
     d.set_defaults(func=cmd_doctor)
 
@@ -521,13 +727,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     im = sub.add_parser(
         "ingest-macro",
-        help="load BoE macro series (FX, Bank Rate, gilts, M4) as pseudo-instrument bars",
+        help="load macro series (BoE FX/rates, or FRED US macro with --provider fred) "
+             "as pseudo-instrument bars",
     )
+    im.add_argument("--provider", choices=["boe", "fred"], default="boe",
+                    help="macro source (default: boe; fred needs FRED_API_KEY)")
     im.add_argument("--start", default="2010-01-01")
     im.add_argument("--end", default="")
     im.add_argument("--series", action="append",
                     help="CODE:SYMBOL, e.g. XUDLUSS:GBPUSD.BOE, repeatable; "
-                         "default: the five BoE COMMON_SERIES")
+                         "default: the five BoE COMMON_SERIES, or the FRED set "
+                         "(VIXCLS, DGS10, DGS2, BAMLH0A0HYM2, DFII10, DTWEXBGS) "
+                         "with --provider fred")
     im.add_argument("--db-url", default="", help="Postgres catalog; overrides $QUANTLAB_DB_URL")
     im.add_argument("--ch-url", default="", help="ClickHouse bars; overrides $QUANTLAB_CH_URL")
     im.add_argument("--optimize", action="store_true",
@@ -535,6 +746,36 @@ def build_parser() -> argparse.ArgumentParser:
     im.add_argument("--no-migrate", action="store_true",
                     help="skip the automatic migrate step")
     im.set_defaults(func=cmd_ingest_macro)
+
+    ifs = sub.add_parser(
+        "ingest-finra-shorts",
+        help="load FINRA daily short sale volume for catalog .US instruments into the "
+             "fundamentals table (keyless; idempotent per day)",
+    )
+    ifs.add_argument("--date", default="",
+                     help="single day, YYYYMMDD or YYYY-MM-DD")
+    ifs.add_argument("--start", default="",
+                     help="first day of a range (default: 31 days before --end/today)")
+    ifs.add_argument("--end", default="",
+                     help="last day of a range (default: today)")
+    ifs.add_argument("--limit", type=int, default=None,
+                     help="keep at most the N most recent days of the range")
+    ifs.add_argument("--db-url", default="", help="Postgres catalog; overrides $QUANTLAB_DB_URL")
+    ifs.add_argument("--no-migrate", action="store_true",
+                     help="skip the automatic migrate step")
+    ifs.set_defaults(func=cmd_ingest_finra_shorts)
+
+    ifc = sub.add_parser(
+        "ingest-fca-shorts",
+        help="load FCA disclosed net short positions for catalog .LON instruments into the "
+             "fundamentals table (keyless xlsx; conservative name matching; idempotent)",
+    )
+    ifc.add_argument("--limit", type=int, default=None,
+                     help="write at most N matched instruments this run")
+    ifc.add_argument("--db-url", default="", help="Postgres catalog; overrides $QUANTLAB_DB_URL")
+    ifc.add_argument("--no-migrate", action="store_true",
+                     help="skip the automatic migrate step")
+    ifc.set_defaults(func=cmd_ingest_fca_shorts)
 
     mid = sub.add_parser(
         "map-identifiers",
@@ -550,6 +791,71 @@ def build_parser() -> argparse.ArgumentParser:
     mid.add_argument("--no-migrate", action="store_true",
                      help="skip the automatic migrate step")
     mid.set_defaults(func=cmd_map_identifiers)
+
+    mst = sub.add_parser(
+        "map-sec-tickers",
+        help="bind SEC CIKs to catalog .US instruments via company_tickers.json "
+             "(needs SEC_USER_AGENT)",
+    )
+    mst.add_argument("--limit", type=int, default=None,
+                     help="map at most N instruments this run")
+    mst.add_argument("--only-missing", dest="only_missing", action="store_true", default=True,
+                     help="only instruments without a CIK yet (default; makes re-runs resume)")
+    mst.add_argument("--all", dest="only_missing", action="store_false",
+                     help="re-map every .US instrument, keeping existing CIKs")
+    mst.add_argument("--db-url", default="", help="Postgres catalog; overrides $QUANTLAB_DB_URL")
+    mst.add_argument("--no-migrate", action="store_true",
+                     help="skip the automatic migrate step")
+    mst.set_defaults(func=cmd_map_sec_tickers)
+
+    isf = sub.add_parser(
+        "ingest-sec-fundamentals",
+        help="pull SEC companyfacts for CIK-bound instruments into the fundamentals table "
+             "(needs SEC_USER_AGENT; resumable)",
+    )
+    isf.add_argument("--limit", type=int, default=None,
+                     help="ingest at most N instruments this run")
+    isf.add_argument("--only-missing", dest="only_missing", action="store_true", default=True,
+                     help="only instruments with no sec_edgar rows yet (default; resumes a run)")
+    isf.add_argument("--all", dest="only_missing", action="store_false",
+                     help="re-pull every CIK-bound instrument (idempotent: re-pulled "
+                          "filings are ON CONFLICT no-ops)")
+    isf.add_argument("--db-url", default="", help="Postgres catalog; overrides $QUANTLAB_DB_URL")
+    isf.add_argument("--no-migrate", action="store_true",
+                     help="skip the automatic migrate step")
+    isf.set_defaults(func=cmd_ingest_sec_fundamentals)
+
+    mcc = sub.add_parser(
+        "map-ch-companies",
+        help="bind Companies House company numbers to catalog .LON instruments "
+             "via /search/companies (needs COMPANIES_HOUSE_API_KEY; conservative matching)",
+    )
+    mcc.add_argument("--limit", type=int, default=None,
+                     help="map at most N instruments this run")
+    mcc.add_argument("--only-missing", dest="only_missing", action="store_true", default=True,
+                     help="only instruments without a company_number yet (default; resumes)")
+    mcc.add_argument("--all", dest="only_missing", action="store_false",
+                     help="re-map every .LON instrument, keeping existing company_numbers")
+    mcc.add_argument("--db-url", default="", help="Postgres catalog; overrides $QUANTLAB_DB_URL")
+    mcc.add_argument("--no-migrate", action="store_true",
+                     help="skip the automatic migrate step")
+    mcc.set_defaults(func=cmd_map_ch_companies)
+
+    ich = sub.add_parser(
+        "ingest-ch-fundamentals",
+        help="parse Companies House filed accounts for company_number-bound instruments "
+             "(needs COMPANIES_HOUSE_API_KEY; resumable)",
+    )
+    ich.add_argument("--limit", type=int, default=None,
+                     help="ingest at most N instruments this run")
+    ich.add_argument("--only-missing", dest="only_missing", action="store_true", default=True,
+                     help="only instruments with no companies_house rows yet (default; resumes)")
+    ich.add_argument("--all", dest="only_missing", action="store_false",
+                     help="re-pull every company_number-bound instrument (idempotent)")
+    ich.add_argument("--db-url", default="", help="Postgres catalog; overrides $QUANTLAB_DB_URL")
+    ich.add_argument("--no-migrate", action="store_true",
+                     help="skip the automatic migrate step")
+    ich.set_defaults(func=cmd_ingest_ch_fundamentals)
 
     rp = sub.add_parser(
         "replay-publish",

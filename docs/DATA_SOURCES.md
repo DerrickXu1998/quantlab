@@ -95,6 +95,18 @@ domain and unambiguously safe commercially.
   issuers — a handful of dual-listings.
 - **Note**: `efts.sec.gov` (full-text search) is undocumented by the SEC. Its stability and
   rate policy are **unverified**; do not build a pipeline on it.
+- **Storage**: facts land in the Postgres `fundamentals` table (migration 004) — one row per
+  (instrument, taxonomy, tag, unit, period, filing), point-in-time by `filed_at`. Two jobs,
+  both needing `SEC_USER_AGENT` in `.env`:
+  - `make map-sec-tickers` (`quantlab map-sec-tickers`) — matches catalog `.US` instruments
+    against `company_tickers.json` (case- and class-share-tolerant: `BRK.B` → `BRK-B`), writes
+    `instruments.cik` (zero-padded) plus a `symbol_map` row under `source='sec_edgar'`, and
+    reports matched/unmatched counts. Resumable via `--only-missing` (default).
+  - `make ingest-sec-fundamentals` (`quantlab ingest-sec-fundamentals [--limit N] [--all]`) —
+    pulls `companyfacts` per CIK-bound instrument (≤10 req/s via the shared limiter), flattens
+    every `facts.<taxonomy>.<tag>.units.<unit>[]` entry into `fundamentals` with
+    `provider='sec_edgar'`, `accession=accn`, `filed_at=filed`. Idempotent (the accession is in
+    the row identity), committed in 25-instrument chunks, resumable.
 
 ### Companies House (UK) — `quantlab.providers.companies_house`
 
@@ -109,6 +121,13 @@ most "free financial data" lists.
 - **Honest limitations**, because they shape what you can build:
   - Many LSE issuers are incorporated in Jersey, Guernsey, Ireland or the Isle of Man and
     are simply not in Companies House.
+  - **Most large PLCs file their accounts at CH as scanned PDFs, not iXBRL** — verified
+    across the FTSE core in 2026-09: every mapped FTSE-100 name's filing history is
+    100% `application/pdf`. iXBRL coverage is concentrated in smaller companies filing
+    via accounting software. The ingest checks the document metadata's resource list and
+    skips PDF-only filings (logged per company), so `ingest-ch-fundamentals` yields
+    facts only where iXBRL actually exists. UK large-cap fundamentals effectively need a
+    different source (or PDF extraction, deferred).
   - Accounts follow a statutory calendar, not a market reporting calendar. They lag and are
     coarser than US quarterly filings.
   - **Nothing in the data carries a ticker.** You build the company-number → SEDOL/ISIN →
@@ -116,6 +135,34 @@ most "free financial data" lists.
 - **Licence**: Crown copyright, normally Open Government Licence. The download page itself
   only says "provided free of charge and is not supported" — **confirm before commercial
   use (unverified).**
+- **Storage**: parsed iXBRL facts share the `fundamentals` table with SEC data
+  (`provider='companies_house'`), keyed by `company_number` via
+  `instruments.company_number` — no ticker bridge table is needed. `filed_at` is the
+  filing-history date, the only honest point-in-time anchor the API gives.
+- **The ticker bridge exists**: `make map-ch-companies` (`quantlab map-ch-companies
+  [--limit N] [--all]`) searches `/search/companies` once per `.LON` instrument using the
+  OpenFIGI name recorded by `make map-identifiers` (Bloomberg decorations like `/THE` and
+  `-DI` are stripped first), so **run `map-identifiers` before `map-ch-companies`**.
+  Matching is deliberately conservative: both sides are normalized (case, punctuation —
+  including CH's dotted "P.L.C." form — a leading THE, trailing PLC/LIMITED/LTD legal
+  forms), and a match is accepted only as an exact normalized-name hit on a single
+  **active** company, or a HOLDINGS/GROUP-stripped hit when the search returned exactly
+  one active candidate. Ambiguous multi-hits go to the report's review list and are never
+  written; an existing `company_number` is never overwritten. Search responses are cached
+  30 days, so re-runs are free. Known gaps beyond the Jersey/Guernsey/IoM/Ireland
+  incorporation hole (Glencore, WPP, Pershing Square…): instruments with no recorded name
+  at all are skipped, and vendor-name abbreviations ("SAINSBURY (J) PLC", "SCOTTISH
+  MORTGAGE INV TR PLC", truncated "INTERCONTINENTAL HOTELS GROU") do not match the
+  registered title — those land in the unresolved list for manual mapping.
+  `make ingest-ch-fundamentals` (`quantlab ingest-ch-fundamentals [--limit N]`, needs
+  `COMPANIES_HOUSE_API_KEY` in `.env`) walks each company's filing history and parses
+  every accounts document for the `UK_TAGS` concepts. Two documented gaps: `unit` stays
+  empty (the regex parser does not resolve `unitRef` to a currency — values are in the
+  company's presentation currency), and `period_end` comes from the document's
+  `EndDateForPeriodCoveredByReport`/`BalanceSheetDate` tag, falling back to the filing
+  date with `meta.period_end_assumed` when the tag is absent. Resolving iXBRL contexts
+  properly (periods, dimensions, currencies) is deferred — swap in `arelle` if that
+  precision ever matters.
 
 ---
 
@@ -144,10 +191,26 @@ generally freely reusable with attribution.
 
 ### FRED — `quantlab.providers.fred`
 
-Free key required. US macro: yield curve, HY credit spreads, VIX, real rates, dollar index.
-**Published rate limit: not stated on the official pages (unverified)** — the widely cited
-120/min is third-party. Much of FRED is *redistributed* third-party data (OECD, BIS) whose
-own terms still apply.
+Free key required (`FRED_API_KEY` in `.env`). US macro: yield curve, HY credit spreads,
+VIX, real rates, dollar index. **Published rate limit: not stated on the official pages
+(unverified)** — the widely cited 120/min is third-party. Much of FRED is *redistributed*
+third-party data (OECD, BIS) whose own terms still apply.
+
+`make ingest-fred` (`quantlab ingest-macro --provider fred`) loads the default set as
+pseudo-instrument bars, same bridge as the BoE series:
+
+| FRED code | Pseudo-symbol | Series |
+|---|---|---|
+| `VIXCLS` | `VIX.FRED` | CBOE Volatility Index, close |
+| `DGS10` | `UST10Y.FRED` | 10-Year Treasury constant maturity |
+| `DGS2` | `UST2Y.FRED` | 2-Year Treasury constant maturity |
+| `BAMLH0A0HYM2` | `HYSPREAD.FRED` | ICE BofA US High Yield OAS |
+| `DFII10` | `REAL10Y.FRED` | 10-Year TIPS (real) yield |
+| `DTWEXBGS` | `DOLLARIDX.FRED` | Nominal broad US dollar index |
+
+Override with `--series CODE:SYMBOL` (repeatable). Note `DFII10` went negative in
+2020–21: bars must be strictly positive, so those days are quarantined into
+`ingest_rejects` and the run closes "partial" — expected, not a failure.
 
 ---
 
@@ -187,11 +250,63 @@ is exactly where free price data is least trustworthy anyway.
 
 | Source | What | Cadence | Notes |
 |---|---|---|---|
-| **FINRA short volume** | US daily short sale volume | Same day by 18:00 ET | `cdn.finra.org/equity/regsho/daily/CNMSshvol{YYYYMMDD}.txt`. Short *volume*, not short interest — 40–50% is normal and mostly market making. Read the z-score, not the level. |
-| **FCA net short positions** | UK disclosed net shorts | Daily from 12:00, **T+2** | 0.2% disclosure threshold. This *is* short interest and it is genuinely informative. Matched on ISIN. |
+| **FINRA short volume** | US daily short sale volume | Same day by 18:00 ET | **Ingested** — see below. Short *volume*, not short interest — 40–50% is normal and mostly market making. Read the z-score, not the level. |
+| **FCA net short positions** | UK disclosed net shorts | Daily from 12:00, **T+2** | **Ingested** — see below. 0.2% disclosure threshold. This *is* short interest and it is genuinely informative. |
 | **SEC Form 3/4/5** | US insider transactions | Quarterly bulk ZIPs; daily via EDGAR index | Buys inform, sales are mostly noise. Clusters of distinct buyers beat individuals. |
 | **RNS** (UK) | Company announcements, PDMR dealings | Continuous | **No free official API.** `investegate.co.uk` and `lse.co.uk/rns` are free to read but are scraping targets, and RNS content is LSEG-copyrighted. |
 | **ESG** | — | — | **No free, machine-readable, broad-universe source exists.** Drop it from v1. |
+
+### FINRA short volume — `quantlab.providers.finra`
+
+- **Free**: yes. Keyless, no registration, one flat file per trading day at
+  `cdn.finra.org/equity/regsho/daily/CNMSshvol{YYYYMMDD}.txt`. No published
+  rate limit; the limiter here is 2 req/s as a courtesy, and the files are
+  one per day anyway.
+- **File shape**: `Date|Symbol|ShortVolume|ShortExemptVolume|TotalVolume|Market`,
+  ~12,300 symbols, with a bare record-count line as the footer (the parser skips
+  it). Class shares are slash-spelled (`BRK/A` → catalog `BRK.B.US`); volumes can
+  be fractional.
+- **Availability**: verified 2026-09 — files reach back to ~2018-08-01 on the CDN.
+  An absent file (weekend, market holiday, not yet published) answers **HTTP 403,
+  not 404**, and the provider treats that as `DataUnavailable`, never an error.
+- **Storage**: the Postgres `fundamentals` table, `provider='finra'`, tags
+  `short_volume` / `short_exempt_volume` / `total_volume`, unit `shares`,
+  `period_end` = `filed_at` = trade date (published by 18:00 ET that day),
+  `accession='CNMSshvol-YYYYMMDD'`, so a re-ingest of a day is an ON CONFLICT
+  no-op. FINRA symbols not in the catalog are skipped and counted in the run
+  report. Nothing goes to ClickHouse — this is small relational data, not bars.
+- `make ingest-finra-shorts` (`quantlab ingest-finra-shorts [--date YYYYMMDD |
+  --start --end] [--limit N]`): one request per weekday, commits per day, default
+  range the last 31 days.
+
+### FCA net short positions — `quantlab.providers.fca`
+
+- **Free**: yes. Keyless, one daily-refreshed workbook:
+  `fca.org.uk/publication/data/short-positions-daily-update.xlsx` — the *entire*
+  disclosure history since 2013 (~109k rows verified 2026-09), columns
+  `Position Holder | Name of Share Issuer | ISIN | Net Short Position (%) |
+  Position Date`. Reading it needs openpyxl (`pip install quantlab[excel]`; the
+  ingest image carries it). The old `api.data.fca.org.uk` host no longer resolves;
+  the static xlsx is the stable endpoint.
+- **Freshness caveat**: despite the "daily update" name, the file pulled on
+  2026-09-20 contained no position dated after **2026-07-09** (~10 weeks stale).
+  Check `max(period_end)` after each pull before trusting the recent end.
+- **Honest gaps**, because they shape what you can build:
+  - The file is ISIN-keyed and the catalog has **no ISINs** (OpenFIGI does not
+    return them), so issuers are bridged by conservative normalized-name
+    matching — the same rules as `map_ch_companies`. A normalized name claimed
+    by two catalog instruments matches nothing; unmatched issuers are counted
+    in the run report, never guessed.
+  - Each row is one **holder's** position. The issuer-level net short is the
+    sum over holders at read time.
+  - A 0.0% row is a position that fell below the disclosure threshold — kept,
+    not dropped; it is information.
+- **Storage**: `fundamentals`, `provider='fca'`, tag `net_short_position_pct`,
+  unit `pct`, `period_end` = position date, `filed_at` = position date + 2
+  business days (the T+2 publication basis), `accession` = holder name (the
+  disclosure identity — re-pulls are no-ops), ISIN/holder/issuer name in `meta`.
+- `make ingest-fca-shorts` (`quantlab ingest-fca-shorts [--limit N]`): a single
+  fetch, committed in 10k-row chunks.
 
 ### The UK/US asymmetry
 
@@ -220,7 +335,10 @@ measuring the performance of companies that survived — which is not a real str
 is no free fix. Partial mitigations: SEC `company_tickers.json` history, Companies House
 dissolved-company records, and archiving your own universe snapshots from day one.
 `quantlab universe <name> --out snapshot.csv` on a daily schedule costs nothing and in
-three years you will have something no free source sells.
+three years you will have something no free source sells. For the warehouse itself,
+`make universe-snapshot` (`quantlab universe-snapshot <name>`) archives the currently
+ingested universe — every real instrument with bars, excluding synthetic and macro
+pseudo-instruments — into the append-only `universe_snapshots`/`universe_members` tables.
 
 ---
 

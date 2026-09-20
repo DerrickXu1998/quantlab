@@ -38,6 +38,9 @@ from .catalog import (
     list_symbols,
     load_securities,
     map_vendor_symbols,
+    real_equity_symbols,
+    record_cik_mappings,
+    record_company_number_mappings,
     record_figi_mappings,
     record_rejects,
     run_history,
@@ -66,9 +69,19 @@ from .conn import (
     session,
 )
 from .identifiers import MapReport, map_identifiers
+from .fundamentals import (
+    ChMapReport,
+    flatten_companyfacts,
+    ingest_ch_fundamentals,
+    ingest_sec_fundamentals,
+    map_ch_companies,
+    map_sec_tickers,
+    write_fundamentals,
+)
 from .ingest import IngestReport, ingest_corporate_actions, ingest_prices
 from .macro import ingest_macro_series, series_to_bars
 from .seed import seed_warehouse
+from .shorts import ingest_fca_shorts, ingest_finra_shorts
 from .migrate import (
     CH_MIGRATIONS_DIR,
     MIGRATIONS_DIR,
@@ -84,6 +97,7 @@ from .reader import coverage, load_panel, panel_for_modelling
 __all__ = [
     "CH_ENV_VAR",
     "CH_MIGRATIONS_DIR",
+    "ChMapReport",
     "DEFAULT_CH_URL",
     "DEFAULT_DSN",
     "ENV_VAR",
@@ -106,22 +120,32 @@ __all__ = [
     "dsn",
     "ensure_instruments",
     "finish_run",
+    "flatten_companyfacts",
+    "ingest_ch_fundamentals",
     "ingest_corporate_actions",
+    "ingest_fca_shorts",
+    "ingest_finra_shorts",
     "ingest_macro_series",
     "ingest_prices",
+    "ingest_sec_fundamentals",
     "instrument_ids",
     "latest_snapshot",
     "list_symbols",
     "load_bars",
     "load_panel",
     "load_securities",
+    "map_ch_companies",
     "map_identifiers",
+    "map_sec_tickers",
     "map_vendor_symbols",
     "migrate",
     "migrate_all",
     "optimize",
     "panel_for_modelling",
     "ping",
+    "real_equity_symbols",
+    "record_cik_mappings",
+    "record_company_number_mappings",
     "record_figi_mappings",
     "record_rejects",
     "run_history",
@@ -138,4 +162,5 @@ __all__ = [
     "validate",
     "write_bars",
     "write_corporate_actions",
+    "write_fundamentals",
 ]

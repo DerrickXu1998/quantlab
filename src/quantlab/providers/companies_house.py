@@ -18,6 +18,7 @@ Honest limitations, because they shape what you can build:
 from __future__ import annotations
 
 import base64
+import datetime as dt
 import logging
 import re
 from typing import Any, Sequence
@@ -95,6 +96,24 @@ class CompaniesHouseProvider(DataProvider):
         self._require_key()
         return self.client.get_json(f"{API_BASE}/company/{company_number}", ttl=7 * 86400)
 
+    # Document formats we can parse iXBRL facts from, in preference order.
+    XHTML_FORMATS = ("application/xhtml+xml", "application/xml", "text/html")
+
+    def xhtml_content(self, document_metadata_url: str) -> bytes | None:
+        """The accounts document as XHTML/iXBRL, or None when it is PDF-only.
+
+        Most large PLCs file their accounts at Companies House as scanned
+        PDFs -- iXBRL coverage is concentrated in smaller companies filing via
+        accounting software. The document metadata lists the available formats
+        up front, so checking it first costs one cacheable request and avoids
+        a 406 retried four times.
+        """
+        resources = (self.client.get_json(document_metadata_url, ttl=86400).get("resources") or {})
+        fmt = next((f for f in self.XHTML_FORMATS if f in resources), None)
+        if fmt is None:
+            return None
+        return self.client.get(f"{document_metadata_url}/content", ttl=-1, headers={"Accept": fmt})
+
     def filing_history(self, company_number: str, category: str = "accounts", limit: int = 50) -> pd.DataFrame:
         """Filing history -- the source of point-in-time filing dates for the UK."""
         self._require_key()
@@ -149,13 +168,16 @@ class CompaniesHouseProvider(DataProvider):
                 log.warning("companies_house: filing history for %s failed: %s", symbol, exc)
                 continue
             for _, item in history.iterrows():
-                doc = (item.get("links") or {}).get("document_metadata")
+                links = item.get("links")
+                doc = links.get("document_metadata") if isinstance(links, dict) else None
                 if not doc:
                     continue
                 try:
-                    content = self.client.get(f"{doc}/content", ttl=-1, headers={"Accept": "application/xhtml+xml"})
+                    content = self.xhtml_content(doc)
                 except Exception as exc:
                     log.debug("companies_house: document fetch failed: %s", exc)
+                    continue
+                if content is None:
                     continue
                 values = parse_ixbrl(content.decode("utf-8", errors="replace"), concepts)
                 if values:
@@ -184,14 +206,25 @@ def parse_ixbrl(document: str, concepts: Sequence[str]) -> dict[str, float]:
     heavy dependency for a handful of numbers. Swap in ``arelle`` here if you
     need contexts, dimensions and full validation.
     """
+    return {concept: value for concept, (_, value) in parse_ixbrl_facts(document, concepts).items()}
+
+
+def parse_ixbrl_facts(document: str, concepts: Sequence[str]) -> dict[str, tuple[str, float]]:
+    """Like :func:`parse_ixbrl`, but keeps the raw tag: concept -> (tag, value).
+
+    The fundamentals table stores the tag as filed, so the warehouse ingest
+    needs the tag name back; the namespace prefix is still dropped (the regex
+    cannot resolve it), so the tag alone is what lands in ``fundamentals.tag``.
+    """
     wanted: dict[str, str] = {}
     for concept in concepts:
         for tag in UK_TAGS.get(concept, [concept]):
             wanted[tag.lower()] = concept
 
-    out: dict[str, float] = {}
+    out: dict[str, tuple[str, float]] = {}
     for match in _IX_RE.finditer(document):
-        concept = wanted.get(match.group("tag").lower())
+        tag = match.group("tag")
+        concept = wanted.get(tag.lower())
         if concept is None or concept in out:
             continue
         raw = match.group("value").replace(",", "").replace("\xa0", "").strip()
@@ -207,5 +240,30 @@ def parse_ixbrl(document: str, concepts: Sequence[str]) -> dict[str, float]:
             value *= 10 ** int(scale.group(1))
         if _SIGN_RE.search(attrs):
             value = -value
-        out[concept] = value
+        out[concept] = (tag, value)
     return out
+
+
+_PERIOD_RE = re.compile(
+    r'<ix:nonNumeric[^>]*name="[^:"]*:(?P<tag>EndDateForPeriodCoveredByReport|BalanceSheetDate)"[^>]*>'
+    r"(?P<value>[^<]*)</ix:nonNumeric>",
+    re.IGNORECASE,
+)
+
+
+def parse_ixbrl_period_end(document: str) -> dt.date | None:
+    """The statutory period end of an iXBRL accounts document, if findable.
+
+    Companies House filings tag it as ``EndDateForPeriodCoveredByReport`` (or
+    ``BalanceSheetDate`` for a balance-sheet-only document). Returns None when
+    neither parses -- the caller decides on the fallback, not this function.
+    """
+    for match in _PERIOD_RE.finditer(document):
+        raw = match.group("value").strip()
+        ts = pd.to_datetime(raw, errors="coerce", format="%Y-%m-%d")
+        if pd.isna(ts):
+            # Human-spelled dates ("31 December 2023") appear in older filings.
+            ts = pd.to_datetime(raw, errors="coerce", dayfirst=True)
+        if pd.notna(ts):
+            return ts.date()
+    return None

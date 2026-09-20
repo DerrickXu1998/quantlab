@@ -219,6 +219,112 @@ def record_figi_mappings(
     return len(rows)
 
 
+def record_cik_mappings(
+    conn,
+    mappings: Mapping[str, int],
+    ids: Mapping[str, int],
+    *,
+    source: str = "sec_edgar",
+) -> int:
+    """Record ticker -> CIK matches for catalog instruments.
+
+    Mirrors ``record_figi_mappings``: the CIK lands in the two places join
+    paths already read -- the ``instruments.cik`` column (zero-padded to the
+    SEC's ten-digit form) and a ``symbol_map`` row under ``source='sec_edgar'``
+    -- and a mapping never blanks an existing CIK.
+    """
+    rows = []
+    cik_by_symbol: dict[str, str] = {}
+    for symbol, cik in mappings.items():
+        if symbol not in ids:
+            continue
+        padded = f"{int(cik):010d}"
+        cik_by_symbol[symbol] = padded
+        rows.append(
+            {
+                "symbol": symbol,
+                "cik": padded,
+                "meta": json.dumps(
+                    {source: {"cik": int(cik), "mapped_at": dt.date.today().isoformat()}},
+                    sort_keys=True,
+                ),
+            }
+        )
+    if not rows:
+        return 0
+
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            UPDATE instruments SET
+                cik = COALESCE(NULLIF(%(cik)s, ''), instruments.cik),
+                meta = instruments.meta || %(meta)s::jsonb
+            WHERE symbol = %(symbol)s
+            """,
+            rows,
+        )
+    map_vendor_symbols(conn, source, cik_by_symbol, ids)
+    return len(rows)
+
+
+def record_company_number_mappings(
+    conn,
+    mappings: Mapping[str, str],
+    ids: Mapping[str, int],
+    *,
+    source: str = "companies_house",
+    names: Mapping[str, str] | None = None,
+) -> int:
+    """Record symbol -> Companies House company-number matches.
+
+    Mirrors ``record_cik_mappings``: the number lands in the two places join
+    paths already read -- the ``instruments.company_number`` column and a
+    ``symbol_map`` row under ``source='companies_house'`` -- and the matched
+    CH title folds into ``meta['companies_house']``. Stricter than the CIK
+    variant on purpose: an existing company_number is never overwritten, not
+    just never blanked -- a wrong CH binding is worse than a missing one.
+    """
+    names = names or {}
+    rows = []
+    number_by_symbol: dict[str, str] = {}
+    for symbol, number in mappings.items():
+        if symbol not in ids or not str(number).strip():
+            continue
+        number_by_symbol[symbol] = str(number)
+        rows.append(
+            {
+                "symbol": symbol,
+                "company_number": str(number),
+                "meta": json.dumps(
+                    {
+                        source: {
+                            "company_number": str(number),
+                            "company_name": str(names.get(symbol, "")),
+                            "mapped_at": dt.date.today().isoformat(),
+                        }
+                    },
+                    sort_keys=True,
+                ),
+            }
+        )
+    if not rows:
+        return 0
+
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            UPDATE instruments SET
+                company_number = COALESCE(NULLIF(instruments.company_number, ''),
+                                          NULLIF(%(company_number)s, '')),
+                meta = instruments.meta || %(meta)s::jsonb
+            WHERE symbol = %(symbol)s
+            """,
+            rows,
+        )
+    map_vendor_symbols(conn, source, number_by_symbol, ids)
+    return len(rows)
+
+
 # ---------------------------------------------------------------------------
 # Provenance
 # ---------------------------------------------------------------------------
@@ -411,6 +517,32 @@ def snapshot_members(conn, snapshot_id: int) -> list[int]:
     return [row[0] for row in rows]
 
 
+def real_equity_symbols(
+    securities: Mapping[str, Security],
+    *,
+    with_bars: Sequence[str] | None = None,
+) -> list[str]:
+    """The real instruments eligible for a warehouse universe snapshot.
+
+    Synthetic fixtures and macro pseudo-instruments are warehouse plumbing, not
+    universe members: they are excluded by meta flag or by symbol convention
+    (ZX*, *.BOE). ``with_bars``, when given, further restricts to symbols that
+    actually have bars in the store.
+    """
+    wanted = set(with_bars) if with_bars is not None else None
+    out = []
+    for symbol, sec in securities.items():
+        if wanted is not None and symbol not in wanted:
+            continue
+        meta = dict(sec.meta or {})
+        if meta.get("synthetic") or meta.get("macro"):
+            continue
+        if symbol.startswith("ZX") or symbol.endswith(".BOE"):
+            continue
+        out.append(symbol)
+    return sorted(out)
+
+
 def latest_snapshot(conn, universe: str) -> int | None:
     """Most recent universe snapshot id, or None if that universe has none."""
     row = conn.execute(
@@ -485,7 +617,7 @@ def load_securities(conn, symbols: Sequence[str] | None = None) -> dict[str, Sec
     """Reference data as Security objects, ready for a Context."""
     query = """
         SELECT symbol, name, exchange, country, currency, sector, industry,
-               isin, sedol, cik, company_number, figi, active
+               isin, sedol, cik, company_number, figi, active, meta
           FROM instruments
     """
     params: list = []
@@ -497,7 +629,7 @@ def load_securities(conn, symbols: Sequence[str] | None = None) -> dict[str, Sec
     out: dict[str, Security] = {}
     for row in conn.execute(query, params).fetchall():
         (symbol, name, exchange, country, currency, sector, industry,
-         isin, sedol, cik, company_number, figi, active) = row
+         isin, sedol, cik, company_number, figi, active, meta) = row
         out[symbol] = Security(
             symbol=symbol,
             name=name,
@@ -512,6 +644,7 @@ def load_securities(conn, symbols: Sequence[str] | None = None) -> dict[str, Sec
             company_number=company_number,
             figi=figi,
             active=active,
+            meta=meta or {},
         )
     return out
 
