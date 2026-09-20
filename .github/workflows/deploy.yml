@@ -45,6 +45,62 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Fail early, and in English. Without this, the first symptom of an
+  # unconfigured repository is google-github-actions/auth reporting "must
+  # specify exactly one of workload_identity_provider or credentials_json" --
+  # a description of that action's input contract, not of the actual problem,
+  # which is that `vars.GCP_WORKLOAD_IDENTITY_PROVIDER` interpolated to an
+  # empty string because nobody has set it. That message sends people hunting
+  # for a missing secret, when the deliberate design is that no secret exists.
+  preflight:
+    name: repository is configured
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the required repository variables
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_REGION: ${{ vars.GCP_REGION }}
+          GCP_ZONE: ${{ vars.GCP_ZONE }}
+          GCP_INSTANCE: ${{ vars.GCP_INSTANCE }}
+          GCP_AR_REPO: ${{ vars.GCP_AR_REPO }}
+          GCP_SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+        run: |
+          set -uo pipefail
+          missing=()
+          for v in GCP_PROJECT_ID GCP_REGION GCP_ZONE GCP_INSTANCE \
+                   GCP_AR_REPO GCP_SERVICE_ACCOUNT GCP_WORKLOAD_IDENTITY_PROVIDER; do
+            # ${!v:-} not ${!v}: `set -u` would abort on a name that is unset
+            # rather than merely empty, turning a clear report into a crash.
+            [ -n "${!v:-}" ] || missing+=("$v")
+          done
+
+          if [ ${#missing[@]} -eq 0 ]; then
+            echo "All required variables are set."
+            echo "  project : ${GCP_PROJECT_ID}"
+            echo "  instance: ${GCP_INSTANCE} (${GCP_ZONE})"
+            echo "  registry: ${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${GCP_AR_REPO}"
+            exit 0
+          fi
+
+          {
+            echo "### Deploy is not configured yet"
+            echo
+            echo "These repository **variables** are unset:"
+            # shellcheck disable=SC2016  # the backticks are Markdown code spans
+            printf -- '- `%s`\n' "${missing[@]}"
+            echo
+            echo "They are variables, not secrets — none of the values are sensitive."
+            echo "The pipeline federates GitHub's OIDC token, so there is no"
+            echo "service-account key to create, store or rotate."
+            echo
+            echo "Run \`deploy/setup-gcp.sh\`; it prints the exact \`gh variable set\` commands."
+            echo "See \`docs/DEPLOY.md\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "::error title=Deploy not configured::Unset repository variables: ${missing[*]}. Run deploy/setup-gcp.sh (see docs/DEPLOY.md). These are variables, not secrets -- there is no service-account key to add."
+          exit 1
+
   # Nothing reaches the VM without the same checks a pull request gets.
   test:
     if: ${{ !inputs.skip_tests }}
@@ -52,9 +108,11 @@ jobs:
 
   build:
     name: build and push ${{ matrix.image }}
-    needs: [test]
-    # `needs` on a skipped job would skip this one too, so allow the skipped
-    # case explicitly -- but never a failed or cancelled one.
+    needs: [preflight, test]
+    # `always()` is only here so a SKIPPED `test` (workflow_dispatch with
+    # skip_tests) does not skip the build with it. `!failure()` still stops
+    # everything if preflight or test actually fails -- an unconfigured
+    # repository never reaches the build.
     if: ${{ always() && !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     strategy:
