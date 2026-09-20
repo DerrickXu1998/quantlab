@@ -250,11 +250,63 @@ is exactly where free price data is least trustworthy anyway.
 
 | Source | What | Cadence | Notes |
 |---|---|---|---|
-| **FINRA short volume** | US daily short sale volume | Same day by 18:00 ET | `cdn.finra.org/equity/regsho/daily/CNMSshvol{YYYYMMDD}.txt`. Short *volume*, not short interest — 40–50% is normal and mostly market making. Read the z-score, not the level. |
-| **FCA net short positions** | UK disclosed net shorts | Daily from 12:00, **T+2** | 0.2% disclosure threshold. This *is* short interest and it is genuinely informative. Matched on ISIN. |
+| **FINRA short volume** | US daily short sale volume | Same day by 18:00 ET | **Ingested** — see below. Short *volume*, not short interest — 40–50% is normal and mostly market making. Read the z-score, not the level. |
+| **FCA net short positions** | UK disclosed net shorts | Daily from 12:00, **T+2** | **Ingested** — see below. 0.2% disclosure threshold. This *is* short interest and it is genuinely informative. |
 | **SEC Form 3/4/5** | US insider transactions | Quarterly bulk ZIPs; daily via EDGAR index | Buys inform, sales are mostly noise. Clusters of distinct buyers beat individuals. |
 | **RNS** (UK) | Company announcements, PDMR dealings | Continuous | **No free official API.** `investegate.co.uk` and `lse.co.uk/rns` are free to read but are scraping targets, and RNS content is LSEG-copyrighted. |
 | **ESG** | — | — | **No free, machine-readable, broad-universe source exists.** Drop it from v1. |
+
+### FINRA short volume — `quantlab.providers.finra`
+
+- **Free**: yes. Keyless, no registration, one flat file per trading day at
+  `cdn.finra.org/equity/regsho/daily/CNMSshvol{YYYYMMDD}.txt`. No published
+  rate limit; the limiter here is 2 req/s as a courtesy, and the files are
+  one per day anyway.
+- **File shape**: `Date|Symbol|ShortVolume|ShortExemptVolume|TotalVolume|Market`,
+  ~12,300 symbols, with a bare record-count line as the footer (the parser skips
+  it). Class shares are slash-spelled (`BRK/A` → catalog `BRK.B.US`); volumes can
+  be fractional.
+- **Availability**: verified 2026-09 — files reach back to ~2018-08-01 on the CDN.
+  An absent file (weekend, market holiday, not yet published) answers **HTTP 403,
+  not 404**, and the provider treats that as `DataUnavailable`, never an error.
+- **Storage**: the Postgres `fundamentals` table, `provider='finra'`, tags
+  `short_volume` / `short_exempt_volume` / `total_volume`, unit `shares`,
+  `period_end` = `filed_at` = trade date (published by 18:00 ET that day),
+  `accession='CNMSshvol-YYYYMMDD'`, so a re-ingest of a day is an ON CONFLICT
+  no-op. FINRA symbols not in the catalog are skipped and counted in the run
+  report. Nothing goes to ClickHouse — this is small relational data, not bars.
+- `make ingest-finra-shorts` (`quantlab ingest-finra-shorts [--date YYYYMMDD |
+  --start --end] [--limit N]`): one request per weekday, commits per day, default
+  range the last 31 days.
+
+### FCA net short positions — `quantlab.providers.fca`
+
+- **Free**: yes. Keyless, one daily-refreshed workbook:
+  `fca.org.uk/publication/data/short-positions-daily-update.xlsx` — the *entire*
+  disclosure history since 2013 (~109k rows verified 2026-09), columns
+  `Position Holder | Name of Share Issuer | ISIN | Net Short Position (%) |
+  Position Date`. Reading it needs openpyxl (`pip install quantlab[excel]`; the
+  ingest image carries it). The old `api.data.fca.org.uk` host no longer resolves;
+  the static xlsx is the stable endpoint.
+- **Freshness caveat**: despite the "daily update" name, the file pulled on
+  2026-09-20 contained no position dated after **2026-07-09** (~10 weeks stale).
+  Check `max(period_end)` after each pull before trusting the recent end.
+- **Honest gaps**, because they shape what you can build:
+  - The file is ISIN-keyed and the catalog has **no ISINs** (OpenFIGI does not
+    return them), so issuers are bridged by conservative normalized-name
+    matching — the same rules as `map_ch_companies`. A normalized name claimed
+    by two catalog instruments matches nothing; unmatched issuers are counted
+    in the run report, never guessed.
+  - Each row is one **holder's** position. The issuer-level net short is the
+    sum over holders at read time.
+  - A 0.0% row is a position that fell below the disclosure threshold — kept,
+    not dropped; it is information.
+- **Storage**: `fundamentals`, `provider='fca'`, tag `net_short_position_pct`,
+  unit `pct`, `period_end` = position date, `filed_at` = position date + 2
+  business days (the T+2 publication basis), `accession` = holder name (the
+  disclosure identity — re-pulls are no-ops), ISIN/holder/issuer name in `meta`.
+- `make ingest-fca-shorts` (`quantlab ingest-fca-shorts [--limit N]`): a single
+  fetch, committed in 10k-row chunks.
 
 ### The UK/US asymmetry
 

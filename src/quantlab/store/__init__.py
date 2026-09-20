@@ -81,6 +81,7 @@ from .fundamentals import (
 from .ingest import IngestReport, ingest_corporate_actions, ingest_prices
 from .macro import ingest_macro_series, series_to_bars
 from .seed import seed_warehouse
+from .shorts import ingest_fca_shorts, ingest_finra_shorts
 from .migrate import (
     CH_MIGRATIONS_DIR,
     MIGRATIONS_DIR,
@@ -122,6 +123,8 @@ __all__ = [
     "flatten_companyfacts",
     "ingest_ch_fundamentals",
     "ingest_corporate_actions",
+    "ingest_fca_shorts",
+    "ingest_finra_shorts",
     "ingest_macro_series",
     "ingest_prices",
     "ingest_sec_fundamentals",

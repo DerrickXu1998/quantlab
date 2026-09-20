@@ -26,6 +26,7 @@ PROVIDERS ?= yahoo stooq
 .PHONY: help up down build seed logs shell docker-shell test smoke check-warehouse hash dump-hash gen-api \
 	check-contract sync-contract migrate ingest seed-warehouse ingest-macro ingest-fred map-identifiers \
 	map-sec-tickers map-ch-companies ingest-sec-fundamentals ingest-ch-fundamentals universe-snapshot coverage signals \
+	ingest-finra-shorts ingest-fca-shorts \
 	store-test replay-publish db-shell ch-shell destroy
 
 help: ## Show available targets
@@ -105,6 +106,28 @@ ingest-ch-fundamentals: ## Ingest Companies House accounts into fundamentals (ne
 	$(COMPOSE) run --rm ingest ingest-ch-fundamentals \
 		$(if $(CH_LIMIT),--limit $(CH_LIMIT),)
 
+# FINRA daily short volume (US): one keyless flat file per trading day,
+# published by 18:00 ET; history on the CDN reaches back to ~2018-08.
+# Rows land in the fundamentals table (short volume, not short interest).
+FINRA_DATE ?=
+FINRA_START ?=
+FINRA_LIMIT ?=
+
+ingest-finra-shorts: ## Ingest FINRA daily short volume into fundamentals (FINRA_DATE=YYYYMMDD, or FINRA_START/FINRA_LIMIT)
+	$(COMPOSE) run --rm ingest ingest-finra-shorts \
+		$(if $(FINRA_DATE),--date $(FINRA_DATE),) \
+		$(if $(FINRA_START),--start $(FINRA_START),) $(if $(END),--end $(END),) \
+		$(if $(FINRA_LIMIT),--limit $(FINRA_LIMIT),)
+
+FCA_LIMIT ?=
+
+# FCA net short positions (UK): one keyless daily xlsx of the whole
+# disclosure history since 2013, T+2, 0.2% threshold. Issuers are bridged by
+# conservative normalized-name matching (no ISINs in the catalog).
+ingest-fca-shorts: ## Ingest FCA net short positions into fundamentals (FCA_LIMIT)
+	$(COMPOSE) run --rm ingest ingest-fca-shorts \
+		$(if $(FCA_LIMIT),--limit $(FCA_LIMIT),)
+
 # OpenFIGI identifier mappings: keyless at 25 req/min x 10 jobs, so the full
 # warehouse takes a few minutes. Resumable by default (--only-missing).
 MAP_LIMIT ?=
@@ -142,7 +165,7 @@ replay-publish: ## Publish warehouse bars to the Kafka replay topic (needs --pro
 
 store-test: ## Run the store test suite against the live stack
 	$(COMPOSE) run --rm --entrypoint python ingest \
-		-m pytest tests/test_store.py tests/test_macro.py tests/test_fundamentals.py -q
+		-m pytest tests/test_store.py tests/test_macro.py tests/test_fundamentals.py tests/test_shorts.py -q
 
 db-shell: ## psql into the Postgres catalog
 	$(COMPOSE) exec postgres psql -U quantlab -d quantlab

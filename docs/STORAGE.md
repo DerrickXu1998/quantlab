@@ -63,6 +63,15 @@ via `ON CONFLICT DO NOTHING`. A backtest at as-of date D reads
 company number live on `instruments` (and can bind through `symbol_map`), so
 no separate identifier bridge table exists.
 
+The same table also carries two daily metric series, modelled as publications
+rather than filings: FINRA short *volume* (`provider='finra'`, tags
+`short_volume`/`short_exempt_volume`/`total_volume` in shares, `period_end =
+filed_at =` trade date, `accession` the file name) and FCA net short *interest*
+(`provider='fca'`, tag `net_short_position_pct`, one row per holder disclosure
+with the holder as accession, `filed_at =` position date + 2 business days for
+the T+2 basis). Both are idempotent on the same row identity and never touch
+ClickHouse.
+
 **Provenance is per batch.** Every bar carries `run_id`, a foreign key in
 spirit to `ingest_runs`. That is ~8 bytes a row instead of duplicating source
 strings across 100M rows, and it gives full lineage for any value.

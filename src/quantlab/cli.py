@@ -431,6 +431,63 @@ def cmd_ingest_ch_fundamentals(args) -> int:
     return 0 if report.status in ("ok", "partial") else 1
 
 
+def cmd_ingest_finra_shorts(args) -> int:
+    """Load FINRA daily short volume into the fundamentals table."""
+    from . import store
+    from .schema import ProviderError
+
+    if args.date:
+        start = end = _parse_day(args.date)
+    else:
+        end = _parse_day(args.end) if args.end else pd.Timestamp.today().date()
+        start = _parse_day(args.start) if args.start else end - pd.Timedelta(days=31)
+
+    with store.session(args.db_url) as conn:
+        if not args.no_migrate:
+            store.migrate(conn)
+
+        try:
+            report = store.ingest_finra_shorts(
+                conn, start=start, end=end, limit=args.limit
+            )
+        except (ValueError, ProviderError) as exc:
+            raise SystemExit(str(exc)) from exc
+        print(report.summary())
+
+    return 0 if report.status in ("ok", "partial") else 1
+
+
+def cmd_ingest_fca_shorts(args) -> int:
+    """Load FCA disclosed net short positions into the fundamentals table."""
+    from . import store
+    from .schema import ProviderError
+
+    with store.session(args.db_url) as conn:
+        if not args.no_migrate:
+            store.migrate(conn)
+
+        try:
+            report = store.ingest_fca_shorts(conn, limit=args.limit)
+        except (ValueError, ProviderError) as exc:
+            raise SystemExit(str(exc)) from exc
+        print(report.summary())
+
+    return 0 if report.status in ("ok", "partial") else 1
+
+
+def _parse_day(value: str):
+    """Accept YYYYMMDD or YYYY-MM-DD."""
+    import datetime as dt
+
+    value = value.strip()
+    if len(value) == 8 and value.isdigit():
+        return dt.date(int(value[:4]), int(value[4:6]), int(value[6:8]))
+    try:
+        return dt.date.fromisoformat(value)
+    except ValueError:
+        raise SystemExit(f"bad date {value!r}: expected YYYYMMDD or YYYY-MM-DD") from None
+
+
 def cmd_map_identifiers(args) -> int:
     from . import store
 
@@ -685,6 +742,36 @@ def build_parser() -> argparse.ArgumentParser:
     im.add_argument("--no-migrate", action="store_true",
                     help="skip the automatic migrate step")
     im.set_defaults(func=cmd_ingest_macro)
+
+    ifs = sub.add_parser(
+        "ingest-finra-shorts",
+        help="load FINRA daily short sale volume for catalog .US instruments into the "
+             "fundamentals table (keyless; idempotent per day)",
+    )
+    ifs.add_argument("--date", default="",
+                     help="single day, YYYYMMDD or YYYY-MM-DD")
+    ifs.add_argument("--start", default="",
+                     help="first day of a range (default: 31 days before --end/today)")
+    ifs.add_argument("--end", default="",
+                     help="last day of a range (default: today)")
+    ifs.add_argument("--limit", type=int, default=None,
+                     help="keep at most the N most recent days of the range")
+    ifs.add_argument("--db-url", default="", help="Postgres catalog; overrides $QUANTLAB_DB_URL")
+    ifs.add_argument("--no-migrate", action="store_true",
+                     help="skip the automatic migrate step")
+    ifs.set_defaults(func=cmd_ingest_finra_shorts)
+
+    ifc = sub.add_parser(
+        "ingest-fca-shorts",
+        help="load FCA disclosed net short positions for catalog .LON instruments into the "
+             "fundamentals table (keyless xlsx; conservative name matching; idempotent)",
+    )
+    ifc.add_argument("--limit", type=int, default=None,
+                     help="write at most N matched instruments this run")
+    ifc.add_argument("--db-url", default="", help="Postgres catalog; overrides $QUANTLAB_DB_URL")
+    ifc.add_argument("--no-migrate", action="store_true",
+                     help="skip the automatic migrate step")
+    ifc.set_defaults(func=cmd_ingest_fca_shorts)
 
     mid = sub.add_parser(
         "map-identifiers",
