@@ -217,3 +217,14 @@ is no free fix. Partial mitigations: SEC `company_tickers.json` history, Compani
 dissolved-company records, and archiving your own universe snapshots from day one.
 `quantlab universe <name> --out snapshot.csv` on a daily schedule costs nothing and in
 three years you will have something no free source sells.
+
+---
+
+## Offline: synthetic data
+
+When no source is reachable — or you want a reproducible fixture — the warehouse can be
+seeded with deterministic synthetic bars: `make seed-warehouse` (or `quantlab
+seed-synthetic`). `quantlab.synthetic.generate_bars` is a pure function of
+(symbol, start, end, seed) with a sha256-derived PCG64 stream and no wall clock, so the
+seeded dataset is byte-identical across machines and runs. Details and guarantees are in
+the "Synthetic data" section of `docs/STORAGE.md`.

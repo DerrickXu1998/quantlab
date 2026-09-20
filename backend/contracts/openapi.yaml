@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: QuantLab Signal Viewer API
-  version: 0.4.0
+  version: 0.5.0
   description: >
     Typed API boundary for the QuantLab demo. This document is the authored
     single source of truth (Constitution V): the FastAPI app is validated
@@ -23,6 +23,7 @@ tags:
   - name: signals
   - name: models
   - name: runs
+  - name: replay
 
 paths:
   /health:
@@ -62,7 +63,7 @@ paths:
           required: true
           schema:
             type: string
-            pattern: "^[A-Z]{2,8}$"
+            pattern: "^[A-Z0-9][A-Z0-9._-]{0,19}$"
         - name: start_date
           in: query
           required: false
@@ -104,7 +105,7 @@ paths:
           required: false
           schema:
             type: string
-            pattern: "^[A-Z]{2,8}$"
+            pattern: "^[A-Z0-9][A-Z0-9._-]{0,19}$"
         - name: signal_type
           in: query
           required: false
@@ -347,6 +348,246 @@ paths:
           description: >
             The run failed, so it has no performance. Zeroed figures would read
             as a flat book rather than as an absent result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /runs/{run_id}/replay/stream:
+    parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [replay]
+      operationId: streamRunReplay
+      summary: Replay a run's window as a server-sent event stream
+      description: >
+        Streams the run's window chronologically, as if history were arriving
+        live: each trading date's bars, the stored signals firing that date,
+        the fills the simulator executes at that date's close, and one
+        end-of-date equity mark, ending with a summary event. The body is a
+        sequence of `data: {json}\n\n` frames; every frame's JSON object
+        carries an `event` field, one of:
+
+          * `bar` -- `{date, closes}`: the date's close per run symbol. Thinned
+            to every `step`-th date; a date carrying a signal always gets one.
+          * `signal` -- `{date, symbol, direction, trigger_values,
+            data_window_end}`: a stored signal as it fires.
+          * `fill` -- `{date, symbol, side, qty, price, value,
+            realized_pnl}`: an executed trade at the close of the signal date.
+          * `equity` -- `{date, equity, cash, positions, realized_pnl}`: the
+            book marked once per replayed date, after that date's fills.
+          * `summary` -- terminal; the ReplaySummary object.
+          * `truncated` -- terminal in place of `summary` when `max_events`
+            cut the stream short: `{event, detail}`.
+
+        Events on one date arrive in bar, signal, fill, equity order, so a
+        signal never precedes the bar event of its own date. Sizing and
+        filling mirror the run's performance report exactly (equal-weight
+        per-symbol sleeves, close-of-signal-date fills, no costs): the
+        terminal `summary` reconciles with GET /runs/{run_id}/performance.
+      parameters:
+        - name: interval_ms
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 10000
+            default: 0
+          description: >
+            Optional server-side pacing: milliseconds to wait between dates
+            (after each equity event). 0 streams as fast as possible; the
+            data is historical, so clients may pace themselves instead.
+        - name: max_events
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 5000000
+            default: 250000
+          description: >
+            Safety cap on frames emitted. On reaching it the stream ends with
+            a `truncated` frame instead of `summary`.
+        - name: step
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          description: Emit bar events only every Nth date; 1 is every date.
+      responses:
+        "200":
+          description: Server-sent event stream of replay events
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: "One `data: {json}\\n\\n` frame per replay event."
+        "404":
+          description: Unknown run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: The run failed, so there is nothing to replay
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /runs/{run_id}/replay/summary:
+    parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [replay]
+      operationId: getRunReplaySummary
+      summary: The replay engine run to completion, as one object
+      description: >
+        Drives the same engine as the stream endpoint to completion and
+        returns only its terminal summary event. Useful for clients that do
+        not want SSE, and the cheapest way to check a replay reconciles with
+        GET /runs/{run_id}/performance.
+      responses:
+        "200":
+          description: Replay summary for the run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplaySummary"
+        "404":
+          description: Unknown run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: The run failed, so there is nothing to replay
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /replay/live/stream:
+    get:
+      tags: [replay]
+      operationId: streamLiveReplay
+      summary: Replay a Kafka bar stream live, as a server-sent event stream
+      description: >
+        The streaming counterpart of GET /runs/{run_id}/replay/stream. A
+        publisher (`quantlab replay-publish`) has turned a warehouse window
+        into a chronological bar stream on the Kafka replay topic; this
+        endpoint consumes the topic from the beginning, re-runs the model's
+        compute on each symbol's growing window as bars arrive (identical to
+        batch by the point-in-time truncation guarantee), and trades the new
+        signals through the same portfolio simulator.
+
+        The frame format is exactly the batch replay's: `bar`, `signal`,
+        `fill`, `equity` and a terminal `summary` (whose `run_id` is
+        `live:<model>`), plus `truncated` if `max_events` cuts the stream
+        short. Bars dated before `start` act as warm-up: they feed the
+        model's lookback but emit no events and no trades, mirroring how a
+        batch run loads history before its window. Because of that warm-up,
+        the terminal summary reconciles with a batch replay of a run over the
+        same model, symbols and window when the publisher's range covers the
+        model's lookback before `start`.
+
+        Requires the streaming stack (`docker compose --profile streaming
+        up`). A 503 means the bus is unconfigured (QUANTLAB_KAFKA_BROKERS
+        unset) or the broker is unreachable -- never a startup failure.
+      parameters:
+        - name: model
+          in: query
+          required: false
+          schema:
+            type: string
+            default: sma-crossover
+          description: Signal rule name; the latest registered version is used.
+        - name: symbols
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Comma-separated canonical symbols, e.g. `ZX1.US,ZX2.US`.
+        - name: start
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+          description: First session date of the replayed window.
+        - name: end
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+          description: Last session date of the replayed window.
+        - name: params
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >
+            Model parameter overrides as a JSON object, e.g.
+            `{"fast": 10, "slow": 30}`.
+        - name: initial_cash
+          in: query
+          required: false
+          schema:
+            type: number
+            exclusiveMinimum: 0
+            default: 100000
+          description: Starting book value, split into equal per-symbol sleeves.
+        - name: max_events
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 5000000
+            default: 250000
+          description: >
+            Safety cap on frames emitted. On reaching it the stream ends with
+            a `truncated` frame instead of `summary`.
+      responses:
+        "200":
+          description: Server-sent event stream of replay events
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: "One `data: {json}\\n\\n` frame per replay event."
+        "400":
+          description: Missing or malformed symbols, start, end or params
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Unknown model
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: A parameter override failed the model's declared spec
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: The event bus is unconfigured or unreachable
           content:
             application/json:
               schema:
@@ -925,3 +1166,68 @@ components:
           description: >
             Every simplification applied. These figures are not tradeable and
             must never be presented as if they were.
+
+    ReplaySummary:
+      type: object
+      additionalProperties: false
+      required:
+        - run_id
+        - days
+        - initial_cash
+        - final_equity
+        - total_return
+        - sharpe_ratio
+        - max_drawdown
+        - win_rate
+        - trade_count
+        - winning_trades
+        - losing_trades
+        - assumptions
+      description: >
+        The terminal event of a run's replay. Metrics are computed by the same
+        helpers behind GET /runs/{run_id}/performance, over the replayed
+        equity curve and trade list, so the two reconcile on the same run.
+      properties:
+        run_id:
+          type: string
+        days:
+          type: integer
+          minimum: 0
+          description: Trading dates replayed (dates with at least one bar).
+        initial_cash:
+          type: number
+        final_equity:
+          type: number
+          description: Book value on the last replayed date.
+        total_return:
+          type: number
+          description: Fraction, e.g. 0.12 for +12%.
+        sharpe_ratio:
+          type: number
+          nullable: true
+          description: Null when undefined -- fewer than two points, or zero variance.
+        max_drawdown:
+          type: number
+          description: Negative fraction, peak to trough.
+        win_rate:
+          type: number
+          nullable: true
+          description: Share of closed trades that gained. Null when nothing closed.
+        trade_count:
+          type: integer
+          minimum: 0
+          description: All positions, including any still open.
+        winning_trades:
+          type: integer
+          minimum: 0
+        losing_trades:
+          type: integer
+          minimum: 0
+        assumptions:
+          type: array
+          items:
+            type: string
+          description: >
+            Every simplification applied, shared with the performance report.
+            These figures are not tradeable and must never be presented as if
+            they were.

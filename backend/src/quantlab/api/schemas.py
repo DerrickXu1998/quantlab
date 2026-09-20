@@ -206,3 +206,26 @@ class RunPerformance(BaseModel):
     trades: list[Trade]
     # Carried in the payload so the caveats cannot be lost by a UI refactor.
     assumptions: list[str]
+
+
+# --- Historical replay ------------------------------------------------------
+#
+# The SSE stream (GET /runs/{run_id}/replay/stream) is documented in the
+# contract but carries no response_model -- its frames are the JSON form of
+# quantlab.replay.engine's events, one `data: {json}\n\n` frame each.
+
+
+class ReplaySummary(BaseModel):
+    run_id: str
+    days: int
+    initial_cash: float
+    final_equity: float
+    total_return: float
+    # Null rather than 0.0 when undefined, as in PerformanceMetrics.
+    sharpe_ratio: float | None = None
+    max_drawdown: float
+    win_rate: float | None = None
+    trade_count: int
+    winning_trades: int
+    losing_trades: int
+    assumptions: list[str]

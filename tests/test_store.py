@@ -345,6 +345,54 @@ def test_point_in_time_universe_filters_the_panel(store_conn, store_client):
         _cleanup_bars(store_client, ids[symbol])
 
 
+@needs_store
+def test_seed_warehouse_round_trip_and_reseed_is_idempotent(store_conn, store_client):
+    """Seeding writes bars the warehouse can serve, and re-seeding the same
+    range must read back exactly the same rows (ReplacingMergeTree dedup)."""
+    from quantlab import store
+    from quantlab.synthetic import SyntheticSpec
+
+    symbol = f"TST{uuid.uuid4().hex[:6].upper()}.US"
+    spec = SyntheticSpec(symbol=symbol, name="Test Synthetic Co", profile="mixed")
+
+    first = store.seed_warehouse(
+        store_conn, store_client, [spec], start="2024-01-01", end="2024-12-31"
+    )
+    assert first.status == "ok"
+    assert first.symbols_ok == 1
+    assert first.rows_written > 200  # one year of weekdays
+
+    panel = store.load_panel(store_conn, store_client, [symbol])
+    assert len(panel) == first.rows_written
+
+    second = store.seed_warehouse(
+        store_conn, store_client, [spec], start="2024-01-01", end="2024-12-31"
+    )
+    panel_after = store.load_panel(store_conn, store_client, [symbol])
+    assert len(panel_after) == first.rows_written, "re-seed must not duplicate rows on read"
+    assert second.run_id > first.run_id, "each seed opens a fresh run for provenance"
+    pd.testing.assert_frame_equal(panel_after, panel)
+
+    row = store_conn.execute(
+        "SELECT source, kind, status, params->>'synthetic' FROM ingest_runs WHERE run_id = %s",
+        (first.run_id,),
+    ).fetchone()
+    assert row[:3] == ("synthetic", "prices", "ok")
+    assert row[3] == "true"
+
+    # seed_warehouse commits as it goes, so a fixture rollback cannot undo it;
+    # remove the catalog rows explicitly alongside the bars.
+    instrument_id = catalog.instrument_ids(store_conn, [symbol])[symbol]
+    _cleanup_bars(store_client, instrument_id)
+    store_conn.execute(
+        "DELETE FROM ingest_runs WHERE run_id = ANY(%s)", ([first.run_id, second.run_id],)
+    )
+    store_conn.execute(
+        "DELETE FROM instruments WHERE instrument_id = %s", (instrument_id,)
+    )
+    store_conn.commit()
+
+
 def _cleanup_bars(client, instrument_id: int) -> None:
     """Remove a test instrument's bars. ClickHouse deletes are mutations and
     asynchronous, which is fine for cleanup but never for the write path."""

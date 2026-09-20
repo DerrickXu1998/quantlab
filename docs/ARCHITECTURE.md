@@ -166,6 +166,47 @@ partition_by_symbol=True)` writes a Hive-partitioned layout, and
 `store.panel_for_modelling(...)` materialises one straight out of the warehouse — a pinned
 file a backtest result can be traced back to, which a live query is not.
 
+## Streaming replay ("replay the stream")
+
+The batch replay (`GET /api/v1/runs/{id}/replay/stream`) re-reads a stored run. The
+streaming path instead turns warehouse history into a chronological event stream on a Kafka
+topic and lets the backend consume it as if the bars were arriving live:
+
+```
+clickhouse ──▶ quantlab replay-publish ──▶ redpanda topic ──▶ GET /api/v1/replay/live/stream
+ (warehouse)    (ingest image, per run)     (quantlab.bars)     (SSE: bar/signal/fill/equity/summary)
+```
+
+- **Broker.** A single-node [Redpanda](https://redpanda.com) (Kafka API, no JVM) under the
+  `streaming` compose profile, so the base stack is unchanged:
+  `docker compose --profile streaming up -d`. In-compose clients use `redpanda:9092`; host
+  tools use `localhost:19092`. Data persists in the `quantlab-kafka` volume.
+- **Publisher** (`src/quantlab/streaming.py`, runs in the ingest image):
+  `make replay-publish SYMBOLS=ZX1.US,ZX2.US START=2024-01-01 END=2024-12-31` reads the
+  warehouse window, sorts it by `(date, symbol)` and produces JSON
+  `{"type":"bar","symbol","date","open","high","low","close","volume"}` messages keyed by
+  symbol, terminated by a `{"type":"end"}` control message. `--pace-ms N` sleeps between
+  dates to simulate realtime; pacing is transport only and never changes the payload bytes.
+- **Consumer** (`backend/src/quantlab/streaming/`, an isolated adapter per Constitution
+  III): `GET /api/v1/replay/live/stream?model=...&symbols=...&start=...&end=...` consumes
+  the topic from the beginning, keeps a growing bar window per symbol, re-runs the rule's
+  `compute` on each arriving bar and diffs against already-fired `(symbol, date)` keys so
+  only new signals emit. The emitted frames are exactly the batch replay's event types,
+  and the summary is built by the same `replay.engine.summary_event`.
+- **The invariant: live == batch.** Signal rules are causal, and
+  `backend/tests/lookahead/` proves `compute` on a truncated history is identical to
+  batch — so recomputing on a growing window yields the same signals a batch run stores.
+  Bars dated before `start` act as warm-up (they feed the rule's lookback, emit no events,
+  no trades), mirroring the runner's warm-up load; publish a range that covers the model's
+  lookback before `start` and the live summary reconciles with a batch run over the same
+  window. The unit suite asserts this reconciliation directly.
+- **Degradation.** `QUANTLAB_KAFKA_BROKERS` / `QUANTLAB_KAFKA_TOPIC` (default
+  `quantlab.bars`) configure the backend. Unset, or a broker that will not connect, the
+  live endpoint answers a clean 503; every other route is unaffected, and kafka-python is
+  imported lazily inside the adapter so the API boots without the bus entirely.
+  Re-publishing an overlapping range is safe for new consumers: duplicate `(symbol, date)`
+  bars are ignored.
+
 ## What is deliberately not here
 
 - **No backtester.** Feature generation and strategy simulation are separate concerns and

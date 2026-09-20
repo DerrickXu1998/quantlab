@@ -90,7 +90,12 @@ The data warehouse is empty. Load some history:
     make ingest SYMBOLS="AAPL.US MSFT.US HSBA.LON" START=2020-01-01
     make signals
 
-Or run the synthetic demo dataset instead, which needs no network:
+Or seed it with deterministic synthetic bars, which needs no network:
+
+    make seed-warehouse
+    make signals
+
+Or run the synthetic demo dataset instead:
 
     docker compose --profile demo run --rm seed
 NOTE

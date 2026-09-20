@@ -91,11 +91,41 @@ dropped silently, and never allowed to abort a 5,000-symbol refresh over one
 bad tick. Free sources do ship bad ticks; Yahoo's HSBA.LON history contains a
 bar whose low sits above its open.
 
+## Synthetic data
+
+The warehouse can be seeded with deterministic synthetic bars so the whole
+stack — `make signals`, the API's warehouse mode, modelling notebooks — works
+with no network and no vendor keys:
+
+```bash
+make seed-warehouse          # inside the ingest container: quantlab seed-synthetic
+make signals
+```
+
+`quantlab.synthetic.generate_bars(symbol, start, end, seed=...)` produces
+daily OHLCV bars on a weekday calendar using a regime-switching model
+(trend / mean-reversion / high-volatility segments, mixed per instrument
+profile). All randomness derives from `sha256(seed + symbol)` fed to a PCG64
+generator — there is no wall-clock input, so the same arguments produce
+byte-identical bars on any machine. The default universe is 25 fictitious
+tickers (`ZX1.US` … `ZX25.US`) across four regime profiles, chosen so every
+starter signal rule (SMA crossover, RSI threshold, 20d breakout) fires
+somewhere in the data.
+
+Seeding goes through the same write path as a real ingest: instruments are
+upserted into the Postgres catalog (with `meta.synthetic = true`), an
+`ingest_runs` row with `source = 'synthetic'` records the run, and bars land
+in ClickHouse tagged with that `run_id`. Re-running `make seed-warehouse` is
+safe — ReplacingMergeTree supersedes the earlier copy of every bar, and the
+values written are identical anyway. Synthetic and real symbols coexist; the
+`synthetic` flag and the run's provenance keep them distinguishable.
+
 ## Commands
 
 ```bash
 make migrate     # apply pending migrations to both stores
 make ingest      # SYMBOLS="AAPL.US HSBA.LON" START=2015-01-01
+make seed-warehouse  # deterministic synthetic bars, no network
 make coverage    # what is held, where it came from, compression ratios
 make signals     # recompute signals from bars into the catalog
 make store-test  # store test suite against the live stack

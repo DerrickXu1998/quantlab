@@ -122,6 +122,51 @@ services:
       - quantlab-data:/data
     restart: "no"
 
+  # ---------------------------------------------------------------------------
+  # Event bus. Kafka API, single binary, no JVM. Only runs under the
+  # `streaming` profile (`docker compose --profile streaming up`), so the base
+  # stack is unchanged. The publisher (ingest image, `make replay-publish`)
+  # turns warehouse history into a chronological bar stream on the topic; the
+  # backend consumes it for GET /api/v1/replay/live/stream.
+  # ---------------------------------------------------------------------------
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.3.18
+    profiles: ["streaming"]
+    command:
+      - redpanda
+      - start
+      - --mode
+      - dev-container
+      - --smp
+      - "1"
+      - --memory
+      - 1G
+      - --reserve-memory
+      - 0M
+      - --overprovisioned
+      - --node-id
+      - "0"
+      - --check=false
+      # Two listeners on one broker: compose-network traffic talks to
+      # redpanda:9092, host traffic to localhost:19092. The advertised address
+      # is what clients reconnect to after bootstrap, so both must be listed.
+      - --kafka-addr
+      - PLAINTEXT://0.0.0.0:9092,OUTSIDE://0.0.0.0:19092
+      - --advertise-kafka-addr
+      - PLAINTEXT://redpanda:9092,OUTSIDE://localhost:19092
+    ports:
+      - "19092:19092"   # Kafka API for host tools; in-compose clients use redpanda:9092
+    volumes:
+      - quantlab-kafka:/var/lib/redpanda/data
+    healthcheck:
+      # rpk exits non-zero while the broker is still coming up.
+      test: ["CMD-SHELL", "rpk cluster health | grep -qE 'Healthy: +true'"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+    restart: unless-stopped
+
   backend:
     build: ./backend
     command: ["uvicorn", "quantlab.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
@@ -133,6 +178,11 @@ services:
       QUANTLAB_CH_URL: clickhouse://quantlab:quantlab@clickhouse:8123/quantlab
       QUANTLAB_DB: /data/quantlab.db
       QUANTLAB_DB_PATH: /data/quantlab.db
+      # Set unconditionally so the backend service definition works with and
+      # without the `streaming` profile: the live-replay endpoint answers a
+      # clean 503 when the broker is absent, never a startup failure.
+      QUANTLAB_KAFKA_BROKERS: redpanda:9092
+      QUANTLAB_KAFKA_TOPIC: quantlab.bars
     volumes:
       - quantlab-data:/data
     ports:
@@ -170,3 +220,4 @@ volumes:
   quantlab-pgdata:   # Postgres catalog
   quantlab-cache:    # provider HTTP cache + Parquet exports
   quantlab-data:     # synthetic demo SQLite
+  quantlab-kafka:    # redpanda log segments (streaming profile)

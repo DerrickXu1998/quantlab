@@ -65,6 +65,7 @@ from .conn import (
     session,
 )
 from .ingest import IngestReport, ingest_corporate_actions, ingest_prices
+from .seed import seed_warehouse
 from .migrate import (
     CH_MIGRATIONS_DIR,
     MIGRATIONS_DIR,
@@ -117,6 +118,7 @@ __all__ = [
     "ping",
     "record_rejects",
     "run_history",
+    "seed_warehouse",
     "session",
     "snapshot_members",
     "snapshot_universe",

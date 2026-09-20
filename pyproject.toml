@@ -27,8 +27,12 @@ postgres = ["psycopg[binary]>=3.1"]
 clickhouse = ["clickhouse-connect>=0.7"]
 # The store needs both halves: Postgres catalog + ClickHouse bars.
 store    = ["quantlab[postgres,clickhouse]"]
+# Streaming replay publisher (`quantlab replay-publish`). kafka-python is pure
+# python -- no native libs, no JVM -- and stays optional so the core research
+# install carries no transport dependency.
+streaming = ["kafka-python>=2.0.2"]
 dev      = ["pytest>=8.0", "pytest-cov", "ruff", "mypy"]
-all      = ["quantlab[yahoo,duckdb,polars,excel,plots,store]"]
+all      = ["quantlab[yahoo,duckdb,polars,excel,plots,store,streaming]"]
 
 [project.scripts]
 quantlab = "quantlab.cli:main"

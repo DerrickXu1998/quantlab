@@ -8,17 +8,23 @@ synthetic SQLite demo, chosen once at startup.
 
 from __future__ import annotations
 
+import json
+import time
 from dataclasses import asdict
 from datetime import date
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
+from fastapi.responses import StreamingResponse
 
 from quantlab.api import schemas
+from quantlab.replay import engine as replay_engine
 from quantlab.research import errors as research_errors
 from quantlab.research import performance, runner
 from quantlab.signals import builtins as _builtins  # noqa: F401  (registers builtin rules)
 from quantlab.signals import registry as signal_registry
+from quantlab.streaming import bus as streaming_bus
+from quantlab.streaming import live as streaming_live
 
 router = APIRouter()
 
@@ -312,3 +318,170 @@ def save_run(request: Request, run_id: str, body: schemas.RunNameRequest) -> dic
 def delete_run(request: Request, run_id: str) -> None:
     if not experiments(request).delete_run(run_id):
         raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
+
+
+# --- Historical replay ------------------------------------------------------
+#
+# Thin handlers again: the engine lives in quantlab.replay so it is testable
+# without HTTP (Constitution I). These only resolve the run, guard its state,
+# and frame the events.
+
+
+def _replayable_run(request: Request, run_id: str) -> dict:
+    store = experiments(request)
+    run = store.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
+    # A failed run has nothing to replay; as with performance, zeroed output
+    # would read as a flat book rather than as an absent result.
+    if run["status"] != "completed":
+        raise HTTPException(status_code=409, detail=f"run {run_id} failed; it cannot be replayed")
+    return run
+
+
+@router.get(
+    "/runs/{run_id}/replay/stream",
+    tags=["replay"],
+    operation_id="streamRunReplay",
+    dependencies=[Depends(require_seeded)],
+)
+def stream_run_replay(
+    request: Request,
+    run_id: str,
+    interval_ms: Annotated[int, Query(ge=0, le=10_000)] = 0,
+    max_events: Annotated[int, Query(ge=1, le=5_000_000)] = 250_000,
+    step: Annotated[int, Query(ge=1)] = 1,
+) -> StreamingResponse:
+    run = _replayable_run(request, run_id)
+    signals, bars = replay_engine.load_replay_inputs(backend(request), experiments(request), run)
+
+    def frames():
+        emitted = 0
+        truncated = False
+        # A sync generator: StreamingResponse iterates it in a threadpool, so
+        # the optional pacing sleep never blocks the event loop.
+        for event in replay_engine.replay_events(run, signals, bars, step=step):
+            if emitted >= max_events:
+                truncated = True
+                break
+            yield f"data: {json.dumps(replay_engine.to_dict(event))}\n\n"
+            emitted += 1
+            if interval_ms and isinstance(event, replay_engine.ReplayEquity):
+                time.sleep(interval_ms / 1000)
+        if truncated:
+            detail = f"max_events={max_events} reached before the summary"
+            yield f"data: {json.dumps({'event': 'truncated', 'detail': detail})}\n\n"
+
+    return StreamingResponse(
+        frames(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get(
+    "/runs/{run_id}/replay/summary",
+    response_model=schemas.ReplaySummary,
+    tags=["replay"],
+    operation_id="getRunReplaySummary",
+    dependencies=[Depends(require_seeded)],
+)
+def get_run_replay_summary(request: Request, run_id: str) -> dict:
+    run = _replayable_run(request, run_id)
+    signals, bars = replay_engine.load_replay_inputs(backend(request), experiments(request), run)
+    return asdict(replay_engine.replay_summary(run, signals, bars))
+
+
+# --- Live replay over the event bus -------------------------------------------
+#
+# The streaming counterpart of the batch replay above: instead of a stored
+# run's bars, the events are driven by bars arriving on the Kafka replay topic
+# (see quantlab.streaming). Thin handler again: resolve and validate, connect
+# (failing fast with a 503 when the bus is absent), frame the events.
+
+
+@router.get(
+    "/replay/live/stream",
+    tags=["replay"],
+    operation_id="streamLiveReplay",
+)
+def stream_live_replay(
+    model: str = "sma-crossover",
+    symbols: Annotated[str, Query(description="Comma-separated canonical symbols")] = "",
+    start: date | None = None,
+    end: date | None = None,
+    params: Annotated[str | None, Query(description="JSON object of parameter overrides")] = None,
+    initial_cash: Annotated[float, Query(gt=0)] = performance.INITIAL_CAPITAL,
+    max_events: Annotated[int, Query(ge=1, le=5_000_000)] = 250_000,
+) -> StreamingResponse:
+    if not streaming_bus.configured():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "live replay is not configured: QUANTLAB_KAFKA_BROKERS is unset "
+                "(start the stack with the 'streaming' profile)"
+            ),
+        )
+    if start is None or end is None:
+        raise HTTPException(status_code=400, detail="start and end are required (YYYY-MM-DD)")
+    symbol_list = sorted({s.strip() for s in symbols.split(",") if s.strip()})
+    if not symbol_list:
+        raise HTTPException(status_code=400, detail="symbols must name at least one instrument")
+    if start > end:
+        raise HTTPException(status_code=400, detail="start must be on or before end")
+    try:
+        overrides = json.loads(params) if params else {}
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"params is not valid JSON: {exc}") from exc
+    if not isinstance(overrides, dict):
+        raise HTTPException(status_code=400, detail="params must be a JSON object")
+
+    # Resolve and validate eagerly, so a bad request is a 404/422 rather than
+    # a stream that dies on its first frame.
+    try:
+        streaming_live.resolve_rule(model, overrides)
+    except research_errors.UnknownModelError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except research_errors.ParameterValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    stream = streaming_bus.KafkaBarStream(
+        streaming_bus.brokers(),
+        streaming_bus.topic(),
+        symbol_list,
+        start.isoformat(),
+        end.isoformat(),
+    )
+    try:
+        stream.open()
+    except streaming_bus.BusUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    events = streaming_live.live_replay_events(
+        model, overrides, symbol_list, start.isoformat(), end.isoformat(), stream,
+        initial_cash=initial_cash,
+    )
+
+    def frames():
+        emitted = 0
+        truncated = False
+        # A sync generator: StreamingResponse iterates it in a threadpool, so
+        # blocking on the Kafka consumer never stalls the event loop.
+        try:
+            for event in events:
+                if emitted >= max_events:
+                    truncated = True
+                    break
+                yield f"data: {json.dumps(replay_engine.to_dict(event))}\n\n"
+                emitted += 1
+        finally:
+            stream.close()
+        if truncated:
+            detail = f"max_events={max_events} reached before the summary"
+            yield f"data: {json.dumps({'event': 'truncated', 'detail': detail})}\n\n"
+
+    return StreamingResponse(
+        frames(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

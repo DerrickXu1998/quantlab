@@ -238,6 +238,34 @@ def cmd_ingest(args) -> int:
     return 0 if report.status in ("ok", "partial") else 1
 
 
+def cmd_seed_synthetic(args) -> int:
+    from . import store
+    from .synthetic import DEFAULT_UNIVERSE
+
+    if not 1 <= args.symbols <= len(DEFAULT_UNIVERSE):
+        raise SystemExit(f"--symbols must be 1..{len(DEFAULT_UNIVERSE)}")
+
+    with store.session(args.db_url) as conn, store.ch_session(args.ch_url) as client:
+        if not args.no_migrate:
+            store.migrate_all(conn, client)
+
+        report = store.seed_warehouse(
+            conn,
+            client,
+            DEFAULT_UNIVERSE[: args.symbols],
+            start=args.start,
+            end=args.end,
+            seed=args.seed or None,
+        )
+        print(report.summary())
+
+        if args.optimize:
+            # Pay the ReplacingMergeTree merge now rather than on every read.
+            store.optimize(client)
+
+    return 0 if report.status in ("ok", "partial") else 1
+
+
 def cmd_coverage(args) -> int:
     from . import store
 
@@ -266,6 +294,40 @@ def cmd_coverage(args) -> int:
             history = store.run_history(conn, limit=args.runs)
             print("\nrecent ingest runs")
             print(history.to_string(index=False))
+    return 0
+
+
+def cmd_replay_publish(args) -> int:
+    import os
+
+    from . import store
+    from .streaming import DEFAULT_TOPIC, create_producer, publish_replay
+
+    symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
+    if not symbols:
+        raise SystemExit("replay-publish needs --symbols (comma-separated)")
+
+    brokers = args.brokers or os.environ.get("QUANTLAB_KAFKA_BROKERS", "")
+    if not brokers.strip():
+        raise SystemExit("no brokers: pass --brokers or set QUANTLAB_KAFKA_BROKERS")
+    topic = args.topic or os.environ.get("QUANTLAB_KAFKA_TOPIC", "") or DEFAULT_TOPIC
+
+    with store.session(args.db_url) as conn, store.ch_session(args.ch_url) as client:
+        producer = create_producer(brokers)
+        try:
+            report = publish_replay(
+                conn,
+                client,
+                producer,
+                symbols,
+                args.start,
+                args.end,
+                topic=topic,
+                pace_ms=args.pace_ms,
+            )
+        finally:
+            producer.close()
+    print(report.summary())
     return 0
 
 
@@ -387,6 +449,42 @@ def build_parser() -> argparse.ArgumentParser:
     i.add_argument("--actions-provider", default="yahoo",
                    help="provider for corporate actions (default: yahoo)")
     i.set_defaults(func=cmd_ingest)
+
+    s = sub.add_parser(
+        "seed-synthetic",
+        help="seed the warehouse with deterministic synthetic bars (no network)",
+    )
+    s.add_argument("--symbols", type=int, default=25,
+                   help="number of synthetic instruments to seed (max 25)")
+    s.add_argument("--start", default="2022-01-01")
+    s.add_argument("--end", default="2025-12-31")
+    s.add_argument("--seed", default="",
+                   help="extra seed salt; identical inputs give byte-identical bars")
+    s.add_argument("--db-url", default="", help="Postgres catalog; overrides $QUANTLAB_DB_URL")
+    s.add_argument("--ch-url", default="", help="ClickHouse bars; overrides $QUANTLAB_CH_URL")
+    s.add_argument("--optimize", action="store_true",
+                   help="force the ClickHouse merge after loading")
+    s.add_argument("--no-migrate", action="store_true",
+                   help="skip the automatic migrate step")
+    s.set_defaults(func=cmd_seed_synthetic)
+
+    rp = sub.add_parser(
+        "replay-publish",
+        help="publish warehouse bars to a Kafka topic as a chronological event stream",
+    )
+    rp.add_argument("--symbols", required=True,
+                    help="comma-separated canonical symbols, e.g. ZX1.US,ZX2.US")
+    rp.add_argument("--start", required=True, help="first session date, YYYY-MM-DD")
+    rp.add_argument("--end", required=True, help="last session date, YYYY-MM-DD")
+    rp.add_argument("--topic", default="",
+                    help="Kafka topic (default: $QUANTLAB_KAFKA_TOPIC or quantlab.bars)")
+    rp.add_argument("--brokers", default="",
+                    help="bootstrap servers (default: $QUANTLAB_KAFKA_BROKERS)")
+    rp.add_argument("--pace-ms", type=int, default=0,
+                    help="milliseconds to wait between dates, simulating realtime")
+    rp.add_argument("--db-url", default="", help="Postgres catalog; overrides $QUANTLAB_DB_URL")
+    rp.add_argument("--ch-url", default="", help="ClickHouse bars; overrides $QUANTLAB_CH_URL")
+    rp.set_defaults(func=cmd_replay_publish)
 
     cov = sub.add_parser("coverage", help="what is in the store and where it came from")
     cov.add_argument("--frequency", default="1d")

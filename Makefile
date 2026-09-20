@@ -24,8 +24,8 @@ END     ?=
 PROVIDERS ?= yahoo stooq
 
 .PHONY: help up down build seed logs shell docker-shell test smoke hash dump-hash gen-api \
-	check-contract sync-contract migrate ingest coverage signals store-test db-shell \
-	ch-shell destroy
+	check-contract sync-contract migrate ingest seed-warehouse coverage signals store-test \
+	replay-publish db-shell ch-shell destroy
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | sort | \
@@ -58,11 +58,27 @@ ingest: ## Ingest real history (override SYMBOLS/START/END/PROVIDERS)
 	$(COMPOSE) run --rm ingest ingest $(SYMBOLS) \
 		--start $(START) $(if $(END),--end $(END),) --providers $(PROVIDERS)
 
+seed-warehouse: ## Seed the warehouse with deterministic synthetic bars (no network)
+	$(COMPOSE) run --rm ingest seed-synthetic
+
 coverage: ## What is in the store, where it came from, and how well it compresses
 	$(COMPOSE) run --rm ingest coverage
 
 signals: ## Recompute signals from warehouse bars into the catalog
 	$(COMPOSE) run --rm backend python -m quantlab.signals.materialize
+
+# Kafka brokers for `make replay-publish` (in-compose address; from the host use localhost:19092)
+KAFKA_BROKERS ?= redpanda:9092
+TOPIC ?=
+PACE_MS ?=
+
+replay-publish: ## Publish warehouse bars to the Kafka replay topic (needs --profile streaming up)
+	$(COMPOSE) run --rm \
+		-e QUANTLAB_KAFKA_BROKERS=$(KAFKA_BROKERS) \
+		$(if $(TOPIC),-e QUANTLAB_KAFKA_TOPIC=$(TOPIC),) \
+		ingest replay-publish \
+		--symbols $(SYMBOLS) --start $(START) $(if $(END),--end $(END),) \
+		$(if $(PACE_MS),--pace-ms $(PACE_MS),)
 
 store-test: ## Run the store test suite against the live stack
 	$(COMPOSE) run --rm --entrypoint python ingest -m pytest tests/test_store.py -q

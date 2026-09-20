@@ -19,9 +19,10 @@ COPY tests ./tests
 
 # yahoo is the documented fallback and the only free source of UK corporate
 # actions, so the ingest image carries it even though stooq is primary.
+# streaming adds kafka-python for `quantlab replay-publish`.
 # dev extras come along so the same image can run the store test suite
 # against the live stack (`make store-test`).
-RUN pip install --no-cache-dir ".[store,yahoo,dev]"
+RUN pip install --no-cache-dir ".[store,yahoo,streaming,dev]"
 
 # HTTP cache and Parquet exports live here. Mount a volume to keep the cache
 # across runs -- historical files are fetched with ttl=-1 and never change,
