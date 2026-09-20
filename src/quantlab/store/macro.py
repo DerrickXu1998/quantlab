@@ -1,17 +1,20 @@
 """Macro series as pseudo-instrument bars.
 
-BoE IADB series (FX fixings, Bank Rate, gilt yields, money-supply growth) are
-point series, not OHLCV -- but the warehouse, the feature engine and every
-read path already speak bars. So each series becomes a synthetic instrument
-(``GBPUSD.BOE`` and friends) whose bars are degenerate: open=high=low=close=
-value, adj_close=value, volume=0. That is the smallest deviation the schema
-allows -- `bars.validate` accepts volume 0 and equal OHLC -- and it is what
-lets ``gbp_usd`` sit in ClickHouse next to the equity bars it converts.
+BoE IADB series (FX fixings, Bank Rate, gilt yields, money-supply growth) and
+FRED series (VIX, Treasury yields, credit spreads, the dollar index) are point
+series, not OHLCV -- but the warehouse, the feature engine and every read path
+already speak bars. So each series becomes a synthetic instrument
+(``GBPUSD.BOE``, ``VIX.FRED`` and friends) whose bars are degenerate:
+open=high=low=close=value, adj_close=value, volume=0. That is the smallest
+deviation the schema allows -- `bars.validate` accepts volume 0 and equal
+OHLC -- and it is what lets ``gbp_usd`` sit in ClickHouse next to the equity
+bars it converts.
 
 One honest caveat: `bars.validate` insists on strictly positive prices, so a
-series that goes non-positive (M4 growth did, post-GFC) has those days
-quarantined into ingest_rejects rather than written. They are not dropped
-silently; the run closes as "partial" and the rejects carry the reason.
+series that goes non-positive (M4 growth did, post-GFC; the 10y real yield
+DFII10 did, 2020-21) has those days quarantined into ingest_rejects rather
+than written. They are not dropped silently; the run closes as "partial" and
+the rejects carry the reason.
 """
 from __future__ import annotations
 
@@ -27,6 +30,7 @@ from . import catalog
 from .ingest import IngestReport
 
 SOURCE = "boe"
+FRED_SOURCE = "fred"
 
 # The five COMMON_SERIES as pseudo-symbols. The suffix marks the origin, the
 # root is what a signal would look up.
@@ -36,6 +40,25 @@ DEFAULT_MAPPING: dict[str, str] = {
     "IUDBEDR": "BANKRATE.BOE",
     "IUDSNPY": "GILT10Y.BOE",
     "LPMVWYR": "M4GROWTH.BOE",
+}
+
+# The default FRED set: the US macro backdrop a signal actually reaches for.
+FRED_MAPPING: dict[str, str] = {
+    "VIXCLS": "VIX.FRED",            # CBOE Volatility Index, close
+    "DGS10": "UST10Y.FRED",          # 10-Year Treasury constant maturity
+    "DGS2": "UST2Y.FRED",            # 2-Year Treasury constant maturity
+    "BAMLH0A0HYM2": "HYSPREAD.FRED",  # ICE BofA US High Yield OAS
+    "DFII10": "REAL10Y.FRED",        # 10-Year TIPS constant maturity
+    "DTWEXBGS": "DOLLARIDX.FRED",    # Nominal broad US dollar index
+}
+
+FRED_NAMES: dict[str, str] = {
+    "VIXCLS": "CBOE Volatility Index (VIX), close",
+    "DGS10": "10-Year Treasury constant maturity yield",
+    "DGS2": "2-Year Treasury constant maturity yield",
+    "BAMLH0A0HYM2": "ICE BofA US High Yield option-adjusted spread",
+    "DFII10": "10-Year TIPS constant maturity (real) yield",
+    "DTWEXBGS": "Nominal broad US dollar index",
 }
 
 # Quote currency of the stored numbers: an FX fixing is stored in its quote
@@ -72,16 +95,25 @@ def series_to_bars(series: pd.Series, *, symbol: str = "") -> pd.DataFrame:
     return validate_bars(frame, symbol=symbol)
 
 
-def _securities_for(mapping: Mapping[str, str]) -> dict[str, Security]:
+def _securities_for(
+    mapping: Mapping[str, str],
+    *,
+    source: str = SOURCE,
+    names: Mapping[str, str] | None = None,
+    currencies: Mapping[str, Currency] | None = None,
+    country: str = "GB",
+) -> dict[str, Security]:
+    names = COMMON_SERIES if names is None else names
+    currencies = _CURRENCY if currencies is None else currencies
     return {
         symbol: Security(
             symbol=symbol,
-            name=COMMON_SERIES.get(code, code),
+            name=names.get(code, code),
             exchange="",          # macro series trade on no exchange
-            country="GB",
-            currency=_CURRENCY.get(code, Currency.GBP),
+            country=country,
+            currency=currencies.get(code, Currency.USD if country == "US" else Currency.GBP),
             sector="Macro",
-            meta={"macro": True, "series_code": code, "source": SOURCE},
+            meta={"macro": True, "series_code": code, "source": source},
         )
         for code, symbol in mapping.items()
     }
@@ -97,25 +129,38 @@ def ingest_macro_series(
     source: str = SOURCE,
     provider=None,
     frequency: str = "1d",
+    names: Mapping[str, str] | None = None,
+    currencies: Mapping[str, Currency] | None = None,
+    country: str = "GB",
 ) -> IngestReport:
-    """Fetch BoE series and load them as pseudo-instrument bars.
+    """Fetch macro series and load them as pseudo-instrument bars.
 
     Same write path and ordering as `seed_warehouse`: catalog rows and the run
     commit first, bars go to ClickHouse tagged with the run_id, the run closes
     with real counts. Re-running the same range is idempotent
     (ReplacingMergeTree supersedes the earlier copy).
 
-    `provider` is injectable for tests; anything with the BoeProvider
-    `series_batch(codes, start, end)` interface works.
+    `provider` is injectable for tests; anything with the provider
+    ``series_batch(codes, start, end)`` interface works. The default is the
+    BoE provider, or FRED when ``source='fred'``. ``names``, ``currencies``
+    and ``country`` describe the series for the catalog rows; they default to
+    the BoE set (GB, GBP).
     """
     if not mapping:
         raise ValueError("ingest_macro_series needs at least one series mapping")
     if provider is None:
-        from ..providers.boe import BoeProvider
+        if source == FRED_SOURCE:
+            from ..providers.fred import FredProvider
 
-        provider = BoeProvider()
+            provider = FredProvider()
+        else:
+            from ..providers.boe import BoeProvider
 
-    securities = _securities_for(mapping)
+            provider = BoeProvider()
+
+    securities = _securities_for(
+        mapping, source=source, names=names, currencies=currencies, country=country
+    )
     currencies = {symbol: sec.currency for symbol, sec in securities.items()}
 
     # -- step 1: catalog, committed before any bar is written ---------------
@@ -193,10 +238,12 @@ def ingest_macro_series(
     )
 
 
-def parse_series_args(pairs: Sequence[str] | None) -> dict[str, str]:
-    """--series CODE:SYMBOL pairs -> {code: symbol}; empty means the defaults."""
+def parse_series_args(
+    pairs: Sequence[str] | None, defaults: Mapping[str, str] | None = None
+) -> dict[str, str]:
+    """--series CODE:SYMBOL pairs -> {code: symbol}; empty means `defaults`."""
     if not pairs:
-        return dict(DEFAULT_MAPPING)
+        return dict(DEFAULT_MAPPING if defaults is None else defaults)
     out: dict[str, str] = {}
     for item in pairs:
         if ":" not in item:

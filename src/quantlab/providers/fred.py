@@ -6,12 +6,16 @@ the FRED wrapper being free does not make every series redistributable.
 """
 from __future__ import annotations
 
+import logging
+
 import pandas as pd
 
 from ..config import settings
 from ..registry import provider
 from ..schema import DataUnavailable, ProviderError
 from .base import DataProvider
+
+log = logging.getLogger(__name__)
 
 BASE = "https://api.stlouisfed.org/fred/series/observations"
 
@@ -55,3 +59,18 @@ class FredProvider(DataProvider):
         )
         s.index.name = "date"
         return s
+
+    def series_batch(self, codes: list[str], start, end="") -> pd.DataFrame:
+        """FRED has no bulk endpoint: loop ``series`` per code.
+
+        A series that simply has no data is logged and skipped, so one dead
+        code does not cost the batch. A missing API key (ProviderError)
+        propagates -- that failure is the operator's to fix, not a gap.
+        """
+        cols = {}
+        for code in codes:
+            try:
+                cols[code] = self.series(code, start, end)
+            except DataUnavailable as exc:
+                log.warning("%s", exc)
+        return pd.DataFrame(cols)

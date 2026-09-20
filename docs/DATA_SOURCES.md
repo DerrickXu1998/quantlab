@@ -96,8 +96,17 @@ domain and unambiguously safe commercially.
 - **Note**: `efts.sec.gov` (full-text search) is undocumented by the SEC. Its stability and
   rate policy are **unverified**; do not build a pipeline on it.
 - **Storage**: facts land in the Postgres `fundamentals` table (migration 004) — one row per
-  (instrument, taxonomy, tag, unit, period, filing), point-in-time by `filed_at`. The ingest
-  jobs are not built yet (needs `SEC_USER_AGENT`); the schema is ready for them.
+  (instrument, taxonomy, tag, unit, period, filing), point-in-time by `filed_at`. Two jobs,
+  both needing `SEC_USER_AGENT` in `.env`:
+  - `make map-sec-tickers` (`quantlab map-sec-tickers`) — matches catalog `.US` instruments
+    against `company_tickers.json` (case- and class-share-tolerant: `BRK.B` → `BRK-B`), writes
+    `instruments.cik` (zero-padded) plus a `symbol_map` row under `source='sec_edgar'`, and
+    reports matched/unmatched counts. Resumable via `--only-missing` (default).
+  - `make ingest-sec-fundamentals` (`quantlab ingest-sec-fundamentals [--limit N] [--all]`) —
+    pulls `companyfacts` per CIK-bound instrument (≤10 req/s via the shared limiter), flattens
+    every `facts.<taxonomy>.<tag>.units.<unit>[]` entry into `fundamentals` with
+    `provider='sec_edgar'`, `accession=accn`, `filed_at=filed`. Idempotent (the accession is in
+    the row identity), committed in 25-instrument chunks, resumable.
 
 ### Companies House (UK) — `quantlab.providers.companies_house`
 
@@ -122,8 +131,16 @@ most "free financial data" lists.
 - **Storage**: parsed iXBRL facts share the `fundamentals` table with SEC data
   (`provider='companies_house'`), keyed by `company_number` via
   `instruments.company_number` — no ticker bridge table is needed. `filed_at` is the
-  filing-history date, the only honest point-in-time anchor the API gives. Ingest jobs
-  pending an API key.
+  filing-history date, the only honest point-in-time anchor the API gives.
+  `make ingest-ch-fundamentals` (`quantlab ingest-ch-fundamentals [--limit N]`, needs
+  `COMPANIES_HOUSE_API_KEY` in `.env`) walks each company's filing history and parses
+  every accounts document for the `UK_TAGS` concepts. Two documented gaps: `unit` stays
+  empty (the regex parser does not resolve `unitRef` to a currency — values are in the
+  company's presentation currency), and `period_end` comes from the document's
+  `EndDateForPeriodCoveredByReport`/`BalanceSheetDate` tag, falling back to the filing
+  date with `meta.period_end_assumed` when the tag is absent. Resolving iXBRL contexts
+  properly (periods, dimensions, currencies) is deferred — swap in `arelle` if that
+  precision ever matters.
 
 ---
 
@@ -152,10 +169,26 @@ generally freely reusable with attribution.
 
 ### FRED — `quantlab.providers.fred`
 
-Free key required. US macro: yield curve, HY credit spreads, VIX, real rates, dollar index.
-**Published rate limit: not stated on the official pages (unverified)** — the widely cited
-120/min is third-party. Much of FRED is *redistributed* third-party data (OECD, BIS) whose
-own terms still apply.
+Free key required (`FRED_API_KEY` in `.env`). US macro: yield curve, HY credit spreads,
+VIX, real rates, dollar index. **Published rate limit: not stated on the official pages
+(unverified)** — the widely cited 120/min is third-party. Much of FRED is *redistributed*
+third-party data (OECD, BIS) whose own terms still apply.
+
+`make ingest-fred` (`quantlab ingest-macro --provider fred`) loads the default set as
+pseudo-instrument bars, same bridge as the BoE series:
+
+| FRED code | Pseudo-symbol | Series |
+|---|---|---|
+| `VIXCLS` | `VIX.FRED` | CBOE Volatility Index, close |
+| `DGS10` | `UST10Y.FRED` | 10-Year Treasury constant maturity |
+| `DGS2` | `UST2Y.FRED` | 2-Year Treasury constant maturity |
+| `BAMLH0A0HYM2` | `HYSPREAD.FRED` | ICE BofA US High Yield OAS |
+| `DFII10` | `REAL10Y.FRED` | 10-Year TIPS (real) yield |
+| `DTWEXBGS` | `DOLLARIDX.FRED` | Nominal broad US dollar index |
+
+Override with `--series CODE:SYMBOL` (repeatable). Note `DFII10` went negative in
+2020–21: bars must be strictly positive, so those days are quarantined into
+`ingest_rejects` and the run closes "partial" — expected, not a failure.
 
 ---
 

@@ -24,8 +24,9 @@ END     ?=
 PROVIDERS ?= yahoo stooq
 
 .PHONY: help up down build seed logs shell docker-shell test smoke check-warehouse hash dump-hash gen-api \
-	check-contract sync-contract migrate ingest seed-warehouse ingest-macro map-identifiers universe-snapshot coverage signals store-test \
-	replay-publish db-shell ch-shell destroy
+	check-contract sync-contract migrate ingest seed-warehouse ingest-macro ingest-fred map-identifiers \
+	map-sec-tickers ingest-sec-fundamentals ingest-ch-fundamentals universe-snapshot coverage signals \
+	store-test replay-publish db-shell ch-shell destroy
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | sort | \
@@ -69,6 +70,33 @@ ingest-macro: ## Load BoE macro series as pseudo-instrument bars (override MACRO
 	$(COMPOSE) run --rm ingest ingest-macro \
 		--start $(MACRO_START) $(if $(END),--end $(END),)
 
+# FRED US macro (VIX, 10y/2y Treasury, HY spread, real 10y, dollar index).
+# Needs FRED_API_KEY in .env; DFII10's negative 2020-21 prints land in
+# ingest_rejects (bars must be positive), so the run closes "partial" -- expected.
+ingest-fred: ## Load FRED US macro series as pseudo-instrument bars (needs FRED_API_KEY)
+	$(COMPOSE) run --rm ingest ingest-macro --provider fred \
+		--start $(MACRO_START) $(if $(END),--end $(END),)
+
+# SEC EDGAR fundamentals. Step 1 binds CIKs to .US instruments (one request,
+# cached a week); step 2 pulls companyfacts per CIK (10 req/s limit, one
+# request per instrument, committed in chunks so a re-run resumes).
+map-sec-tickers: ## Bind SEC CIKs to .US instruments (needs SEC_USER_AGENT; override MAP_LIMIT)
+	$(COMPOSE) run --rm ingest map-sec-tickers \
+		$(if $(MAP_LIMIT),--limit $(MAP_LIMIT),) $(MAP_ALL)
+
+SEC_LIMIT ?=
+SEC_ALL ?=
+
+ingest-sec-fundamentals: ## Ingest SEC companyfacts into fundamentals (needs SEC_USER_AGENT; SEC_LIMIT/SEC_ALL=--all)
+	$(COMPOSE) run --rm ingest ingest-sec-fundamentals \
+		$(if $(SEC_LIMIT),--limit $(SEC_LIMIT),) $(SEC_ALL)
+
+CH_LIMIT ?=
+
+ingest-ch-fundamentals: ## Ingest Companies House accounts into fundamentals (needs COMPANIES_HOUSE_API_KEY; CH_LIMIT)
+	$(COMPOSE) run --rm ingest ingest-ch-fundamentals \
+		$(if $(CH_LIMIT),--limit $(CH_LIMIT),)
+
 # OpenFIGI identifier mappings: keyless at 25 req/min x 10 jobs, so the full
 # warehouse takes a few minutes. Resumable by default (--only-missing).
 MAP_LIMIT ?=
@@ -105,7 +133,8 @@ replay-publish: ## Publish warehouse bars to the Kafka replay topic (needs --pro
 		$(if $(PACE_MS),--pace-ms $(PACE_MS),)
 
 store-test: ## Run the store test suite against the live stack
-	$(COMPOSE) run --rm --entrypoint python ingest -m pytest tests/test_store.py -q
+	$(COMPOSE) run --rm --entrypoint python ingest \
+		-m pytest tests/test_store.py tests/test_macro.py tests/test_fundamentals.py -q
 
 db-shell: ## psql into the Postgres catalog
 	$(COMPOSE) exec postgres psql -U quantlab -d quantlab

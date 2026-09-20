@@ -103,6 +103,10 @@ class SecEdgarProvider(DataProvider):
         return out
 
     # -- fundamentals ------------------------------------------------------
+    def companyfacts(self, cik: int) -> dict[str, Any]:
+        """Everything one filer ever tagged, one request per CIK."""
+        return self.client.get_json(COMPANY_FACTS.format(cik=int(cik)), ttl=7 * 86400)
+
     def fundamentals(self, symbols: Sequence[str], concepts: Sequence[str], *, ctx: Any = None) -> pd.DataFrame:
         """Point-in-time fundamentals, indexed by (filed_date, symbol).
 
@@ -114,7 +118,7 @@ class SecEdgarProvider(DataProvider):
         for sym in symbols:
             try:
                 cik = self.cik_for(sym)
-                blob = self.client.get_json(COMPANY_FACTS.format(cik=cik), ttl=7 * 86400)
+                blob = self.companyfacts(cik)
             except Exception as exc:
                 log.debug("sec_edgar: %s facts unavailable: %s", sym, exc)
                 continue

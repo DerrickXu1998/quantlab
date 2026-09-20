@@ -18,6 +18,7 @@ Honest limitations, because they shape what you can build:
 from __future__ import annotations
 
 import base64
+import datetime as dt
 import logging
 import re
 from typing import Any, Sequence
@@ -184,14 +185,25 @@ def parse_ixbrl(document: str, concepts: Sequence[str]) -> dict[str, float]:
     heavy dependency for a handful of numbers. Swap in ``arelle`` here if you
     need contexts, dimensions and full validation.
     """
+    return {concept: value for concept, (_, value) in parse_ixbrl_facts(document, concepts).items()}
+
+
+def parse_ixbrl_facts(document: str, concepts: Sequence[str]) -> dict[str, tuple[str, float]]:
+    """Like :func:`parse_ixbrl`, but keeps the raw tag: concept -> (tag, value).
+
+    The fundamentals table stores the tag as filed, so the warehouse ingest
+    needs the tag name back; the namespace prefix is still dropped (the regex
+    cannot resolve it), so the tag alone is what lands in ``fundamentals.tag``.
+    """
     wanted: dict[str, str] = {}
     for concept in concepts:
         for tag in UK_TAGS.get(concept, [concept]):
             wanted[tag.lower()] = concept
 
-    out: dict[str, float] = {}
+    out: dict[str, tuple[str, float]] = {}
     for match in _IX_RE.finditer(document):
-        concept = wanted.get(match.group("tag").lower())
+        tag = match.group("tag")
+        concept = wanted.get(tag.lower())
         if concept is None or concept in out:
             continue
         raw = match.group("value").replace(",", "").replace("\xa0", "").strip()
@@ -207,5 +219,30 @@ def parse_ixbrl(document: str, concepts: Sequence[str]) -> dict[str, float]:
             value *= 10 ** int(scale.group(1))
         if _SIGN_RE.search(attrs):
             value = -value
-        out[concept] = value
+        out[concept] = (tag, value)
     return out
+
+
+_PERIOD_RE = re.compile(
+    r'<ix:nonNumeric[^>]*name="[^:"]*:(?P<tag>EndDateForPeriodCoveredByReport|BalanceSheetDate)"[^>]*>'
+    r"(?P<value>[^<]*)</ix:nonNumeric>",
+    re.IGNORECASE,
+)
+
+
+def parse_ixbrl_period_end(document: str) -> dt.date | None:
+    """The statutory period end of an iXBRL accounts document, if findable.
+
+    Companies House filings tag it as ``EndDateForPeriodCoveredByReport`` (or
+    ``BalanceSheetDate`` for a balance-sheet-only document). Returns None when
+    neither parses -- the caller decides on the fallback, not this function.
+    """
+    for match in _PERIOD_RE.finditer(document):
+        raw = match.group("value").strip()
+        ts = pd.to_datetime(raw, errors="coerce", format="%Y-%m-%d")
+        if pd.isna(ts):
+            # Human-spelled dates ("31 December 2023") appear in older filings.
+            ts = pd.to_datetime(raw, errors="coerce", dayfirst=True)
+        if pd.notna(ts):
+            return ts.date()
+    return None

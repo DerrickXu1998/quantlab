@@ -219,6 +219,54 @@ def record_figi_mappings(
     return len(rows)
 
 
+def record_cik_mappings(
+    conn,
+    mappings: Mapping[str, int],
+    ids: Mapping[str, int],
+    *,
+    source: str = "sec_edgar",
+) -> int:
+    """Record ticker -> CIK matches for catalog instruments.
+
+    Mirrors ``record_figi_mappings``: the CIK lands in the two places join
+    paths already read -- the ``instruments.cik`` column (zero-padded to the
+    SEC's ten-digit form) and a ``symbol_map`` row under ``source='sec_edgar'``
+    -- and a mapping never blanks an existing CIK.
+    """
+    rows = []
+    cik_by_symbol: dict[str, str] = {}
+    for symbol, cik in mappings.items():
+        if symbol not in ids:
+            continue
+        padded = f"{int(cik):010d}"
+        cik_by_symbol[symbol] = padded
+        rows.append(
+            {
+                "symbol": symbol,
+                "cik": padded,
+                "meta": json.dumps(
+                    {source: {"cik": int(cik), "mapped_at": dt.date.today().isoformat()}},
+                    sort_keys=True,
+                ),
+            }
+        )
+    if not rows:
+        return 0
+
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            UPDATE instruments SET
+                cik = COALESCE(NULLIF(%(cik)s, ''), instruments.cik),
+                meta = instruments.meta || %(meta)s::jsonb
+            WHERE symbol = %(symbol)s
+            """,
+            rows,
+        )
+    map_vendor_symbols(conn, source, cik_by_symbol, ids)
+    return len(rows)
+
+
 # ---------------------------------------------------------------------------
 # Provenance
 # ---------------------------------------------------------------------------

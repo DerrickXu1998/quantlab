@@ -303,10 +303,12 @@ def cmd_seed_synthetic(args) -> int:
 
 def cmd_ingest_macro(args) -> int:
     from . import store
-    from .store.macro import parse_series_args
+    from .schema import Currency, ProviderError
+    from .store.macro import FRED_MAPPING, FRED_NAMES, parse_series_args
 
+    is_fred = args.provider == "fred"
     try:
-        mapping = parse_series_args(args.series)
+        mapping = parse_series_args(args.series, defaults=FRED_MAPPING if is_fred else None)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 
@@ -314,18 +316,93 @@ def cmd_ingest_macro(args) -> int:
         if not args.no_migrate:
             store.migrate_all(conn, client)
 
-        report = store.ingest_macro_series(
-            conn,
-            client,
-            mapping,
-            start=args.start,
-            end=args.end,
-        )
+        try:
+            report = store.ingest_macro_series(
+                conn,
+                client,
+                mapping,
+                start=args.start,
+                end=args.end,
+                source="fred" if is_fred else "boe",
+                names=FRED_NAMES if is_fred else None,
+                currencies={code: Currency.USD for code in mapping} if is_fred else None,
+                country="US" if is_fred else "GB",
+            )
+        except ProviderError as exc:
+            # e.g. "FRED needs a free API key; set FRED_API_KEY"
+            raise SystemExit(str(exc)) from exc
         print(report.summary())
 
         if args.optimize:
             # Pay the ReplacingMergeTree merge now rather than on every read.
             store.optimize(client)
+
+    return 0 if report.status in ("ok", "partial") else 1
+
+
+def cmd_map_sec_tickers(args) -> int:
+    """Bind SEC CIKs to catalog .US instruments (company_tickers.json)."""
+    from . import store
+    from .schema import ProviderError
+
+    # Catalog-only: CIK bindings live in Postgres, no bars involved.
+    with store.session(args.db_url) as conn:
+        if not args.no_migrate:
+            store.migrate(conn)
+
+        try:
+            report = store.map_sec_tickers(
+                conn,
+                limit=args.limit,
+                only_missing=args.only_missing,
+            )
+        except (ValueError, ProviderError) as exc:
+            # SecEdgarProvider raises ValueError when SEC_USER_AGENT has no email.
+            raise SystemExit(str(exc)) from exc
+        print(report.summary())
+
+    return 0 if report.status in ("ok", "partial") else 1
+
+
+def cmd_ingest_sec_fundamentals(args) -> int:
+    from . import store
+    from .schema import ProviderError
+
+    with store.session(args.db_url) as conn:
+        if not args.no_migrate:
+            store.migrate(conn)
+
+        try:
+            report = store.ingest_sec_fundamentals(
+                conn,
+                limit=args.limit,
+                only_missing=args.only_missing,
+            )
+        except (ValueError, ProviderError) as exc:
+            raise SystemExit(str(exc)) from exc
+        print(report.summary())
+
+    return 0 if report.status in ("ok", "partial") else 1
+
+
+def cmd_ingest_ch_fundamentals(args) -> int:
+    from . import store
+    from .schema import ProviderError
+
+    with store.session(args.db_url) as conn:
+        if not args.no_migrate:
+            store.migrate(conn)
+
+        try:
+            report = store.ingest_ch_fundamentals(
+                conn,
+                limit=args.limit,
+                only_missing=args.only_missing,
+            )
+        except (ValueError, ProviderError) as exc:
+            # CompaniesHouseProvider raises ProviderError without a key.
+            raise SystemExit(str(exc)) from exc
+        print(report.summary())
 
     return 0 if report.status in ("ok", "partial") else 1
 
@@ -565,13 +642,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     im = sub.add_parser(
         "ingest-macro",
-        help="load BoE macro series (FX, Bank Rate, gilts, M4) as pseudo-instrument bars",
+        help="load macro series (BoE FX/rates, or FRED US macro with --provider fred) "
+             "as pseudo-instrument bars",
     )
+    im.add_argument("--provider", choices=["boe", "fred"], default="boe",
+                    help="macro source (default: boe; fred needs FRED_API_KEY)")
     im.add_argument("--start", default="2010-01-01")
     im.add_argument("--end", default="")
     im.add_argument("--series", action="append",
                     help="CODE:SYMBOL, e.g. XUDLUSS:GBPUSD.BOE, repeatable; "
-                         "default: the five BoE COMMON_SERIES")
+                         "default: the five BoE COMMON_SERIES, or the FRED set "
+                         "(VIXCLS, DGS10, DGS2, BAMLH0A0HYM2, DFII10, DTWEXBGS) "
+                         "with --provider fred")
     im.add_argument("--db-url", default="", help="Postgres catalog; overrides $QUANTLAB_DB_URL")
     im.add_argument("--ch-url", default="", help="ClickHouse bars; overrides $QUANTLAB_CH_URL")
     im.add_argument("--optimize", action="store_true",
@@ -594,6 +676,55 @@ def build_parser() -> argparse.ArgumentParser:
     mid.add_argument("--no-migrate", action="store_true",
                      help="skip the automatic migrate step")
     mid.set_defaults(func=cmd_map_identifiers)
+
+    mst = sub.add_parser(
+        "map-sec-tickers",
+        help="bind SEC CIKs to catalog .US instruments via company_tickers.json "
+             "(needs SEC_USER_AGENT)",
+    )
+    mst.add_argument("--limit", type=int, default=None,
+                     help="map at most N instruments this run")
+    mst.add_argument("--only-missing", dest="only_missing", action="store_true", default=True,
+                     help="only instruments without a CIK yet (default; makes re-runs resume)")
+    mst.add_argument("--all", dest="only_missing", action="store_false",
+                     help="re-map every .US instrument, keeping existing CIKs")
+    mst.add_argument("--db-url", default="", help="Postgres catalog; overrides $QUANTLAB_DB_URL")
+    mst.add_argument("--no-migrate", action="store_true",
+                     help="skip the automatic migrate step")
+    mst.set_defaults(func=cmd_map_sec_tickers)
+
+    isf = sub.add_parser(
+        "ingest-sec-fundamentals",
+        help="pull SEC companyfacts for CIK-bound instruments into the fundamentals table "
+             "(needs SEC_USER_AGENT; resumable)",
+    )
+    isf.add_argument("--limit", type=int, default=None,
+                     help="ingest at most N instruments this run")
+    isf.add_argument("--only-missing", dest="only_missing", action="store_true", default=True,
+                     help="only instruments with no sec_edgar rows yet (default; resumes a run)")
+    isf.add_argument("--all", dest="only_missing", action="store_false",
+                     help="re-pull every CIK-bound instrument (idempotent: re-pulled "
+                          "filings are ON CONFLICT no-ops)")
+    isf.add_argument("--db-url", default="", help="Postgres catalog; overrides $QUANTLAB_DB_URL")
+    isf.add_argument("--no-migrate", action="store_true",
+                     help="skip the automatic migrate step")
+    isf.set_defaults(func=cmd_ingest_sec_fundamentals)
+
+    ich = sub.add_parser(
+        "ingest-ch-fundamentals",
+        help="parse Companies House filed accounts for company_number-bound instruments "
+             "(needs COMPANIES_HOUSE_API_KEY; resumable)",
+    )
+    ich.add_argument("--limit", type=int, default=None,
+                     help="ingest at most N instruments this run")
+    ich.add_argument("--only-missing", dest="only_missing", action="store_true", default=True,
+                     help="only instruments with no companies_house rows yet (default; resumes)")
+    ich.add_argument("--all", dest="only_missing", action="store_false",
+                     help="re-pull every company_number-bound instrument (idempotent)")
+    ich.add_argument("--db-url", default="", help="Postgres catalog; overrides $QUANTLAB_DB_URL")
+    ich.add_argument("--no-migrate", action="store_true",
+                     help="skip the automatic migrate step")
+    ich.set_defaults(func=cmd_ingest_ch_fundamentals)
 
     rp = sub.add_parser(
         "replay-publish",
