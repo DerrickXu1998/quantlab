@@ -14,4 +14,5 @@ nothing here is privileged beyond shipping in the box.
 from __future__ import annotations
 
 from quantlab.signals import builtins as _builtins  # noqa: F401
+from quantlab.signals import fundamental as _fundamental  # noqa: F401
 from quantlab.signals import library as _library  # noqa: F401

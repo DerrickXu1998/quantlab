@@ -255,7 +255,30 @@ def run_experiment(
     warmup_start = (start - timedelta(days=lookback_days * _CALENDAR_DAYS_PER_BAR)).isoformat()
     bars_by_symbol = backend.load_bars_for(requested_symbols, warmup_start, end_date)
 
-    decisions, composition = compose(spec, bars_by_symbol, requested_symbols)
+    # Only the concepts this strategy's rules declared. Loading the whole
+    # vocabulary would be several million rows for a question nobody asked, and
+    # loading none would leave every fundamental gate shut.
+    #
+    # There is no lower bound on filed_at inside the reader: the figure in
+    # force on the warm-up morning was filed before it, often long before, so a
+    # window bounded at `warmup_start` would start every run with no
+    # fundamentals at all (docs/FUNDAMENTALS.md §2).
+    wanted_concepts = sorted(
+        {
+            concept
+            for index, component in enumerate(spec.components)
+            for concept in component.resolve(index).requires_facts
+        }
+    )
+    facts_by_symbol = (
+        backend.load_facts_for(requested_symbols, wanted_concepts, warmup_start, end_date)
+        if wanted_concepts
+        else {}
+    )
+
+    decisions, composition = compose(
+        spec, bars_by_symbol, requested_symbols, facts_by_symbol=facts_by_symbol
+    )
     # Warm-up bars are inputs, not results: report only the requested window.
     in_window = [d for d in decisions if start_date <= d.date <= end_date]
 
@@ -278,6 +301,11 @@ def run_experiment(
     # Reported, never applied: stored bars are unadjusted, so a split inside
     # the window makes the series jump in a way that is an artefact.
     actions = backend.corporate_actions(requested_symbols, start_date, end_date)
+    instruments_with_facts = (
+        sum(1 for symbol in requested_symbols if facts_by_symbol.get(symbol))
+        if wanted_concepts
+        else None
+    )
     instruments_with_data = sum(1 for symbol in requested_symbols if bars_by_symbol.get(symbol))
     instruments_full_warmup = sum(
         1
@@ -337,6 +365,10 @@ def run_experiment(
             "trades": len(result.trades),
             "instruments_with_data": instruments_with_data,
             "instruments_full_warmup": instruments_full_warmup,
+            # None when the strategy reads no fundamentals at all, which is a
+            # different statement from "none of them had any".
+            "instruments_with_facts": instruments_with_facts,
+            "fact_concepts": wanted_concepts or None,
             "dataset": run.dataset,
             "ingest_run_ids": ingest_runs,
             "corporate_actions": len(actions),
