@@ -42,6 +42,16 @@ def test_every_signal_is_point_in_time(tmp_path):
     assert violations == 0
 
 
+BUILTIN_RULE_NAMES = {
+    "sma-crossover",
+    "rsi-threshold",
+    "breakout-20d",
+    "macd-crossover",
+    "bollinger-breakout",
+    "bollinger-mean-reversion",
+}
+
+
 def test_every_starter_rule_fires(tmp_path):
     db_path = tmp_path / "coverage.db"
     seed.run(db_path)
@@ -49,7 +59,7 @@ def test_every_starter_rule_fires(tmp_path):
         counts = dict(
             conn.execute("SELECT rule_name, count(*) FROM signals GROUP BY rule_name").fetchall()
         )
-    for rule_name in ("sma-crossover", "rsi-threshold", "breakout-20d"):
+    for rule_name in BUILTIN_RULE_NAMES:
         assert counts.get(rule_name, 0) >= 1, f"{rule_name} never fired"
 
 
@@ -99,4 +109,4 @@ def test_seed_marks_meta_seeded(tmp_path):
             json.loads(params)  # valid JSON
         for (name,) in conn.execute("SELECT DISTINCT rule_name FROM signals"):
             rule_names[name] += 1
-    assert set(rule_names) == {"sma-crossover", "rsi-threshold", "breakout-20d"}
+    assert set(rule_names) == BUILTIN_RULE_NAMES

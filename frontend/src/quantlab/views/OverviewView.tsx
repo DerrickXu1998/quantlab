@@ -45,7 +45,7 @@ function FirstRun() {
             <span className="font-mono text-[11px] text-muted-foreground">02</span>
             <div>
               <Button type="button" size="sm" onClick={() => navigate('strategies')}>
-                Run your first backtest
+                Run your first strategy
               </Button>
               <p className="mt-1 text-[11px] text-muted-foreground">
                 Strategies opens with the first registered model preselected.
@@ -83,7 +83,7 @@ function FirstRun() {
  * completed run; with no runs at all it is the first-run guide.
  */
 export function OverviewView() {
-  const { allRuns, runsStatus, latestCompleted, activeRun, select } = useRuns();
+  const { allRuns, runsStatus, latestCompleted, activeRun, select, reloadRuns } = useRuns();
   const route = useRoute();
   const paramId = route.params.get('run');
   const targetId = paramId ?? latestCompleted?.id ?? null;
@@ -103,6 +103,11 @@ export function OverviewView() {
         tone="error"
         title="Backend unreachable"
         detail="The run history could not be loaded."
+        action={
+          <Button type="button" variant="outline" size="sm" onClick={reloadRuns}>
+            Retry
+          </Button>
+        }
       />
     );
   }
@@ -111,7 +116,7 @@ export function OverviewView() {
     // Asymmetric on purpose: a fixed rail against a fluid workspace, rather
     // than an even split that would read as a dashboard.
     <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)]">
-      <CascadeItem index={0} className="hidden border-r border-border lg:block">
+      <CascadeItem index={0} className="border-b border-border lg:border-b-0 lg:border-r">
         <Panel title="Runs" className="border-0" bodyClassName="p-0">
           <RunsRail
             runs={allRuns}
@@ -130,7 +135,7 @@ export function OverviewView() {
           <EmptyState
             icon={FlaskConical}
             title="No completed runs"
-            detail="Every recorded run failed. Run a backtest in Strategies to produce a result."
+            detail="Every recorded run failed. Run a strategy in Strategies to produce a result."
           />
         ) : !run ? (
           <EmptyState icon={Hourglass} title="Loading…" role="status" />

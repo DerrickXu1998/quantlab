@@ -39,7 +39,7 @@ quantlab/
 ├── backend/src/quantlab/    TIER 2  the demo application (a *separate* package)
 │   ├── api/                 FastAPI: app, routes, Pydantic schemas
 │   ├── storage/             two seams: StorageBackend + ExperimentStore
-│   ├── signals/             signal rule registry + engine (3 builtin rules)
+│   ├── signals/             signal rule registry + engine (6 builtin rules)
 │   ├── research/            runner, performance, typed errors
 │   ├── replay/              deterministic replay engine + portfolio simulator
 │   ├── streaming/           Kafka consumer → live replay
@@ -66,13 +66,14 @@ Only three names collide, and **none of them is shared code**:
 |---|---|---|
 | `__init__.py` | 91 lines — the public API surface | empty — a bare namespace |
 | `config.py` | 167 lines | 121 lines, unrelated |
-| `indicators/` | 81 indicators over 5 modules, pandas-based | 4 functions in one file, numpy only |
+| `indicators/` | 81 indicators over 5 modules, pandas-based | 6 functions in one file, numpy only |
 
 The two `indicators` packages share **zero files**. `momentum.py`, `trend.py`,
 `volatility.py`, `volume.py` and `statistics.py` exist only in the library; `registry.py` and
-`builtins.py` only in the backend. The backend's four (`sma`, `rsi`, `rolling_max`,
-`rolling_min`) are a deliberate minimal reimplementation so the API image never needs pandas —
-the backend has **zero** pandas imports, against the library's pandas-and-pyarrow core.
+`builtins.py` only in the backend. The backend's six (`sma`, `ema`, `rsi`, `rolling_max`,
+`rolling_min`, `rolling_std`) are a deliberate minimal reimplementation so the API image never
+needs pandas — the backend has **zero** pandas imports, against the library's pandas-and-pyarrow
+core.
 
 That split is the whole point. The library fetches, ingests and computes features; the backend
 reads the warehouse and serves it. The API image carries no provider stack, no pandas and no
@@ -91,7 +92,7 @@ is opt-in, which is what keeps the zero-setup demo honest.
 
 | Service | Profile | Image | Ports | Role |
 |---|---|---|---|---|
-| `postgres` | base | `postgres:17-alpine` | 5432 | catalog: instruments, signals, provenance, experiments |
+| `postgres` | base | `postgres:17-alpine` | 5432 | catalog: instruments, signals, provenance, experiments, accounts/sessions |
 | `clickhouse` | base | `clickhouse-server:24.8-alpine` | 8123, 9000 | `price_bars` — the bar store |
 | `backend` | base | `./backend` | 8000 | FastAPI |
 | `frontend` | base | `./frontend` | 8080 | nginx over the built bundle |
@@ -150,24 +151,47 @@ The demo path is guarded by test: `backend/tests/unit/test_demo_fallback.py` mak
 ```
   frontend ── fetch /api/v1/* ──▶ FastAPI routes  (thin adapters, zero analytics)
                                         │
+                     require_session: every route except GET /health and
+                     POST /auth/{login,register} 401s without a valid
+                     quantlab_session cookie (no-op when QUANTLAB_AUTH=off)
+                                        │
                         ┌───────────────┼────────────────┐
                         ▼               ▼                ▼
                  StorageBackend   ExperimentStore   signals.registry
                         │               │                │
               ClickHouse/Postgres   experiment_*     3 builtin rules
-                 or SQLite            tables
+                 or SQLite          + users/sessions
                         │
                         └──▶ research.runner ──▶ research.performance
                              (warm-up load,        (trades, equity,
                               signal compute)       Sharpe, drawdown)
 ```
 
-**Fourteen operations** on `/api/v1`, contract version `0.5.0`:
+**Twenty-six operations** on `/api/v1`, contract version `0.9.0`:
 
 `GET /health` · `GET /instruments` · `GET /instruments/{symbol}/prices` · `GET /signals` ·
 `GET /models` · `POST /runs` · `GET /runs` · `GET /runs/{id}` · `PATCH /runs/{id}` ·
 `DELETE /runs/{id}` · `GET /runs/{id}/performance` · `GET /runs/{id}/replay/stream` ·
-`GET /runs/{id}/replay/summary` · `GET /replay/live/stream`
+`GET /runs/{id}/replay/summary` · `GET /replay/live/stream` · `POST /auth/register` ·
+`POST /auth/login` · `POST /auth/logout` · `GET /auth/me` ·
+`GET /instruments/{symbol}/fundamentals/concepts` · `GET /instruments/{symbol}/fundamentals/series` ·
+`GET /signal-templates` · `POST /rules` · `GET /rules` · `GET /rules/{id}` · `PATCH /rules/{id}` ·
+`DELETE /rules/{id}`
+
+Custom rules (feature 008) are template instantiations, not expressions: `signals/templates.py`
+holds the registry (`indicator-threshold`, `indicator-crossover`, `fundamental-condition`),
+derives lookback from config, and instantiates a registry-shaped rule per run;
+`storage/custom_rules.py` is the third persistence seam (CustomRuleStore) beside StorageBackend
+and ExperimentStore. A custom-rule run records a definition snapshot, so edits never rewrite
+history and a deleted rule leaves its runs readable with `model_available: false`. Rules whose
+template inputs are `bars+fundamentals` receive the symbol's point-in-time facts from the engine
+(facts load from start − 3 years, so a YoY base exists); the fundamental template is unavailable
+on the demo dataset, and a run attempted with it there answers 422.
+
+With auth on (the default), every operation except `GET /health`, `POST /auth/login` and the
+bootstrap-gated `POST /auth/register` requires the session cookie, and experiment runs are
+scoped to their owner — another user's run id reads as 404; pre-auth runs (no owner) stay
+visible to everyone. See `docs/AUTH.md`.
 
 The contract is authored once at
 `quantlab_specs/specs/006-warehouse-experiments/contracts/openapi.yaml`. `backend/contracts/`
@@ -252,6 +276,15 @@ An earlier draft of this document recorded 26,075 rows from a single synthetic r
 concluded that no real data had ever been ingested. That was true when measured and wrong
 forty minutes later.
 
+**Update 2026-09-21 (feature 008):** the snapshot below now also predates four more ingests.
+FRED macro history is in as six pseudo-instruments (`UST2Y.FRED`, `UST10Y.FRED`,
+`REAL10Y.FRED`, `HYSPREAD.FRED`, `DOLLARIDX.FRED`, `VIX.FRED`; daily bars 2010→2026) alongside
+the BoE ones, and the `fundamentals` table is populated: sec_edgar (≈5.67M facts across 482
+instruments), finra daily short volume, and fca per-holder net short positions. All of it is
+served by the read API — macro instruments surface in `GET /instruments` with
+`kind: "macro"`, fundamentals through `GET /instruments/{symbol}/fundamentals/concepts` and
+`…/fundamentals/series`. Re-run the §7d queries for current numbers.
+
 | | |
 |---|---|
 | `price_bars` rows | **1,768,107** |
@@ -304,7 +337,7 @@ never fired against real data. Splits in this history are currently invisible.
 
 ### 7b. Adapters that exist and are wired
 
-Eight providers and three universe sources are registered and discoverable via
+Ten providers and three universe sources are registered and discoverable via
 `quantlab sources`. Rate limits are enforced by a per-source token bucket whose daily caps
 persist to disk across restarts.
 
@@ -315,18 +348,22 @@ warehouse because of it".
 |---|---|---|---|---|---|---|
 | **Stooq** | `providers/stooq.py` | fallback only | no | 120/min | Daily OHLCV, US + UK, 30+ yr | No published terms. Research use only; **not redistributable** |
 | **Yahoo** | `providers/yahoo.py` | **yes — 1.73M rows** | no | 4/min | OHLCV + **corporate actions**, metadata | Unofficial endpoint; personal use only. Breaks periodically |
-| **SEC EDGAR** | `providers/sec_edgar.py` | no | no | 540/min | US fundamentals (XBRL), Form 3/4/5 | **US public domain.** Requires contact User-Agent |
+| **SEC EDGAR** | `providers/sec_edgar.py` | **yes — fundamentals (5.67M facts)** | no | 540/min | US fundamentals (XBRL), Form 3/4/5 | **US public domain.** Requires contact User-Agent |
 | **Companies House** | `providers/companies_house.py` | no | yes | 120/min (600/5min) | UK statutory accounts (iXBRL) | Crown copyright, normally OGL |
 | **OpenFIGI** | `providers/openfigi.py` | no | optional | 25/min (→250 keyed) | Ticker ↔ FIGI ↔ ISIN ↔ SEDOL | Free, no stated usage limits |
 | **BoE IADB** | `providers/boe.py` | **yes — 16,957 rows** | no | 60/min | GBP/USD, Bank Rate | Reusable with attribution |
-| **FRED** | `providers/fred.py` | no | yes | 100/min | US macro series | Free key; some series carry third-party restrictions |
+| **FRED** | `providers/fred.py` | **yes — 6 macro series as bars** | yes | 100/min | US macro series | Free key; some series carry third-party restrictions |
+| **FINRA** | `providers/finra.py` | **yes — daily short volume** | no | no published limit | US RegSHO short/total volume per trade date | Public regulatory data |
+| **FCA** | `providers/fca.py` | **yes — short positions** | no | daily snapshot file, cached 12h | UK per-holder net short positions (T+2, 0.2% threshold) | Public regulatory data |
 | **CSV** | `providers/csvfile.py` | no | no | — | Local files | Whatever the source carried |
 
 Universe sources: `nasdaqtrader` (US listings), `lse` (LSE report file, supplied by path),
 `static` (a bundled FTSE fallback list).
 
 Signal rules registered in the backend: `sma-crossover@1.0.0` (lookback 51, scale-free),
-`rsi-threshold@1.0.0` (16, scale-free), `breakout-20d@1.0.0` (21, price-scaled).
+`rsi-threshold@1.0.0` (16, scale-free), `breakout-20d@1.0.0` (21, price-scaled),
+`macd-crossover@1.0.0` (35, scale-free), `bollinger-breakout@1.0.0` (21, price-scaled),
+`bollinger-mean-reversion@1.0.0` (21, price-scaled).
 
 ### 7d. Refresh these numbers yourself
 
@@ -405,15 +442,18 @@ were assessed and rejected, and the UK/US asymmetry in what is free.
    so `--no-deps` points the app at an absent ClickHouse and every data route 503s. Unset the two
    warehouse vars and the same container is green (**204 passed / 10 skipped**). The gate
    currently cannot distinguish a real regression from an absent warehouse.
-3. **Ingest coverage is uneven.** Six of eight adapters have never written a row: SEC EDGAR,
-   Companies House, OpenFIGI, FRED and CSV are wired and untested against the warehouse, and
-   Stooq has only ever been a fallback behind Yahoo. The US/UK fundamentals halves of the
-   platform are unexercised.
+3. **Ingest coverage is uneven, but less than it was.** SEC EDGAR fundamentals, FRED macro,
+   and the FINRA/FCA short datasets are now in (2026-09-21); Companies House and CSV remain
+   wired but have never written a row, and Stooq has only ever been a fallback behind Yahoo.
+   The UK fundamentals half of the platform is still unexercised.
 4. **No intraday.** The schema is ready (`ts` is `DateTime64`); free sources cap intraday history
    too short to model on. Adding a licensed minute feed is an adapter, not a migration.
-5. **No backtester.** Feature generation and strategy simulation are kept separate deliberately.
-   `research/performance.py` is a long-only, equal-weight, zero-cost mark-to-market — it ships
-   its own `assumptions[]` in the payload and is explicitly not tradeable.
+5. **Still not a tradeable backtest.** Feature generation and strategy simulation are
+   kept separate deliberately. Runs accept `execution` criteria (capital, sizing,
+   costs, stop-loss/take-profit, next-open fills), recorded as provenance and applied
+   by the fill simulator in `research/performance.py` — see `docs/EXECUTION.md`. But
+   there is no slippage or liquidity model, no shorting, and fills happen at modeled
+   prices on daily bars; the `assumptions[]` in every performance payload says so.
 
 ---
 
@@ -421,9 +461,9 @@ were assessed and rejected, and the UK/US asymmetry in what is free.
 
 | Suite | Count | Where measured |
 |---|---|---|
-| Root library (`tests/`) | 115 passed, 11 skipped | host venv |
-| Backend (`backend/tests/`) | 203 passed, 11 skipped | host venv |
-| Backend (`backend/tests/`) | 204 passed, 10 skipped | container, warehouse vars unset |
+| Root library (`tests/`) | 163 passed, 23 skipped | host venv |
+| Backend (`backend/tests/`) | 366 passed, 11 skipped | host venv |
+| Backend (`backend/tests/`) | 204 passed, 10 skipped | container, warehouse vars unset (pre-dates the execution-criteria work; re-measure before quoting) |
 | Frontend (`frontend/tests/`) | 197 passed (20 files) | host |
 
 The one-test difference between host and container is a Postgres-parameterised case that skips
@@ -465,13 +505,17 @@ every deploy; `BACKEND_URL` and `EXPECT_DATASET` make it work against any enviro
 | `QUANTLAB_KAFKA_BROKERS` | Live replay bus. Unset → live endpoint 503s, nothing else changes |
 | `QUANTLAB_KAFKA_TOPIC` | Default `quantlab.bars` |
 | `QUANTLAB_OFFLINE=1` | Any cache miss raises instead of hitting the network. The test suite runs under this |
+| `QUANTLAB_AUTH` | `on` (default) requires the `quantlab_session` cookie on every route except `GET /health` and `POST /auth/{login,register}`; `off` disables auth entirely and the auth routes 404. The test suite runs with it off except the dedicated auth tests |
+| `QUANTLAB_AUTH_COOKIE_SECURE` | Adds `Secure` to the session cookie. Off by default because local dev is plain http; set behind TLS |
 | `QUANTLAB_PLUGIN_PATH` | Extra plugin directories |
 | `OPENFIGI_API_KEY`, `FRED_API_KEY`, `COMPANIES_HOUSE_API_KEY` | Provider keys |
 
 ## Related documents
 
 - `docs/DATA_SOURCES.md` — full source evaluation, including what was rejected and why
+- `docs/AUTH.md` — the authentication model: accounts, sessions, bootstrap, threat scope
 - `docs/STORAGE.md` — why ClickHouse and Postgres are split the way they are
 - `docs/INDICATORS.md` — the indicator suite and scale classes
+- `docs/EXECUTION.md` — how signals become trades: fills, sizing, costs, stops, metrics
 - `docs/SIGNAL_VIEWER_DEMO.md` — running the zero-setup demo
 - `quantlab_specs/.specify/memory/constitution.md` — the rules the above enforce

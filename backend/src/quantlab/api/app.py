@@ -17,9 +17,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from quantlab.api import routes
+from quantlab.api import auth, routes
 from quantlab.logging import get_logger
+from quantlab.storage import auth as auth_store
 from quantlab.storage import backends, experiments
+from quantlab.storage import custom_rules as custom_rules_store
 
 DEFAULT_DB_PATH = "/data/quantlab.db"
 
@@ -48,19 +50,32 @@ def resolve_cors_origins() -> list[str]:
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
-def create_app(db_path: str | Path | None = None, backend=None) -> FastAPI:
+def create_app(
+    db_path: str | Path | None = None,
+    backend=None,
+    auth_enabled: bool | None = None,
+) -> FastAPI:
     """Build the API app.
 
     The storage backend is chosen once at startup: the real warehouse when
     QUANTLAB_DB_URL and QUANTLAB_CH_URL are set, otherwise the synthetic
     SQLite dataset. Tests may inject one explicitly.
+
+    Auth (feature 007) defaults on (QUANTLAB_AUTH); tests pass
+    ``auth_enabled=False`` rather than relying on the environment.
     """
     app = FastAPI(title="QuantLab Signal Viewer API", version="0.1.0")
     app.state.db_path = str(db_path) if db_path is not None else resolve_db_path()
     app.state.backend = backend or backends.select_backend(app.state.db_path)
     # Mirrors select_backend: the warehouse when configured, else the demo.
     app.state.experiments = experiments.select_experiment_store(app.state.db_path)
+    app.state.auth_enabled = auth.resolve_auth_enabled() if auth_enabled is None else auth_enabled
+    app.state.auth_cookie_secure = auth.resolve_auth_cookie_secure()
+    app.state.auth = auth_store.select_auth_store(app.state.db_path)
+    app.state.login_limiter = auth.LoginRateLimiter()
+    app.state.custom_rules = custom_rules_store.select_custom_rule_store(app.state.db_path)
     app.include_router(routes.router, prefix="/api/v1")
+    app.include_router(auth.router, prefix="/api/v1")
 
     origins = resolve_cors_origins()
     if origins:
@@ -91,6 +106,7 @@ def create_app(db_path: str | Path | None = None, backend=None) -> FastAPI:
             "db_path": app.state.db_path,
             "backend": app.state.backend.name,
             "cors_origins": origins,
+            "auth_enabled": app.state.auth_enabled,
         },
     )
     return app

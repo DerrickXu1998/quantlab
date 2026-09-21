@@ -29,6 +29,7 @@ def compute_signals(
     bars_by_symbol: dict[str, list[Any]],
     rules: list[SignalRule] | None = None,
     overrides: dict[str, Any] | None = None,
+    facts_by_symbol: dict[str, list[dict]] | None = None,
 ) -> list[ComputedSignal]:
     """Run ``rules`` over the supplied bars.
 
@@ -36,6 +37,10 @@ def compute_signals(
     *effective* parameters (defaults merged with overrides) are what get
     recorded on each signal — recording the bare defaults while executing
     overrides would make the record unreproducible (Constitution VI).
+
+    ``facts_by_symbol`` feeds rules whose declared inputs are
+    "bars+fundamentals" (the fundamental-condition template): each rule
+    receives its symbol's point-in-time facts. Bars-only rules never see them.
     """
     rules = list(rules) if rules is not None else list_rules()
     # Resolved once per rule so an unknown override key fails immediately,
@@ -50,15 +55,18 @@ def compute_signals(
         for rule in rules:
             if len(bars) < rule.lookback_days:
                 continue
-            effective = effective_by_rule[(rule.name, rule.version)]
-            for event in rule.compute(bars, **effective):
+            if rule.inputs == "bars":
+                events = rule.compute(bars, **effective_by_rule[(rule.name, rule.version)])
+            else:
+                events = rule.compute(bars, (facts_by_symbol or {}).get(symbol) or [])
+            for event in events:
                 out.append(
                     ComputedSignal(
                         symbol=symbol,
                         date=event.date,
                         rule_name=rule.name,
                         rule_version=rule.version,
-                        parameters=dict(effective),
+                        parameters=dict(effective_by_rule[(rule.name, rule.version)]),
                         direction=event.direction,
                         trigger_values=dict(event.trigger_values),
                         data_window_end=event.data_window_end,

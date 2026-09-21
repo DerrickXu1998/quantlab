@@ -1,6 +1,7 @@
 import { Activity, ListOrdered, ServerCrash } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Instrument } from '../../api/client';
+import { Button } from '../../components/ui/button';
 import { CascadeItem } from '../chrome/Cascade';
 import { EmptyState } from '../chrome/EmptyState';
 import { FlashNumber } from '../chrome/FlashNumber';
@@ -21,9 +22,12 @@ const SIM_POSITIONS = 'Netted from the session’s simulated fills and marked ag
 export function ExecutionView({
   instruments,
   feedError,
+  onFeedRetry,
 }: {
   instruments: Instrument[];
   feedError: string | null;
+  /** Offered on the feed-error state; absent in contexts that cannot retry. */
+  onFeedRetry?: () => void;
 }) {
   const [symbol, setSymbol] = useState<string | null>(null);
   const [fills, setFills] = useState<Fill[]>([]);
@@ -55,6 +59,13 @@ export function ExecutionView({
         tone="error"
         title="Feed disconnected"
         detail={feedError}
+        action={
+          onFeedRetry ? (
+            <Button type="button" variant="outline" size="sm" onClick={onFeedRetry}>
+              Retry
+            </Button>
+          ) : undefined
+        }
       />
     );
   }

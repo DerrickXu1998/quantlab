@@ -37,8 +37,7 @@ def test_the_image_honours_an_injected_port():
     assert cmd, "Dockerfile has no CMD"
 
     assert "${PORT" in cmd[0], (
-        "CMD must expand ${PORT} so the platform can choose the port; "
-        f"found: {cmd[0]}"
+        f"CMD must expand ${{PORT}} so the platform can choose the port; found: {cmd[0]}"
     )
     # Shell form, or the variable is passed to uvicorn as a literal string.
     assert not re.match(r"^CMD\s*\[", cmd[0]), (
@@ -67,9 +66,7 @@ def _client(monkeypatch, origins: str | None):
 def test_a_configured_origin_is_allowed(monkeypatch):
     client = _client(monkeypatch, "https://quantlab.vercel.app")
 
-    response = client.get(
-        "/api/v1/health", headers={"Origin": "https://quantlab.vercel.app"}
-    )
+    response = client.get("/api/v1/health", headers={"Origin": "https://quantlab.vercel.app"})
 
     assert response.headers.get("access-control-allow-origin") == "https://quantlab.vercel.app"
 

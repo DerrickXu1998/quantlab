@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   getPrices,
   listInstruments,
@@ -134,13 +134,29 @@ export function WorkspaceProvider({
     setPage(0);
   };
 
+  // The signals API cannot filter by instrument kind, so the kind chip is
+  // applied to the loaded page against the instrument list. A signal whose
+  // symbol is unknown to the list is excluded under an active kind filter —
+  // claiming a kind for it would be a guess.
+  const kindBySymbol = useMemo(
+    () => new Map(instruments.map((instrument) => [instrument.symbol, instrument.kind])),
+    [instruments],
+  );
+  const visibleSignals = useMemo(
+    () =>
+      filters.kind
+        ? signals.filter((signal) => kindBySymbol.get(signal.symbol) === filters.kind)
+        : signals,
+    [signals, filters.kind, kindBySymbol],
+  );
+
   return (
     <WorkspaceContext.Provider
       value={{
         instruments,
         filters,
         changeFilters,
-        signals,
+        signals: visibleSignals,
         total,
         status,
         errorMessage,

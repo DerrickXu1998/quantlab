@@ -6,9 +6,9 @@ import { StatusBadge } from '../src/components/ui/status-badge';
 
 describe('Button', () => {
   it('follows the terminal grammar: square, hairline, mono uppercase label', () => {
-    render(<Button>Run backtest</Button>);
+    render(<Button>Run strategy</Button>);
 
-    const button = screen.getByRole('button', { name: /run backtest/i });
+    const button = screen.getByRole('button', { name: /run strategy/i });
     expect(button).toHaveClass(
       'rounded-sm',
       'border',

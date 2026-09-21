@@ -119,6 +119,9 @@ def list_instruments(conn: sqlite3.Connection) -> dict:
             "symbol": symbol,
             "name": name,
             "currency": currency,
+            # The synthetic universe is all equities; the macro label exists
+            # for the warehouse's BoE/FRED pseudo-instruments.
+            "kind": "equity",
             "regime_profile": regime_profile,
             "bar_count": bar_count,
             "signal_count": sig_count,
@@ -290,8 +293,20 @@ def earliest_bar_dates(conn: sqlite3.Connection, symbols: list[str]) -> dict[str
 
 def _run_to_dict(row: tuple) -> dict:
     (
-        run_id, name, model_name, model_version, parameters, symbols, start_date,
-        end_date, status, error, created_at, signal_count, requested, with_data,
+        run_id,
+        name,
+        model_name,
+        model_version,
+        parameters,
+        symbols,
+        start_date,
+        end_date,
+        status,
+        error,
+        created_at,
+        signal_count,
+        requested,
+        with_data,
         full_warmup,
     ) = row
     return {
@@ -391,16 +406,13 @@ def get_run_signals(conn: sqlite3.Connection, run_id: str) -> list[dict]:
 def list_runs(conn: sqlite3.Connection, saved_only: bool = False) -> dict:
     where = "WHERE name IS NOT NULL" if saved_only else ""
     rows = conn.execute(
-        f"SELECT {_RUN_COLUMNS} FROM experiment_runs {where} "
-        f"ORDER BY created_at DESC, id DESC"
+        f"SELECT {_RUN_COLUMNS} FROM experiment_runs {where} ORDER BY created_at DESC, id DESC"
     ).fetchall()
     return {"total": len(rows), "items": [_run_to_dict(row) for row in rows]}
 
 
 def set_run_name(conn: sqlite3.Connection, run_id: str, name: str) -> bool:
-    cursor = conn.execute(
-        "UPDATE experiment_runs SET name = ? WHERE id = ?", (name, run_id)
-    )
+    cursor = conn.execute("UPDATE experiment_runs SET name = ? WHERE id = ?", (name, run_id))
     return cursor.rowcount > 0
 
 

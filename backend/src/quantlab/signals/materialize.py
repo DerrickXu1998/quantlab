@@ -90,9 +90,7 @@ def materialize(
             signals = compute_signals({symbol: bars})
 
             if replace:
-                conn.execute(
-                    "DELETE FROM signals WHERE instrument_id = %s", (instrument_id,)
-                )
+                conn.execute("DELETE FROM signals WHERE instrument_id = %s", (instrument_id,))
 
             rows = []
             for signal in signals:

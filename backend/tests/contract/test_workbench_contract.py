@@ -121,9 +121,7 @@ def test_create_run_matches_the_contract(client, symbols):
 
 
 def test_effective_parameters_are_recorded_not_the_bare_defaults(client, symbols):
-    run = client.post(
-        "/api/v1/runs", json=_run_body(symbols, parameters={"fast": 7})
-    ).json()
+    run = client.post("/api/v1/runs", json=_run_body(symbols, parameters={"fast": 7})).json()
     # Overrides merged over declared defaults — the provenance must describe
     # what actually executed (Constitution VI).
     assert run["parameters"] == {"fast": 7, "slow": 50}
@@ -280,3 +278,83 @@ def test_performance_of_a_failed_run_is_409_rather_than_a_zeroed_body(client):
 
     assert response.status_code == 409
     assert set(SCHEMAS["Error"]["required"]) <= set(response.json())
+
+
+# --- Execution criteria on runs ----------------------------------------------
+
+
+def test_execution_criteria_are_recorded_and_echoed(client, symbols):
+    """The criteria are provenance: the run record must carry the effective
+    set (defaults merged over what was asked), or it is not reproducible."""
+    run = client.post(
+        "/api/v1/runs",
+        json=_run_body(symbols, execution={"transaction_cost_bps": 10, "stop_loss_pct": 0.1}),
+    ).json()
+
+    execution = run["execution"]
+    assert execution["transaction_cost_bps"] == 10
+    assert execution["stop_loss_pct"] == 0.1
+    # Defaults filled in: the recorded set is the effective set.
+    assert execution["entry_price"] == "same_close"
+    assert execution["position_sizing"] == "equal_weight"
+
+    fetched = client.get(f"/api/v1/runs/{run['id']}").json()
+    assert fetched["execution"] == execution
+
+
+def test_a_run_without_execution_records_none(client, symbols):
+    run = client.post("/api/v1/runs", json=_run_body(symbols)).json()
+    assert run["execution"] is None
+
+
+def test_invalid_execution_criteria_are_422(client, symbols):
+    bad_values = client.post(
+        "/api/v1/runs", json=_run_body(symbols, execution={"stop_loss_pct": 1.5})
+    )
+    assert bad_values.status_code == 422
+
+    unknown_key = client.post(
+        "/api/v1/runs", json=_run_body(symbols, execution={"slippage_bps": 5})
+    )
+    assert unknown_key.status_code == 422
+
+    bad_enum = client.post(
+        "/api/v1/runs", json=_run_body(symbols, execution={"entry_price": "yesterday"})
+    )
+    assert bad_enum.status_code == 422
+
+
+def test_performance_honours_the_recorded_execution(client, symbols):
+    """A run recorded with costs reports a performance whose assumptions say
+    so; the same run without them says it charged nothing."""
+    plain = client.post("/api/v1/runs", json=_run_body(symbols)).json()
+    charged = client.post(
+        "/api/v1/runs", json=_run_body(symbols, execution={"transaction_cost_bps": 50})
+    ).json()
+    stopped = client.post(
+        "/api/v1/runs", json=_run_body(symbols, execution={"stop_loss_pct": 0.2})
+    ).json()
+
+    plain_assumptions = " ".join(
+        client.get(f"/api/v1/runs/{plain['id']}/performance").json()["assumptions"]
+    )
+    charged_assumptions = " ".join(
+        client.get(f"/api/v1/runs/{charged['id']}/performance").json()["assumptions"]
+    )
+    stopped_assumptions = " ".join(
+        client.get(f"/api/v1/runs/{stopped['id']}/performance").json()["assumptions"]
+    )
+
+    assert "No transaction costs" in plain_assumptions
+    assert "50 bps" in charged_assumptions
+    assert "Stop-loss" in stopped_assumptions
+
+    # Same signals, same fills, plus a 50 bps charge per fill: the charged run
+    # can only do worse. (Stops are excluded from this comparison: cutting a
+    # loser early can legitimately improve a run.)
+    if charged["signal_count"] > 0:
+        charged_metrics = client.get(f"/api/v1/runs/{charged['id']}/performance").json()
+        plain_metrics = client.get(f"/api/v1/runs/{plain['id']}/performance").json()
+        assert (
+            charged_metrics["metrics"]["total_return"] <= plain_metrics["metrics"]["total_return"]
+        )

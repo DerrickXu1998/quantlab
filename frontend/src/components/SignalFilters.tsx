@@ -5,6 +5,8 @@ export interface SignalFilterState {
   instrument: string;
   signalType: string;
   direction: '' | Direction;
+  /** Equity vs macro series. Client-side: the signals API cannot filter by kind. */
+  kind: '' | 'equity' | 'macro';
   startDate: string;
   endDate: string;
   sort: 'date_asc' | 'date_desc';
@@ -14,6 +16,7 @@ export const EMPTY_FILTERS: SignalFilterState = {
   instrument: '',
   signalType: '',
   direction: '',
+  kind: '',
   startDate: '',
   endDate: '',
   sort: 'date_desc',
@@ -97,6 +100,38 @@ export function SignalFilters({ instruments, ruleNames, value, onChange }: Signa
             Bearish
           </label>
         </div>
+      </fieldset>
+
+      <fieldset
+        className="kind-toggle rounded-sm border border-border px-3 py-2"
+        data-testid="kind-filter"
+      >
+        <legend className="px-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Series</legend>
+        <div className="flex items-center gap-3 text-sm text-foreground">
+          {(
+            [
+              { value: '', label: 'All' },
+              { value: 'equity', label: 'Equities' },
+              { value: 'macro', label: 'Macro' },
+            ] as const
+          ).map((option) => (
+            <label key={option.value} className="inline-flex items-center gap-1.5">
+              <input
+                type="radio"
+                name="kind"
+                className={radioClasses}
+                checked={value.kind === option.value}
+                onChange={() => update({ kind: option.value })}
+              />
+              {option.label}
+            </label>
+          ))}
+        </div>
+        {value.kind !== '' ? (
+          <p className="mt-1.5 text-[10px] text-muted-foreground">
+            Applied to the loaded page — the signals API cannot filter by kind yet.
+          </p>
+        ) : null}
       </fieldset>
 
       <Label>

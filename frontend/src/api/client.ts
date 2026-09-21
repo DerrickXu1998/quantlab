@@ -1,4 +1,5 @@
 import type { components, paths } from './schema';
+import { reportSessionExpired } from './session';
 
 export type Health = components['schemas']['Health'];
 export type Direction = components['schemas']['Direction'];
@@ -47,6 +48,9 @@ async function request<T>(
   }
 
   if (!response.ok) {
+    // A guarded endpoint answering 401 means the session is gone; tell the
+    // gate so the app collapses back to the sign-in screen.
+    if (response.status === 401) reportSessionExpired();
     let detail = `Request failed with status ${response.status}`;
     try {
       const body = (await response.json()) as components['schemas']['Error'];
@@ -109,6 +113,7 @@ async function send<T>(
   }
 
   if (!response.ok) {
+    if (response.status === 401) reportSessionExpired();
     let detail = `Request failed with status ${response.status}`;
     try {
       const payload = (await response.json()) as { detail?: unknown };

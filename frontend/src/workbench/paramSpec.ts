@@ -3,7 +3,7 @@ import type { ParamSpec } from '../api/client';
 /**
  * Validation and coercion for a model's declared parameters.
  *
- * Extracted from RunConfig so the Quant Lab backtest form generates identical
+ * Extracted from RunConfig so the Quant Lab run form generates identical
  * fields from identical metadata. Two implementations of this would drift, and
  * the one that drifted would accept a value the other rejected.
  */

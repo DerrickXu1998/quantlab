@@ -10,7 +10,7 @@ export function Assumptions({ assumptions }: { assumptions: string[] }) {
   return (
     <details data-testid="performance-assumptions" className="border-t border-border px-3 py-2">
       <summary className="cursor-pointer font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-        Not a tradeable backtest — {assumptions.length} assumptions
+        Not a tradeable strategy run — {assumptions.length} assumptions
       </summary>
       <ul className="mt-2 space-y-1 text-[11px] text-muted-foreground">
         {assumptions.map((line) => (

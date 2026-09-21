@@ -95,6 +95,14 @@ CREATE TABLE IF NOT EXISTS experiment_runs (
     -- reported, so reopening a saved run still warns that its price series
     -- contains unadjusted discontinuities.
     corporate_actions        TEXT,
+    -- Effective execution criteria the run was created with (costs, stops,
+    -- sizing, fill timing). NULL for runs recorded without them: those use
+    -- the historical zero-cost equal-weight measuring instrument.
+    execution                TEXT,
+    -- Owner of the run (auth, feature 007). NULL for runs recorded before
+    -- accounts existed: those stay visible to every user rather than being
+    -- silently reassigned to whoever registered first.
+    user_id                  INTEGER,
     CHECK (start_date <= end_date),
     CHECK ((status = 'failed') = (error IS NOT NULL))
 );
@@ -112,6 +120,47 @@ CREATE TABLE IF NOT EXISTS experiment_signals (
 
 CREATE INDEX IF NOT EXISTS idx_experiment_signals_run
     ON experiment_signals (run_id, symbol, date);
+
+-- Accounts and sessions (feature 007). Deliberately in the same file as the
+-- demo data: the zero-setup promise means the demo DB must carry everything
+-- the API needs with no extra services.
+CREATE TABLE IF NOT EXISTS users (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- Case-insensitive identity: COLLATE NOCASE makes both the uniqueness
+    -- constraint and lookups ignore case, so "Alice" and "alice" are one user.
+    username      TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    -- pbkdf2_sha256$<iterations>$<salt b64>$<digest b64>; never a plaintext
+    -- or reversibly-encrypted password.
+    password_hash TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    is_admin      INTEGER NOT NULL DEFAULT 0 CHECK (is_admin IN (0, 1))
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    -- Only the SHA-256 of the bearer token is stored: a leaked database does
+    -- not hand out usable session tokens.
+    token_hash TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+
+-- Custom signal rules (feature 008, M2). user_id NULL means unscoped: rules
+-- created with QUANTLAB_AUTH=off. Slug uniqueness is per owner and enforced
+-- in the store, because SQLite treats NULLs as distinct in UNIQUE indexes.
+CREATE TABLE IF NOT EXISTS custom_rules (
+    rule_id    TEXT PRIMARY KEY,
+    user_id    INTEGER REFERENCES users (id) ON DELETE CASCADE,
+    name       TEXT NOT NULL,
+    slug       TEXT NOT NULL,
+    template   TEXT NOT NULL,
+    config     TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_custom_rules_owner
+    ON custom_rules (user_id);
 """
 
 # Fixed table + ordering for the deterministic dump hash.
@@ -185,7 +234,18 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
 def bootstrap(conn: sqlite3.Connection) -> None:
     """Apply the idempotent schema bootstrap."""
     conn.executescript(BOOTSTRAP_DDL)
+    # CREATE TABLE IF NOT EXISTS leaves pre-existing databases at their old
+    # shape; bring forward the columns added since.
+    ensure_column(conn, "experiment_runs", "execution TEXT")
+    ensure_column(conn, "experiment_runs", "user_id INTEGER")
     conn.commit()
+
+
+def ensure_column(conn: sqlite3.Connection, table: str, ddl: str) -> None:
+    column = ddl.split()[0]
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if existing and column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
 
 
 def upsert_instruments(conn: sqlite3.Connection, rows: list[InstrumentRow]) -> None:

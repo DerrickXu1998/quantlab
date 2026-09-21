@@ -168,7 +168,9 @@ def test_a_closed_trade_locks_in_its_gain_and_stops_tracking_the_price():
 def test_a_missing_bar_forward_fills_rather_than_dropping_to_zero():
     """A symbol with no bar on a date is closed for the day, not worthless."""
     aaa = bars(100.0, 110.0, 120.0)
-    bbb = [aaa[0].__class__("2024-01-01", 50.0, 50.0, 50.0, 50.0, 1), ]
+    bbb = [
+        aaa[0].__class__("2024-01-01", 50.0, 50.0, 50.0, 50.0, 1),
+    ]
     by_symbol = {"AAA": aaa, "BBB": bbb}
     trades = performance.pair_trades([signal("BBB", "2024-01-01", "bullish")], by_symbol)
 
@@ -191,8 +193,7 @@ def test_benchmark_is_equal_weight_buy_and_hold_over_the_same_symbols():
 
 def _equity(*values: float) -> list[performance.EquityPoint]:
     return [
-        performance.EquityPoint(date=f"2024-01-{i + 1:02d}", value=v)
-        for i, v in enumerate(values)
+        performance.EquityPoint(date=f"2024-01-{i + 1:02d}", value=v) for i, v in enumerate(values)
     ]
 
 

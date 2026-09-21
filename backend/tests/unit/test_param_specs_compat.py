@@ -27,8 +27,8 @@ def test_bare_value_shorthand_still_registers():
     spec = rule.param_specs["fast"]
     assert spec.name == "fast"
     assert spec.default == 20
-    assert spec.type == "int"          # inferred from the value
-    assert spec.minimum is None        # no bounds are invented
+    assert spec.type == "int"  # inferred from the value
+    assert spec.minimum is None  # no bounds are invented
     assert spec.maximum is None
 
 

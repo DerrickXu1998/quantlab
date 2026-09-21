@@ -26,6 +26,15 @@ vi.mock('../src/api/client', async (importOriginal) => {
   };
 });
 
+vi.mock('../src/quantlab/data/customRules', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/quantlab/data/customRules')>();
+  return {
+    ...actual,
+    listCustomRules: vi.fn().mockResolvedValue({ total: 0, items: [] }),
+    deleteCustomRule: vi.fn(),
+  };
+});
+
 /**
  * A model the front end has never heard of, with a parameter name that appears
  * nowhere in the source. If the form renders it correctly, nothing about model
@@ -37,6 +46,9 @@ const inventedModel: apiClient.Model = {
   lookback_days: 30,
   scale_class: 'scale_free',
   direction_semantics: 'bullish when zeta crosses up',
+  origin: 'builtin',
+  custom_rule_id: null,
+  template: null,
   parameters: [
     {
       name: 'zeta_threshold',
@@ -90,8 +102,16 @@ function makeRun(overrides: Partial<apiClient.RunDetail> = {}): apiClient.RunDet
 
 /** The merged pieces, wired the way the destinations wire them. */
 function Harness({ results = false }: { results?: boolean }) {
-  const { modelEntries, modelsStatus, selectedModel, selectModel, activeRun, inFlight, start, cancel } =
-    useRuns();
+  const {
+    modelEntries,
+    modelsStatus,
+    selectedModel,
+    selectModel,
+    activeRun,
+    inFlight,
+    start,
+    cancel,
+  } = useRuns();
   const { instruments } = useWorkspace();
 
   if (modelsStatus !== 'ready') return null;
@@ -146,7 +166,17 @@ describe('ModelList', () => {
     expect(await screen.findByText('zeta-reversion')).toBeInTheDocument();
     expect(screen.getByText('v2.1.0')).toBeInTheDocument();
     // The list is honest about what a model is: no live or paper pretence.
-    expect(screen.getByText('Backtest')).toBeInTheDocument();
+    expect(screen.getByText('Simulated')).toBeInTheDocument();
+  });
+
+  it('composes each strategy’s fires-on line from the registry’s own fields', async () => {
+    renderWorkbench(<Harness />);
+
+    // direction_semantics arrives as "bullish when zeta crosses up"; the card
+    // renders it as a plain sentence, with no per-model copy in the frontend.
+    expect(await screen.findByTestId('fires-on-zeta-reversion')).toHaveTextContent(
+      'Fires bullish when zeta crosses up',
+    );
   });
 });
 
@@ -184,7 +214,7 @@ describe('RunConfigForm', () => {
     renderWorkbench(<Harness />);
 
     await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(await screen.findByRole('button', { name: /run backtest/i }));
+    await user.click(await screen.findByRole('button', { name: /run strategy/i }));
 
     await waitFor(() => expect(apiClient.createRun).toHaveBeenCalled());
     const [body] = vi.mocked(apiClient.createRun).mock.calls[0];
@@ -192,6 +222,98 @@ describe('RunConfigForm', () => {
     expect(body.symbols).toEqual(['ZZTRND']);
     // The default was not modified, so it is not sent as an override.
     expect(body.parameters).toEqual({});
+  });
+
+  it('renders the execution fieldset seeded with the API defaults', async () => {
+    renderWorkbench(<Harness />);
+
+    const fieldset = await screen.findByTestId('execution-fieldset');
+    expect(within(fieldset).getByLabelText(/initial capital/i)).toHaveValue(100000);
+    expect(within(fieldset).getByLabelText(/position sizing/i)).toHaveValue('equal_weight');
+    expect(within(fieldset).getByLabelText(/transaction cost/i)).toHaveValue(0);
+    expect(within(fieldset).getByLabelText(/entry price/i)).toHaveValue('same_close');
+    // Optional fields seed empty: uncapped, no stops.
+    expect((within(fieldset).getByLabelText(/max open positions/i) as HTMLInputElement).value).toBe(
+      '',
+    );
+    expect((within(fieldset).getByLabelText(/stop loss/i) as HTMLInputElement).value).toBe('');
+  });
+
+  it('shows the fraction field only for fixed-fraction sizing', async () => {
+    const user = userEvent.setup();
+    renderWorkbench(<Harness />);
+
+    const fieldset = await screen.findByTestId('execution-fieldset');
+    expect(within(fieldset).queryByLabelText(/fraction per entry/i)).not.toBeInTheDocument();
+
+    await user.selectOptions(within(fieldset).getByLabelText(/position sizing/i), 'fixed_fraction');
+
+    expect(within(fieldset).getByLabelText(/fraction per entry/i)).toHaveValue(0.1);
+  });
+
+  it('flags an out-of-range execution value against that field and blocks the run', async () => {
+    const user = userEvent.setup();
+    renderWorkbench(<Harness />);
+
+    const field = await screen.findByLabelText(/stop loss/i);
+    await user.type(field, '2');
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/stop loss/i);
+    expect(alert).toHaveTextContent(/<= 1/);
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    // No run may be attempted while an execution criterion is invalid.
+    await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
+    expect(screen.getByRole('button', { name: /run strategy/i })).toBeDisabled();
+    expect(apiClient.createRun).not.toHaveBeenCalled();
+  });
+
+  it('submits the merged execution criteria with the run', async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiClient.createRun).mockResolvedValue(makeRun());
+    vi.mocked(apiClient.getRun).mockResolvedValue(makeRun());
+
+    renderWorkbench(<Harness />);
+
+    const capital = await screen.findByLabelText(/initial capital/i);
+    await user.clear(capital);
+    await user.type(capital, '50000');
+    await user.type(await screen.findByLabelText(/stop loss/i), '0.1');
+    await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
+    await user.click(screen.getByRole('button', { name: /run strategy/i }));
+
+    await waitFor(() => expect(apiClient.createRun).toHaveBeenCalled());
+    const [body] = vi.mocked(apiClient.createRun).mock.calls[0];
+    expect(body.execution).toEqual({
+      initial_capital: 50000,
+      position_sizing: 'equal_weight',
+      fraction: 0.1,
+      max_open_positions: null,
+      transaction_cost_bps: 0,
+      fixed_cost_per_trade: 0,
+      stop_loss_pct: 0.1,
+      take_profit_pct: null,
+      entry_price: 'same_close',
+    });
+  });
+
+  it('submits fixed-fraction sizing with its fraction', async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiClient.createRun).mockResolvedValue(makeRun());
+    vi.mocked(apiClient.getRun).mockResolvedValue(makeRun());
+
+    renderWorkbench(<Harness />);
+
+    await user.selectOptions(await screen.findByLabelText(/position sizing/i), 'fixed_fraction');
+    const fraction = await screen.findByLabelText(/fraction per entry/i);
+    await user.clear(fraction);
+    await user.type(fraction, '0.25');
+    await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
+    await user.click(screen.getByRole('button', { name: /run strategy/i }));
+
+    await waitFor(() => expect(apiClient.createRun).toHaveBeenCalled());
+    const [body] = vi.mocked(apiClient.createRun).mock.calls[0];
+    expect(body.execution).toMatchObject({ position_sizing: 'fixed_fraction', fraction: 0.25 });
   });
 });
 
@@ -260,7 +382,9 @@ describe('RunResultsView', () => {
   });
 
   it('renders a failed run distinctly from an empty one', () => {
-    renderResults(makeRun({ status: 'failed', error: 'something broke', signal_count: 0, signals: [] }));
+    renderResults(
+      makeRun({ status: 'failed', error: 'something broke', signal_count: 0, signals: [] }),
+    );
 
     expect(screen.getByTestId('run-failed')).toHaveAttribute('role', 'alert');
     expect(screen.queryByTestId('run-empty')).not.toBeInTheDocument();
@@ -350,7 +474,7 @@ describe('run store', () => {
     renderWorkbench(<Harness results />);
 
     await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(await screen.findByRole('button', { name: /run backtest/i }));
+    await user.click(await screen.findByRole('button', { name: /run strategy/i }));
 
     expect(await screen.findByTestId('run-results')).toBeInTheDocument();
     expect(screen.getByTestId('run-coverage')).toBeInTheDocument();

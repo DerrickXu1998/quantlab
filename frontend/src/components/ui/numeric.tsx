@@ -4,8 +4,8 @@ export type NumericTone = 'default' | 'signed' | 'accent' | 'muted';
 
 export interface NumericProps {
   value: number | null | undefined;
-  /** 'price' | 'percent' | 'signed-percent' | 'ratio' | 'integer' */
-  format?: 'price' | 'signedPrice' | 'percent' | 'signedPercent' | 'ratio' | 'integer' | 'currency';
+  /** 'price' | 'percent' | 'signed-percent' | 'ratio' | 'integer' | 'compact' */
+  format?: 'price' | 'signedPrice' | 'percent' | 'signedPercent' | 'ratio' | 'integer' | 'currency' | 'compact';
   tone?: NumericTone;
   className?: string;
 }
@@ -25,6 +25,14 @@ export function formatNumeric(value: number, format: NumericProps['format']): st
       return value.toFixed(2);
     case 'integer':
       return value.toLocaleString('en-US', { maximumFractionDigits: 0 });
+    // Fundamentals span ratios (0.42) to billions of dollars in one column.
+    case 'compact':
+      return Math.abs(value) < 10
+        ? value.toLocaleString('en-US', { maximumFractionDigits: 2 })
+        : value.toLocaleString('en-US', {
+            notation: 'compact',
+            maximumFractionDigits: 2,
+          });
     case 'currency':
       return value.toLocaleString('en-US', {
         style: 'currency',

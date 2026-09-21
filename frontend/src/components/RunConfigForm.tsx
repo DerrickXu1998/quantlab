@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { getPrices, type Instrument, type Model, type RunRequest } from '../api/client';
+import {
+  buildExecutionCriteria,
+  executionDefaults,
+  executionError,
+  visibleExecutionFields,
+} from '../workbench/executionSpec';
 import { coerce, defaultValues, localError } from '../workbench/paramSpec';
 import { Button } from './ui/button';
 import { fieldClasses, Input, Label, Select } from './ui/field';
@@ -18,10 +24,11 @@ const NO_PREFILL: Record<string, string> = {};
  * both destinations agree on what is valid.
  *
  * The date window defaults to the actual extent of the stored data (one price
- * read against the first instrument) rather than a hardcoded year. Capital and
- * timeframe are deliberately absent: the backend marks a fixed notional book
- * and serves daily bars only, so a field offering a choice it cannot honour
- * would be a lie in the shape of a control.
+ * read against the first instrument) rather than a hardcoded year. Below the
+ * signal parameters, the Execution fieldset sets the criteria the run's
+ * performance report simulates under — capital, sizing, costs, stops and fill
+ * timing — which the backend records with the run and discloses in the
+ * assumptions it ships back.
  */
 export function RunConfigForm({
   model,
@@ -43,6 +50,8 @@ export function RunConfigForm({
     ...defaultValues(model.parameters),
     ...initialValues,
   }));
+  // Execution criteria are model-independent, so they survive a model switch.
+  const [execution, setExecution] = useState<Record<string, string>>(executionDefaults);
   const [symbols, setSymbols] = useState<string[]>([]);
   const [startDate, setStartDate] = useState(FALLBACK_WINDOW.start);
   const [endDate, setEndDate] = useState(FALLBACK_WINDOW.end);
@@ -82,11 +91,37 @@ export function RunConfigForm({
     return errors;
   }, [model, values]);
 
-  const blocked = Object.keys(fieldErrors).length > 0 || symbols.length === 0 || running;
+  const executionErrors = useMemo(() => {
+    const errors: Record<string, string> = {};
+    for (const spec of visibleExecutionFields(execution)) {
+      const problem = executionError(spec, execution[spec.name] ?? '');
+      if (problem) errors[spec.name] = problem;
+    }
+    return errors;
+  }, [execution]);
+
+  const blocked =
+    Object.keys(fieldErrors).length > 0 ||
+    Object.keys(executionErrors).length > 0 ||
+    symbols.length === 0 ||
+    running;
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     if (blocked) return;
+    const criteria = buildExecutionCriteria(execution);
+    // A custom rule's config is fixed at definition time: the run names the
+    // rule and carries no parameter overrides (the API rejects both at once).
+    if (model.origin === 'custom' && model.custom_rule_id) {
+      onRun({
+        custom_rule_id: model.custom_rule_id,
+        symbols,
+        start_date: startDate,
+        end_date: endDate,
+        execution: criteria,
+      });
+      return;
+    }
     // Only overrides are sent; omitted parameters take the declared default,
     // which is what keeps a run reproducible from its record.
     const overrides: Record<string, unknown> = {};
@@ -103,6 +138,7 @@ export function RunConfigForm({
       symbols,
       start_date: startDate,
       end_date: endDate,
+      execution: criteria,
     });
   };
 
@@ -168,65 +204,136 @@ export function RunConfigForm({
         </p>
       </div>
 
-      <fieldset className="space-y-2 border-t border-border pt-3">
-        <legend className={label}>Parameters</legend>
-        {model.parameters.map((spec) => {
-          const error = fieldErrors[spec.name];
-          const describedBy = error ? `run-param-${spec.name}-error` : undefined;
-          return (
-            <div key={spec.name} className="space-y-1">
-              <Label>
-                <span>
-                  <span className="font-mono">{spec.name}</span>
-                  {spec.description ? (
-                    <span className="ml-2 font-sans text-[10px] normal-case tracking-normal text-muted-foreground">
-                      {spec.description}
-                    </span>
-                  ) : null}
-                </span>
-                {spec.type === 'enum' ? (
-                  <Select
-                    value={values[spec.name] ?? ''}
-                    aria-describedby={describedBy}
-                    aria-invalid={Boolean(error)}
-                    onChange={(event) =>
-                      setValues((current) => ({ ...current, [spec.name]: event.target.value }))
-                    }
+      {model.parameters.length > 0 ? (
+        <fieldset className="space-y-2 border-t border-border pt-3">
+          <legend className={label}>Parameters</legend>
+          {model.parameters.map((spec) => {
+            const error = fieldErrors[spec.name];
+            const describedBy = error ? `run-param-${spec.name}-error` : undefined;
+            return (
+              <div key={spec.name} className="space-y-1">
+                <Label>
+                  <span>
+                    <span className="font-mono">{spec.name}</span>
+                    {spec.description ? (
+                      <span className="ml-2 font-sans text-[10px] normal-case tracking-normal text-muted-foreground">
+                        {spec.description}
+                      </span>
+                    ) : null}
+                  </span>
+                  {spec.type === 'enum' ? (
+                    <Select
+                      value={values[spec.name] ?? ''}
+                      aria-describedby={describedBy}
+                      aria-invalid={Boolean(error)}
+                      onChange={(event) =>
+                        setValues((current) => ({ ...current, [spec.name]: event.target.value }))
+                      }
+                    >
+                      {(spec.choices ?? []).map((choice) => (
+                        <option key={String(choice)} value={String(choice)}>
+                          {String(choice)}
+                        </option>
+                      ))}
+                    </Select>
+                  ) : (
+                    <Input
+                      id={`run-param-${spec.name}`}
+                      value={values[spec.name] ?? ''}
+                      aria-describedby={describedBy}
+                      aria-invalid={Boolean(error)}
+                      min={spec.minimum ?? undefined}
+                      max={spec.maximum ?? undefined}
+                      type={spec.type === 'int' || spec.type === 'float' ? 'number' : 'text'}
+                      step={spec.type === 'float' ? 'any' : '1'}
+                      onChange={(event) =>
+                        setValues((current) => ({ ...current, [spec.name]: event.target.value }))
+                      }
+                    />
+                  )}
+                </Label>
+                {error ? (
+                  <p
+                    id={`run-param-${spec.name}-error`}
+                    role="alert"
+                    className="text-[10px] text-destructive"
                   >
-                    {(spec.choices ?? []).map((choice) => (
-                      <option key={String(choice)} value={String(choice)}>
-                        {String(choice)}
-                      </option>
-                    ))}
-                  </Select>
-                ) : (
-                  <Input
-                    id={`run-param-${spec.name}`}
-                    value={values[spec.name] ?? ''}
-                    aria-describedby={describedBy}
-                    aria-invalid={Boolean(error)}
-                    min={spec.minimum ?? undefined}
-                    max={spec.maximum ?? undefined}
-                    type={spec.type === 'int' || spec.type === 'float' ? 'number' : 'text'}
-                    step={spec.type === 'float' ? 'any' : '1'}
-                    onChange={(event) =>
-                      setValues((current) => ({ ...current, [spec.name]: event.target.value }))
-                    }
-                  />
-                )}
-              </Label>
-              {error ? (
-                <p
-                  id={`run-param-${spec.name}-error`}
-                  role="alert"
-                  className="text-[10px] text-destructive"
+                    {spec.name}: {error}
+                  </p>
+                ) : null}
+              </div>
+            );
+          })}
+        </fieldset>
+      ) : model.origin === 'custom' ? (
+        <p className="border-t border-border pt-3 text-[10px] text-muted-foreground">
+          This rule's parameters are baked into its saved config — edit the rule to change them.
+        </p>
+      ) : null}
+
+      <fieldset className="space-y-2 border-t border-border pt-3" data-testid="execution-fieldset">
+        <legend className={label}>Execution</legend>
+        <p className="text-[10px] text-muted-foreground">
+          How the run’s performance report turns signals into simulated fills. Recorded with the
+          run.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          {visibleExecutionFields(execution).map((spec) => {
+            const error = executionErrors[spec.name];
+            const id = `run-exec-${spec.name}`;
+            const describedBy = error ? `${id}-error` : undefined;
+            const control =
+              spec.kind === 'enum' ? (
+                <Select
+                  id={id}
+                  value={execution[spec.name] ?? ''}
+                  aria-describedby={describedBy}
+                  aria-invalid={Boolean(error)}
+                  onChange={(event) =>
+                    setExecution((current) => ({ ...current, [spec.name]: event.target.value }))
+                  }
                 >
-                  {spec.name}: {error}
-                </p>
-              ) : null}
-            </div>
-          );
-        })}
+                  {(spec.choices ?? []).map((choice) => (
+                    <option key={choice.value} value={choice.value}>
+                      {choice.label}
+                    </option>
+                  ))}
+                </Select>
+              ) : (
+                <Input
+                  id={id}
+                  value={execution[spec.name] ?? ''}
+                  aria-describedby={describedBy}
+                  aria-invalid={Boolean(error)}
+                  min={spec.minimum ?? undefined}
+                  max={spec.maximum ?? undefined}
+                  type="number"
+                  step={spec.kind === 'float' ? 'any' : '1'}
+                  onChange={(event) =>
+                    setExecution((current) => ({ ...current, [spec.name]: event.target.value }))
+                  }
+                />
+              );
+            return (
+              <div key={spec.name} className="space-y-1">
+                <Label htmlFor={id}>
+                  <span>
+                    {spec.label}
+                    <span className="ml-2 font-sans text-[10px] normal-case tracking-normal text-muted-foreground">
+                      {spec.help}
+                    </span>
+                  </span>
+                  {control}
+                </Label>
+                {error ? (
+                  <p id={`${id}-error`} role="alert" className="text-[10px] text-destructive">
+                    {spec.label}: {error}
+                  </p>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
       </fieldset>
 
       <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
@@ -240,7 +347,7 @@ export function RunConfigForm({
             </Button>
           ) : null}
           <Button type="submit" disabled={blocked} className="px-4">
-            {running ? 'Running…' : 'Run backtest'}
+            {running ? 'Running…' : 'Run strategy'}
           </Button>
         </span>
       </div>

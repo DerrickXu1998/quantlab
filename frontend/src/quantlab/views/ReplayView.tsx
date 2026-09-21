@@ -1,4 +1,5 @@
 import { ServerCrash } from 'lucide-react';
+import { Button } from '../../components/ui/button';
 import { useRuns } from '../../runs/RunsContext';
 import { EmptyState } from '../chrome/EmptyState';
 import { ReplayPanel } from '../panels/ReplayPanel';
@@ -9,7 +10,7 @@ import { ReplayPanel } from '../panels/ReplayPanel';
  * already show.
  */
 export function ReplayView() {
-  const { allRuns, runsStatus } = useRuns();
+  const { allRuns, runsStatus, reloadRuns } = useRuns();
 
   if (runsStatus === 'error') {
     return (
@@ -19,6 +20,11 @@ export function ReplayView() {
         tone="error"
         title="Backend unreachable"
         detail="The run history could not be loaded."
+        action={
+          <Button type="button" variant="outline" size="sm" onClick={reloadRuns}>
+            Retry
+          </Button>
+        }
       />
     );
   }

@@ -18,6 +18,17 @@ vi.mock('../../src/api/client', async (importOriginal) => {
   return { ...actual, getPrices: vi.fn() };
 });
 
+// The fundamentals panel's fetches stay out of these tests; the states they
+// produce are covered in data-surfacing.test.tsx.
+vi.mock('../../src/quantlab/data/fundamentals', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/quantlab/data/fundamentals')>();
+  return {
+    ...actual,
+    listFundamentalConcepts: vi.fn().mockResolvedValue({ symbol: 'ZZTRND', total: 0, items: [] }),
+    getFundamentalSeries: vi.fn(),
+  };
+});
+
 installResizeObserver();
 installCanvas2d();
 
@@ -139,9 +150,10 @@ describe('Indicators view', () => {
     await user.click(screen.getByRole('button', { name: /^VWAP/ }));
 
     expect(screen.queryByRole('region', { name: /bollinger|vwap/i })).not.toBeInTheDocument();
-    // Two regions only: the instruments rail and the price chart itself.
+    // Three regions only: the instruments rail, the price chart, and the
+    // fundamentals panel (empty here — the concepts fetch is mocked to none).
     expect(screen.getAllByRole('region').map((region) => region.getAttribute('aria-label')))
-      .toEqual(['Instruments', expect.stringMatching(/intraday/i)]);
+      .toEqual(['Instruments', expect.stringMatching(/intraday/i), expect.stringMatching(/fundamentals/i)]);
   });
 });
 
@@ -274,5 +286,28 @@ describe('Market destination handoffs', () => {
     expect(within(daily).queryByTestId('simulated-tag')).toBeNull();
     expect(await within(daily).findByTestId('real-data-badge')).toBeInTheDocument();
     expect(within(daily).getByTestId('price-chart')).toBeInTheDocument();
+  });
+
+  it('a failed history load is an error with a retry, never an endless loading state', async () => {
+    vi.mocked(apiClient.getPrices).mockRejectedValueOnce(new Error('down'));
+    const user = userEvent.setup();
+    renderWithFeed(<IndicatorsView instruments={instruments} feedError={null} />);
+    await screen.findByRole('region', { name: /intraday/i });
+
+    await user.click(screen.getByRole('button', { name: /daily history/i }));
+
+    const error = await screen.findByTestId('daily-history-error');
+    expect(error).toHaveAttribute('role', 'alert');
+
+    vi.mocked(apiClient.getPrices).mockResolvedValue({
+      total: 1,
+      items: [
+        { date: '2024-12-31', open: 10, high: 11, low: 9, close: 10.5, volume: 100 },
+      ] as unknown as apiClient.PriceBar[],
+    });
+    await user.click(within(error).getByRole('button', { name: /retry/i }));
+
+    const daily = await screen.findByRole('region', { name: /daily history/i });
+    expect(await within(daily).findByTestId('price-chart')).toBeInTheDocument();
   });
 });

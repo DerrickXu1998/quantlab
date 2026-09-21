@@ -11,6 +11,12 @@ export interface Series {
   /** Dashed lines read as "reference", which is what a benchmark is. */
   dashed?: boolean;
   fill?: string;
+  /**
+   * Step interpolation: the value holds flat until the next dated point, then
+   * jumps. The honest shape for filing-stamped (point-in-time) data — a
+   * diagonal would invent values between filings.
+   */
+  step?: boolean;
 }
 
 export interface Scale {
@@ -94,21 +100,30 @@ export function drawSeries(ctx: CanvasRenderingContext2D, series: Series, scale:
   const path = new Path2D();
   let started = false;
   let lastDrawn = -1;
+  let lastY = 0;
   series.points.forEach((point, index) => {
     if (point.value === null) return;
     const x = scale.x(index);
     const y = scale.y(point.value);
     // A gap breaks the line rather than bridging it with an invented segment.
-    if (!started || index !== lastDrawn + 1) path.moveTo(x, y);
-    else path.lineTo(x, y);
+    if (!started || index !== lastDrawn + 1) {
+      path.moveTo(x, y);
+    } else if (series.step) {
+      path.lineTo(x, lastY);
+      path.lineTo(x, y);
+    } else {
+      path.lineTo(x, y);
+    }
     started = true;
     lastDrawn = index;
+    lastY = y;
   });
 
   if (series.fill) {
     const area = new Path2D();
     let firstX: number | null = null;
     let lastX: number | null = null;
+    let fillLastY = 0;
     series.points.forEach((point, index) => {
       if (point.value === null) return;
       const x = scale.x(index);
@@ -116,10 +131,14 @@ export function drawSeries(ctx: CanvasRenderingContext2D, series: Series, scale:
       if (firstX === null) {
         area.moveTo(x, y);
         firstX = x;
+      } else if (series.step) {
+        area.lineTo(x, fillLastY);
+        area.lineTo(x, y);
       } else {
         area.lineTo(x, y);
       }
       lastX = x;
+      fillLastY = y;
     });
     if (firstX !== null && lastX !== null && lastX > firstX) {
       const baseline = scale.y(scale.min);

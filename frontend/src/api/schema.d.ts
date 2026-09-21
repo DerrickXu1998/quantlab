@@ -55,6 +55,62 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/instruments/{symbol}/fundamentals/concepts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One instrument's fundamentals catalog
+         * @description One entry per (concept, provider, unit) group stored for the instrument, with fact count and filed_at range. Raw XBRL facts the ingest did not map onto a canonical concept (empty `concept`) are excluded: this catalog names the concepts a series can be requested for. Concepts marked `derived` (e.g. `short_volume_ratio` = finra short_volume / total_volume) are computed at read time from stored concepts, never stored themselves. Empty on the synthetic demo dataset, which holds no fundamentals.
+         */
+        get: operations["listInstrumentFundamentalConcepts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instruments/{symbol}/fundamentals/series": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One instrument's fundamental concept as a point-in-time series
+         * @description Three transforms over the concept's facts:
+         *
+         *       * `raw` -- the point-in-time as-of series: one point per filing
+         *         date, each carrying the value knowable on that date (filed_at <=
+         *         date, latest filing wins). Per-holder filings (FCA short
+         *         positions) are summed across holders per date, each holder's
+         *         latest filing persisting until they file again. With `start_date`,
+         *         an opening point at `start_date` carries the value knowable as of
+         *         that date, so a windowed read does not start from the first filing
+         *         inside the window.
+         *       * `raw_facts` -- the facts exactly as filed, ascending by filed_at,
+         *         with both dates on every row.
+         *       * `yoy_growth` -- year-over-year change of the as-of series; the
+         *         base is the as-of value one year earlier (a step lookup, not a
+         *         calendar guess), and points without a base are dropped.
+         *
+         *     `start_date`/`end_date` filter on `filed_at`, never `period_end`: asking for a window asks "what was knowable between these dates". Every response carries `point_in_time: true` and a `provenance` string stating exactly how the numbers were produced.
+         */
+        get: operations["getFundamentalSeries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/signals": {
         parameters: {
             query?: never;
@@ -108,6 +164,8 @@ export interface paths {
         /**
          * Run a model over a dataset selection
          * @description Validates the requested parameters against the model's declared metadata, resolves a warm-up window of the model's lookback_days before start_date, executes, and returns the completed run. Signals dated outside [start_date, end_date] are computed for warm-up but not reported. Execution is synchronous; see research.md for the scaling boundary this implies.
+         *     An optional `execution` object records user-settable execution criteria (capital, sizing, costs, stops, fill timing) with the run. The criteria do not change the signals; they change how the run's performance report turns those signals into fills, so they are stored as provenance and echoed back on the run.
+         *     The model is selected by `model_name` (a registry builtin) or `custom_rule_id` (one of the caller's rules from POST /rules) -- exactly one of the two. A custom rule's config is fixed at definition time, so `parameters` overrides cannot combine with `custom_rule_id`.
          */
         post: operations["createRun"];
         delete?: never;
@@ -240,6 +298,145 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/signal-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Catalog of signal templates custom rules are built from
+         * @description Templates, not expressions: a custom rule is a template id plus a config whose fields come from the fixed enums in `config_fields`. `inputs` declares what the template reads ("bars"; "bars+fundamentals" arrives later), and `available_on_dataset` reports whether the active dataset can serve it -- fundamental templates report false on the SQLite demo. Registry-driven: a new template appears here with no change to consumers.
+         */
+        get: operations["listSignalTemplates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the caller's custom rules */
+        get: operations["listCustomRules"];
+        put?: never;
+        /** Define a custom signal rule from a template */
+        post: operations["createCustomRule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/rules/{rule_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rule_id: string;
+            };
+            cookie?: never;
+        };
+        /** One custom rule */
+        get: operations["getCustomRule"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a rule
+         * @description Runs that used the rule stay readable (their definition snapshot is recorded on the run) and report model_available=false.
+         */
+        delete: operations["deleteCustomRule"];
+        options?: never;
+        head?: never;
+        /**
+         * Rename a rule or replace its config
+         * @description The template is immutable: changing what a rule IS makes a new rule. Runs that already used the rule keep their definition snapshot; edits apply to future runs only.
+         */
+        patch: operations["updateCustomRule"];
+        trace?: never;
+    };
+    "/auth/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register a user
+         * @description Public only while no users exist; that first user is created with `is_admin: true`. Once any user exists, registration requires an admin's session cookie and new users are created non-admin.
+         */
+        post: operations["registerUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Log in, receiving the session cookie
+         * @description On success sets the `quantlab_session` cookie (HttpOnly, SameSite=Lax; Secure only when QUANTLAB_AUTH_COOKIE_SECURE is set, since local development is plain http). Failed attempts are rate limited per client IP.
+         */
+        post: operations["login"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Log out, revoking the session */
+        post: operations["logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The authenticated user */
+        get: operations["getCurrentUser"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -277,6 +474,11 @@ export interface components {
             name: string;
             /** @example USD */
             currency: string;
+            /**
+             * @description `macro` labels the warehouse's BoE/FRED pseudo-instruments (a macro series loaded as daily bars). It labels, never filters: macro instruments are served like any other instrument.
+             * @enum {string}
+             */
+            kind: "equity" | "macro";
             /** @enum {string} */
             regime_profile: "trending" | "mean_reverting" | "volatile" | "mixed";
         };
@@ -297,6 +499,69 @@ export interface components {
         PriceBarList: {
             total: number;
             items: components["schemas"]["PriceBar"][];
+        };
+        FundamentalConcept: {
+            /** @example revenue */
+            concept: string;
+            /** @example sec_edgar */
+            provider: string;
+            /** @example USD */
+            unit: string;
+            fact_count: number;
+            /** Format: date */
+            first_filed: string;
+            /** Format: date */
+            last_filed: string;
+            /** @description True for concepts computed at read time from stored ones (e.g. short_volume_ratio = finra short_volume / total_volume); derived concepts are never themselves stored. */
+            derived: boolean;
+        };
+        FundamentalConceptList: {
+            symbol: string;
+            total: number;
+            items: components["schemas"]["FundamentalConcept"][];
+        };
+        FundamentalFact: {
+            value: number;
+            /**
+             * Format: date
+             * @description Null for instantaneous (balance-sheet) facts.
+             */
+            period_start: string | null;
+            /**
+             * Format: date
+             * @description The fiscal period the value describes. Never a visibility anchor.
+             */
+            period_end: string;
+            /**
+             * Format: date
+             * @description When the market could first know this value. The point-in-time anchor: a fact is visible to a model only from filed_at onwards.
+             */
+            filed_at: string;
+            /** @example sec_edgar */
+            provider: string;
+            /** @example USD */
+            unit: string;
+            /** @description Present on per-holder filings (FCA short positions). */
+            holder: string | null;
+        };
+        FundamentalSeriesPoint: {
+            /** Format: date */
+            date: string;
+            /** @description The value knowable on that date (the as-of step series). */
+            value: number;
+        };
+        FundamentalSeries: {
+            symbol: string;
+            concept: string;
+            /** @enum {string} */
+            transform: "raw" | "raw_facts" | "yoy_growth";
+            /** @description Always true: filed_at is the visibility axis on every transform. The flag ships so the UI never has to infer the discipline. */
+            point_in_time: boolean;
+            /** @description How the numbers were produced, stated with the numbers. */
+            provenance: string;
+            total: number;
+            /** @description Series points for `raw`/`yoy_growth`; facts as filed for `raw_facts`. */
+            items: (components["schemas"]["FundamentalSeriesPoint"] | components["schemas"]["FundamentalFact"])[];
         };
         Signal: {
             id: number;
@@ -344,6 +609,19 @@ export interface components {
         Error: {
             detail: string;
         };
+        AuthCredentials: {
+            username: string;
+            password: string;
+        };
+        User: {
+            id: number;
+            username: string;
+            is_admin: boolean;
+        };
+        UserPublic: {
+            id: number;
+            username: string;
+        };
         ParamSpec: {
             name: string;
             /** @enum {string} */
@@ -368,15 +646,24 @@ export interface components {
             /** @enum {string} */
             scale_class: "scale_free" | "price_scaled";
             direction_semantics: string;
+            /** @enum {string} */
+            origin: "builtin" | "custom";
+            /** @description Present for custom rules; use it as custom_rule_id on POST /runs. */
+            custom_rule_id: string | null;
+            /** @description The template a custom rule instantiates; null for builtins. */
+            template: string | null;
         };
         ModelList: {
             total: number;
             items: components["schemas"]["Model"][];
         };
         RunRequest: {
-            model_name: string;
+            /** @description Registry builtin model. Exactly one of model_name and custom_rule_id is required. */
+            model_name?: string;
             /** @description Omit to use the highest registered version. */
             model_version?: string;
+            /** @description One of the caller's rules from POST /rules. Mutually exclusive with model_name; parameters overrides do not apply to custom rules (their config is fixed at definition time). */
+            custom_rule_id?: string;
             /** @description Overrides only. Omitted parameters take the model's declared default; the merged result is recorded as the run's effective parameters. */
             parameters?: {
                 [key: string]: unknown;
@@ -386,6 +673,127 @@ export interface components {
             start_date: string;
             /** Format: date */
             end_date: string;
+            execution?: components["schemas"]["ExecutionCriteria"];
+        };
+        /** @description The definition a custom-rule run actually executed, frozen at run time: template + config + derived lookback. Editing or deleting the rule afterwards never rewrites this. */
+        CustomRuleSnapshot: {
+            rule_id: string;
+            name: string;
+            slug: string;
+            /** @example indicator-threshold */
+            template: string;
+            config: {
+                [key: string]: unknown;
+            };
+            lookback_days: number;
+        };
+        CustomRuleRequest: {
+            name: string;
+            /** @description Template id from GET /signal-templates. */
+            template: string;
+            /** @description Validated against the template's declared vocabulary. */
+            config: {
+                [key: string]: unknown;
+            };
+        };
+        /** @description At least one of name and config is required. */
+        CustomRuleUpdateRequest: {
+            name?: string;
+            config?: {
+                [key: string]: unknown;
+            };
+        };
+        CustomRule: {
+            rule_id: string;
+            name: string;
+            /** @description Derived from the name; unique within the owner's scope. */
+            slug: string;
+            template: string;
+            config: {
+                [key: string]: unknown;
+            };
+            /** @description Derived from the config, not declared. */
+            lookback_days: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        CustomRuleList: {
+            total: number;
+            items: components["schemas"]["CustomRule"][];
+        };
+        SignalTemplate: {
+            /** @example indicator-threshold */
+            id: string;
+            /** @example 1.0.0 */
+            version: string;
+            description: string;
+            /**
+             * @description What the template reads.
+             * @enum {string}
+             */
+            inputs: "bars" | "bars+fundamentals";
+            /** @description Whether the active dataset can serve this template. Fundamental templates report false on the SQLite demo. */
+            available_on_dataset: boolean;
+            /** @description Enums and bounds per config field, for form generation. */
+            config_fields: {
+                [key: string]: unknown;
+            };
+        };
+        SignalTemplateList: {
+            total: number;
+            items: components["schemas"]["SignalTemplate"][];
+        };
+        /** @description How a run's signals are turned into fills in its performance report. Every field defaults to the historical behaviour, so omitting the object entirely and supplying it with all defaults produce the same numbers: an equal-weight sleeve per selected instrument, filled at the close of the signal date, charged nothing, capped at nothing. */
+        ExecutionCriteria: {
+            /**
+             * @description Starting book value.
+             * @default 100000
+             */
+            initial_capital: number;
+            /**
+             * @description `equal_weight` splits initial_capital into one sleeve per selected instrument (an untraded sleeve sits in cash). `fixed_fraction` sizes each entry at `fraction` of the book's current value, drawn from one shared cash account.
+             * @default equal_weight
+             * @enum {string}
+             */
+            position_sizing: "equal_weight" | "fixed_fraction";
+            /**
+             * @description Share of the book's current value per entry; fixed_fraction only.
+             * @default 0.1
+             */
+            fraction: number;
+            /**
+             * @description Cap on concurrently open positions; entries beyond the cap are skipped. Null means uncapped.
+             * @default null
+             */
+            max_open_positions: number | null;
+            /**
+             * @description Charged on every fill, as basis points of traded value.
+             * @default 0
+             */
+            transaction_cost_bps: number;
+            /**
+             * @description Charged on every fill, in currency units.
+             * @default 0
+             */
+            fixed_cost_per_trade: number;
+            /**
+             * @description Exit when a bar's low trades this fraction below the entry price; filled at the stop level, or at the open when the market gaps through it. When a stop and a take-profit trigger on the same bar, the stop is assumed to fill first.
+             * @default null
+             */
+            stop_loss_pct: number | null;
+            /**
+             * @description Exit when a bar's high trades this fraction above the entry price; filled at the target level, or at the open on a gap through it.
+             * @default null
+             */
+            take_profit_pct: number | null;
+            /**
+             * @description `same_close` fills at the close of the signal date. `next_open` fills at the open of the next session that has a bar, removing the same-bar fill assumption.
+             * @default same_close
+             * @enum {string}
+             */
+            entry_price: "same_close" | "next_open";
         };
         RunCoverage: {
             instruments_requested: number;
@@ -425,6 +833,10 @@ export interface components {
             ingest_run_ids?: number[] | null;
             /** @description Actions overlapping the window for the selected instruments. Empty on the demo dataset, which has none. */
             corporate_actions?: components["schemas"]["CorporateActionNotice"][];
+            /** @description The effective execution criteria the run was created with, merged over their defaults. Null for runs recorded without them; their performance uses the historical zero-cost measuring instrument. */
+            execution?: components["schemas"]["ExecutionCriteria"];
+            /** @description Set on runs of a custom rule: the definition snapshot. Null for builtin-model runs. */
+            custom_rule?: components["schemas"]["CustomRuleSnapshot"];
             /** @description False when the run's recorded dataset is not the active one. The run stays readable; it simply cannot be reproduced as recorded. */
             re_runnable?: boolean;
             /** @description False when the recorded model/version is no longer registered; the run stays readable but is not re-runnable. */
@@ -606,6 +1018,85 @@ export interface operations {
             };
         };
     };
+    listInstrumentFundamentalConcepts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                symbol: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Concept groups, ordered by concept, provider */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FundamentalConceptList"];
+                };
+            };
+            /** @description Unknown symbol */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getFundamentalSeries: {
+        parameters: {
+            query: {
+                /** @description Canonical or derived concept, e.g. revenue or short_volume_ratio. */
+                concept: string;
+                transform?: "raw" | "raw_facts" | "yoy_growth";
+                /** @description First filed_at to include (YYYY-MM-DD). */
+                start_date?: string;
+                /** @description Last filed_at to include (YYYY-MM-DD). */
+                end_date?: string;
+            };
+            header?: never;
+            path: {
+                symbol: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The transformed series */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FundamentalSeries"];
+                };
+            };
+            /** @description start_date after end_date */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unknown symbol */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     listSignals: {
         parameters: {
             query?: {
@@ -710,7 +1201,7 @@ export interface operations {
                     "application/json": components["schemas"]["Run"];
                 };
             };
-            /** @description Unknown model, or an unknown symbol in the selection */
+            /** @description Unknown model, unknown custom_rule_id (including one owned by another user), or an unknown symbol in the selection */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -719,7 +1210,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Parameter outside its declared range, window shorter than the model's lookback, start_date after end_date, or a selection larger than the permitted bound. The offending field is named. */
+            /** @description Both or neither model selector sent, parameter outside its declared range, window shorter than the model's lookback, start_date after end_date, a selection larger than the permitted bound, or a template whose declared inputs the active dataset cannot serve (fundamentals on the synthetic demo). The offending field is named. */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -1016,6 +1507,361 @@ export interface operations {
             };
             /** @description The event bus is unconfigured or unreachable */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listSignalTemplates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registered templates */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignalTemplateList"];
+                };
+            };
+        };
+    };
+    listCustomRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Rules owned by the caller plus unscoped ones */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomRuleList"];
+                };
+            };
+        };
+    };
+    createCustomRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CustomRuleRequest"];
+            };
+        };
+        responses: {
+            /** @description Rule created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomRule"];
+                };
+            };
+            /** @description Unknown template */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Config failed the template's declared validation */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getCustomRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The rule */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomRule"];
+                };
+            };
+            /** @description Unknown rule, or one owned by another user */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    deleteCustomRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown rule, or one owned by another user */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    updateCustomRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CustomRuleUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated rule */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomRule"];
+                };
+            };
+            /** @description Unknown rule, or one owned by another user */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Empty patch, or config failed template validation */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    registerUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AuthCredentials"];
+            };
+        };
+        responses: {
+            /** @description User created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            /** @description Users exist and the caller has no session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Users exist and the caller is not an admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Username already taken (comparison is case-insensitive) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Username or password outside its declared bounds */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    login: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AuthCredentials"];
+            };
+        };
+        responses: {
+            /** @description Logged in; the session cookie is set */
+            200: {
+                headers: {
+                    /** @description `quantlab_session=<token>; HttpOnly; SameSite=Lax; Path=/; Max-Age=1209600` (`Secure` only behind QUANTLAB_AUTH_COOKIE_SECURE) */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            /** @description Invalid username or password */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Username or password outside its declared bounds */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Too many failed attempts from this client IP */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Session deleted; the cookie is cleared */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getCurrentUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's identity */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserPublic"];
+                };
+            };
+            /** @description No valid session */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };

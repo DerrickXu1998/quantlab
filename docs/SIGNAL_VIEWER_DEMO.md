@@ -26,7 +26,7 @@ Run these from the repository root. `make up` is safe to re-run — a port that 
 of its own containers already publishes is not treated as a conflict.
 
 Then open the UI at **http://localhost:8080**. The API is served at
-`http://localhost:8000/api/v1` (see `quantlab_specs/specs/005-signal-research-workbench/contracts/openapi.yaml`).
+`http://localhost:8000/api/v1` (see `quantlab_specs/specs/006-warehouse-experiments/contracts/openapi.yaml`).
 
 ## Make targets
 

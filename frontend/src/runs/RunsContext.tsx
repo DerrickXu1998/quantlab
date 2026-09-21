@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { deleteCustomRule, listCustomRules, type CustomRule } from '../quantlab/data/customRules';
 import {
   ApiError,
   createRun,
@@ -35,10 +36,16 @@ export interface RunsContextValue {
   // The model registry.
   models: Model[];
   modelsStatus: LoadStatus;
+  reloadModels: () => void;
   selectedModel: Model | null;
   selectModel: (model: Model | null) => void;
   /** Models joined with their run history (the old useStrategies join). */
   modelEntries: ModelEntry[];
+
+  // The caller's custom rules (feature 008 M2): the rail's "My rules" group
+  // and the builder both read this list; deletion reloads the model catalog.
+  customRules: CustomRule[];
+  removeRule: (ruleId: string) => Promise<void>;
 
   // The run history, from the backend.
   allRuns: Run[];
@@ -79,7 +86,9 @@ function byRecency(a: Run, b: Run): number {
  */
 export function RunsProvider({ children }: { children: ReactNode }) {
   const [models, setModels] = useState<Model[]>([]);
+  const [customRules, setCustomRules] = useState<CustomRule[]>([]);
   const [modelsStatus, setModelsStatus] = useState<LoadStatus>('loading');
+  const [modelsNonce, setModelsNonce] = useState(0);
   const [selectedModel, setSelectedModel] = useState<Model | null>(null);
 
   const [allRuns, setAllRuns] = useState<Run[]>([]);
@@ -94,10 +103,19 @@ export function RunsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
-    listModels()
-      .then((result) => {
+    setModelsStatus('loading');
+    // Rules load with the catalog: the rail's per-rule summary sentence is
+    // generated from the rule's config, which the catalog does not carry.
+    // A failed rules read degrades to an empty "My rules" group, never to a
+    // catalog failure.
+    const rules = listCustomRules()
+      .then((result) => result.items)
+      .catch(() => [] as CustomRule[]);
+    Promise.all([listModels(), rules])
+      .then(([result, ruleItems]) => {
         if (cancelled) return;
         setModels(result.items);
+        setCustomRules(ruleItems);
         setModelsStatus('ready');
         // Select the first model so the configuration form is immediately
         // usable, without hardcoding which model that is.
@@ -109,7 +127,21 @@ export function RunsProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [modelsNonce]);
+
+  const reloadModels = useCallback(() => setModelsNonce((n) => n + 1), []);
+
+  const removeRule = useCallback(
+    async (ruleId: string) => {
+      await deleteCustomRule(ruleId);
+      // If the deleted rule was selected, drop the selection so the reload
+      // re-picks the first remaining model; its runs keep their snapshot and
+      // show the existing "model unavailable" state.
+      setSelectedModel((current) => (current?.custom_rule_id === ruleId ? null : current));
+      reloadModels();
+    },
+    [reloadModels],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -200,9 +232,12 @@ export function RunsProvider({ children }: { children: ReactNode }) {
   const value: RunsContextValue = {
     models,
     modelsStatus,
+    reloadModels,
     selectedModel,
     selectModel: setSelectedModel,
     modelEntries,
+    customRules,
+    removeRule,
     allRuns,
     runsStatus,
     reloadRuns,

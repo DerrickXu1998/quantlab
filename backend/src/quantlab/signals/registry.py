@@ -136,6 +136,10 @@ class SignalRule:
     scale_class: str
     direction_semantics: str
     compute: Callable[..., list[SignalEvent]]
+    #: What the rule reads: "bars" (every builtin) or "bars+fundamentals"
+    #: (custom rules on the fundamental-condition template, feature 008 M3).
+    #: The engine routes stored facts to the latter.
+    inputs: str = "bars"
 
     @property
     def params(self) -> dict[str, Any]:

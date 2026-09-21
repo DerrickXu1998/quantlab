@@ -39,6 +39,12 @@ class StorageBackend(Protocol):
     def instrument_ids(self, symbols: list[str]) -> dict: ...
     def ingest_run_ids(self, symbols: list[str], start: str, end: str) -> list: ...
 
+    # Point-in-time fundamentals (stamped at filed_at, never period_end).
+    def list_fundamental_concepts(self, symbol: str) -> dict: ...
+    def get_fundamental_facts(
+        self, symbol: str, concept: str, start: str | None = None
+    ) -> list[dict]: ...
+
 
 class SqliteBackend:
     """Synthetic demo dataset in a local SQLite file."""
@@ -108,6 +114,16 @@ class SqliteBackend:
         # is no ingest lineage to record.
         return []
 
+    def list_fundamental_concepts(self, symbol: str) -> dict:
+        # The synthetic dataset has no fundamentals. Empty, never an error:
+        # the demo path must serve every route without branching.
+        return {"symbol": symbol, "total": 0, "items": []}
+
+    def get_fundamental_facts(
+        self, symbol: str, concept: str, start: str | None = None
+    ) -> list[dict]:
+        return []
+
 
 class WarehouseBackend:
     """Real ingested history: ClickHouse bars over a Postgres catalog."""
@@ -146,6 +162,14 @@ class WarehouseBackend:
 
     def ingest_run_ids(self, symbols: list[str], start: str, end: str) -> list[int]:
         return warehouse.ingest_run_ids(self.wh, symbols, start, end)
+
+    def list_fundamental_concepts(self, symbol: str) -> dict:
+        return warehouse.list_fundamental_concepts(self.wh, symbol)
+
+    def get_fundamental_facts(
+        self, symbol: str, concept: str, start: str | None = None
+    ) -> list[dict]:
+        return warehouse.get_fundamental_facts(self.wh, symbol, concept, start=start)
 
 
 def select_backend(db_path: str | Path | None = None) -> StorageBackend:

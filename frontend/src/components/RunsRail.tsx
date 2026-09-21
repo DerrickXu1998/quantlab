@@ -19,6 +19,7 @@ function RunRow({
   const { remove } = useRuns();
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   return (
     <li className="group relative">
@@ -26,7 +27,7 @@ function RunRow({
         type="button"
         onClick={onSelect}
         aria-current={selected ? 'true' : undefined}
-        className={`w-full border-l-2 px-3 py-2 text-left transition-colors ${
+        className={`w-full border-l-2 px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary ${
           selected ? 'border-l-primary bg-primary/5' : 'border-l-transparent hover:bg-accent/40'
         }`}
       >
@@ -61,6 +62,12 @@ function RunRow({
         </span>
       </button>
 
+      {error ? (
+        <span role="alert" className="block px-3 py-1 text-[10px] text-destructive">
+          {error}
+        </span>
+      ) : null}
+
       <span className="absolute right-2 top-2">
         {confirming ? (
           <span className="flex items-center gap-1">
@@ -72,11 +79,18 @@ function RunRow({
               className="border-destructive/50 text-destructive hover:text-destructive"
               onClick={async () => {
                 setDeleting(true);
+                setError(null);
                 try {
                   await remove(run.id);
+                  setConfirming(false);
+                } catch (caught: unknown) {
+                  // A failed delete keeps the row and says why — the confirm
+                  // step stays armed so it can be retried or dismissed.
+                  setError(
+                    caught instanceof Error ? caught.message : 'could not delete the run',
+                  );
                 } finally {
                   setDeleting(false);
-                  setConfirming(false);
                 }
               }}
             >
@@ -135,7 +149,7 @@ export function RunsRail({
               type="button"
               aria-pressed={(option === 'saved') === savedOnly}
               onClick={() => setSavedOnly(option === 'saved')}
-              className={`px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] transition-colors ${
+              className={`px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary ${
                 (option === 'saved') === savedOnly
                   ? 'bg-primary/10 text-primary'
                   : 'bg-card text-muted-foreground hover:text-foreground'
@@ -155,7 +169,7 @@ export function RunsRail({
           detail={
             savedOnly
               ? 'Run and save an experiment to pin it here.'
-              : 'Run a backtest in Strategies or Research and it appears here.'
+              : 'Run a strategy in Strategies or Research and it appears here.'
           }
         />
       ) : (

@@ -58,6 +58,17 @@ class SelectionTooLargeError(ExperimentError):
     def __init__(self, requested: int, limit: int) -> None:
         self.requested = requested
         self.limit = limit
+        super().__init__(f"selection of {requested} instrument-days exceeds the limit of {limit}")
+
+
+class DatasetUnsupportedError(ExperimentError):
+    """The resolved model needs data the active dataset does not have
+    (e.g. a fundamental-condition rule against the synthetic demo, which holds
+    no fundamentals). A clean refusal, never a crash on an empty read."""
+
+    def __init__(self, requirement: str, dataset: str) -> None:
+        self.requirement = requirement
+        self.dataset = dataset
         super().__init__(
-            f"selection of {requested} instrument-days exceeds the limit of {limit}"
+            f"model requires {requirement}, which the {dataset} dataset does not have"
         )

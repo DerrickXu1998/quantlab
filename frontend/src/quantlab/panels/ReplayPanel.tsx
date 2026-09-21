@@ -109,7 +109,7 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
         testId="replay-no-runs"
         icon={Hourglass}
         title="No completed runs"
-        detail="Run a backtest in Strategies first — a replay needs a completed run to walk through."
+        detail="Run a strategy in Strategies first — a replay needs a completed run to walk through."
       />
     );
   }

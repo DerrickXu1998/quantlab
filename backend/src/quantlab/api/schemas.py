@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 Dataset = Literal["sqlite", "warehouse"]
 """Which store answered. Two runs from different datasets are never directly
@@ -22,6 +22,10 @@ class Instrument(BaseModel):
     symbol: str
     name: str
     currency: str
+    # "macro" labels the warehouse's BoE/FRED pseudo-instruments (a series
+    # loaded as bars); it labels, never filters -- they are served like any
+    # other instrument.
+    kind: Literal["equity", "macro"]
     # Synthetic-demo only: a generated instrument is built to follow a known
     # regime, which is what makes the demo assertable. Real ingested
     # instruments have no such label, so the field is nullable rather than
@@ -49,6 +53,63 @@ class PriceBar(BaseModel):
 class PriceBarList(BaseModel):
     total: int
     items: list[PriceBar]
+
+
+# --- Fundamentals (point-in-time, warehouse-only data) ------------------------
+
+
+class FundamentalConcept(BaseModel):
+    """One (concept, provider, unit) group of an instrument's fundamentals.
+    ``derived`` marks concepts computed at read time from stored ones (e.g.
+    short_volume_ratio), which are never themselves stored."""
+
+    concept: str
+    provider: str
+    unit: str
+    fact_count: int
+    first_filed: str
+    last_filed: str
+    derived: bool
+
+
+class FundamentalConceptList(BaseModel):
+    symbol: str
+    total: int
+    items: list[FundamentalConcept]
+
+
+class FundamentalFact(BaseModel):
+    """One fact exactly as filed. ``filed_at`` is the point-in-time anchor --
+    the date the market could first know the value; ``period_end`` is the
+    fiscal period the value describes. A restatement is a separate row with a
+    later filed_at, never an edit."""
+
+    value: float
+    period_start: str | None = None  # null for instantaneous (balance-sheet) facts
+    period_end: str
+    filed_at: str
+    provider: str
+    unit: str
+    holder: str | None = None  # per-holder filings (FCA short positions)
+
+
+class FundamentalSeriesPoint(BaseModel):
+    """One date of an as-of series: the value knowable on that date."""
+
+    date: str
+    value: float
+
+
+class FundamentalSeries(BaseModel):
+    symbol: str
+    concept: str
+    transform: Literal["raw", "raw_facts", "yoy_growth"]
+    # Always true: filed_at is the visibility axis on every transform. The
+    # flag ships so the UI never has to infer the discipline from the path.
+    point_in_time: bool
+    provenance: str
+    total: int
+    items: list[FundamentalSeriesPoint | FundamentalFact]
 
 
 class Signal(BaseModel):
@@ -92,6 +153,11 @@ class Model(BaseModel):
     lookback_days: int
     scale_class: Literal["scale_free", "price_scaled"]
     direction_semantics: str
+    # "custom" entries are the caller's own template-based rules; their config
+    # is fixed at definition time, so `parameters` is empty for them.
+    origin: Literal["builtin", "custom"]
+    custom_rule_id: str | None = None
+    template: str | None = None
 
 
 class ModelList(BaseModel):
@@ -99,13 +165,52 @@ class ModelList(BaseModel):
     items: list[Model]
 
 
+class ExecutionCriteria(BaseModel):
+    """User-settable execution criteria for a run's performance simulation.
+
+    Every field has a default that reproduces the historical measuring
+    instrument (equal-weight sleeves, close-of-signal-date fills, no costs);
+    a misspelled key is a 422, never silently dropped.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    initial_capital: float = Field(default=100_000.0, gt=0)
+    position_sizing: Literal["equal_weight", "fixed_fraction"] = "equal_weight"
+    # Share of the book's current value per entry; fixed_fraction sizing only.
+    fraction: float = Field(default=0.1, gt=0, le=1)
+    max_open_positions: int | None = Field(default=None, ge=1)
+    transaction_cost_bps: float = Field(default=0.0, ge=0)
+    fixed_cost_per_trade: float = Field(default=0.0, ge=0)
+    # Fractions of the entry price: 0.1 exits 10% below/above it.
+    stop_loss_pct: float | None = Field(default=None, gt=0, lt=1)
+    take_profit_pct: float | None = Field(default=None, gt=0)
+    entry_price: Literal["same_close", "next_open"] = "same_close"
+
+
 class RunRequest(BaseModel):
-    model_name: str
+    # Exactly one model selector: model_name (a registry builtin) or
+    # custom_rule_id (one of the caller's template-based rules).
+    model_name: str | None = None
     model_version: str | None = None
+    custom_rule_id: str | None = None
     parameters: dict[str, Any] = {}
     symbols: list[str]
     start_date: str
     end_date: str
+    execution: ExecutionCriteria | None = None
+
+
+class CustomRuleSnapshot(BaseModel):
+    """The definition a custom-rule run actually executed, frozen at run time.
+    Editing or deleting the rule afterwards never rewrites this."""
+
+    rule_id: str
+    name: str
+    slug: str
+    template: str
+    config: dict[str, Any]
+    lookback_days: int
 
 
 class CorporateActionNotice(BaseModel):
@@ -145,6 +250,11 @@ class Run(BaseModel):
     instrument_ids: list[int] | None = None
     ingest_run_ids: list[int] | None = None
     corporate_actions: list[CorporateActionNotice] = []
+    # Effective execution criteria the run was created with; null for runs
+    # recorded without them (the historical zero-cost measuring instrument).
+    execution: ExecutionCriteria | None = None
+    # Set on runs of a custom rule: the definition snapshot. Null for builtins.
+    custom_rule: CustomRuleSnapshot | None = None
     re_runnable: bool = True
     model_available: bool = True
 
@@ -168,6 +278,61 @@ class RunDetail(Run):
 
 class RunNameRequest(BaseModel):
     name: str
+
+
+# --- Custom signal rules (feature 008, M2) -------------------------------------
+
+
+class CustomRuleRequest(BaseModel):
+    """Create: template + config, both validated against the template registry."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=200)
+    template: str
+    config: dict[str, Any]
+
+
+class CustomRuleUpdateRequest(BaseModel):
+    """Patch: name and/or config. The template is immutable -- changing it
+    changes what the rule IS, which is a new rule, not an edit."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    config: dict[str, Any] | None = None
+
+
+class CustomRule(BaseModel):
+    rule_id: str
+    name: str
+    slug: str
+    template: str
+    config: dict[str, Any]
+    lookback_days: int
+    created_at: str
+    updated_at: str
+
+
+class CustomRuleList(BaseModel):
+    total: int
+    items: list[CustomRule]
+
+
+class SignalTemplate(BaseModel):
+    """A fixed rule shape, with its config vocabulary for form generation."""
+
+    id: str
+    version: str
+    description: str
+    inputs: Literal["bars", "bars+fundamentals"]
+    available_on_dataset: bool
+    config_fields: dict[str, Any]
+
+
+class SignalTemplateList(BaseModel):
+    total: int
+    items: list[SignalTemplate]
 
 
 class EquityPoint(BaseModel):
@@ -229,3 +394,27 @@ class ReplaySummary(BaseModel):
     winning_trades: int
     losing_trades: int
     assumptions: list[str]
+
+
+# --- Authentication (feature 007) -------------------------------------------
+
+
+class AuthCredentials(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    # 8 characters minimum — a single-node research tool's bar, not a bank's.
+    password: str = Field(min_length=8, max_length=256)
+
+
+class User(BaseModel):
+    """The full account shape returned by register/login."""
+
+    id: int
+    username: str
+    is_admin: bool
+
+
+class UserPublic(BaseModel):
+    """What /auth/me discloses about the caller."""
+
+    id: int
+    username: str

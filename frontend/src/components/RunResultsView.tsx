@@ -206,7 +206,7 @@ export function RunResultsView({ run }: { run: RunDetail }) {
           testId="run-failed"
           icon={AlertTriangle}
           tone="error"
-          title="Backtest failed"
+          title="Strategy run failed"
           detail={run.error ?? 'The run did not complete.'}
         />
       ) : run.signal_count === 0 ? (

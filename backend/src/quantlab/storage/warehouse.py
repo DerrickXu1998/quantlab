@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
+from quantlab.fundamentals import DERIVED_CONCEPTS
 from quantlab.storage.pool import ClientPool, pool_config
 
 DB_URL_ENV = "QUANTLAB_DB_URL"
@@ -175,9 +176,7 @@ def health(wh: Warehouse) -> tuple[bool, int]:
 
 def instrument_exists(wh: Warehouse, symbol: str) -> bool:
     with wh.catalog() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM instruments WHERE symbol = %s", (symbol,)
-        ).fetchone()
+        row = conn.execute("SELECT 1 FROM instruments WHERE symbol = %s", (symbol,)).fetchone()
     return row is not None
 
 
@@ -190,7 +189,7 @@ def list_instruments(wh: Warehouse) -> dict:
     with wh.catalog() as conn:
         rows = conn.execute(
             """
-            SELECT i.instrument_id, i.symbol, i.name, i.currency,
+            SELECT i.instrument_id, i.symbol, i.name, i.currency, i.meta,
                    (SELECT count(*) FROM signals s WHERE s.instrument_id = i.instrument_id)
             FROM instruments i
             ORDER BY i.symbol
@@ -211,13 +210,17 @@ def list_instruments(wh: Warehouse) -> dict:
             "symbol": symbol,
             "name": name or symbol,
             "currency": currency,
+            # Macro pseudo-instruments (BoE/FRED series loaded as bars) are
+            # labelled, never filtered out: they are legitimately in the
+            # catalog, and a reader decides for itself whether to mix kinds.
+            "kind": "macro" if (meta or {}).get("macro") else "equity",
             # Real instruments have no synthetic regime label. The field is
             # optional in the contract precisely so both datasets fit it.
             "regime_profile": None,
             "bar_count": bar_counts.get(int(instrument_id), 0),
             "signal_count": int(signal_count),
         }
-        for instrument_id, symbol, name, currency, signal_count in rows
+        for instrument_id, symbol, name, currency, meta, signal_count in rows
     ]
     return {"total": len(items), "items": items}
 
@@ -251,7 +254,7 @@ def get_prices(
             f"""
             SELECT ts, open, high, low, close, volume
               FROM {BARS_VIEW}
-             WHERE {' AND '.join(clauses)}
+             WHERE {" AND ".join(clauses)}
              ORDER BY ts ASC
             """,
             parameters=params,
@@ -343,8 +346,17 @@ def list_signals(
             "trigger_values": trigger_values,
             "data_window_end": window_end.isoformat(),
         }
-        for (signal_id, symbol, date, rule_name, rule_version, parameters,
-             direction_value, trigger_values, window_end) in rows
+        for (
+            signal_id,
+            symbol,
+            date,
+            rule_name,
+            rule_version,
+            parameters,
+            direction_value,
+            trigger_values,
+            window_end,
+        ) in rows
     ]
     return {"total": int(total), "items": items}
 
@@ -477,9 +489,7 @@ def load_bars_for(
     return out
 
 
-def earliest_bar_dates(
-    wh: Warehouse, symbols: list[str], frequency: str = "1d"
-) -> dict[str, str]:
+def earliest_bar_dates(wh: Warehouse, symbols: list[str], frequency: str = "1d") -> dict[str, str]:
     """First available bar per instrument, for warm-up coverage reporting."""
     ids = _instrument_ids(wh, symbols)
     if not ids:
@@ -571,4 +581,132 @@ def corporate_actions(wh: Warehouse, symbols: list[str], start: str, end: str) -
             "dividend": float(dividend) if dividend is not None else None,
         }
         for instrument_id, ex_date, action_type, split_ratio, dividend in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Fundamentals (point-in-time, stamped at filed_at)
+# ---------------------------------------------------------------------------
+
+
+def list_fundamental_concepts(wh: Warehouse, symbol: str) -> dict:
+    """One instrument's fundamentals catalog: a row per (concept, provider, unit).
+
+    Rows with an empty concept are excluded: they are raw XBRL tags the ingest
+    did not map onto a canonical concept, and this catalog exists to name the
+    concepts a caller can request a series for. Derived concepts (see
+    DERIVED_CONCEPTS) are appended when their inputs are both stored.
+    """
+    with wh.catalog() as conn:
+        rows = conn.execute(
+            """
+            SELECT f.concept, f.provider, f.unit,
+                   count(*) AS fact_count,
+                   min(f.filed_at) AS first_filed,
+                   max(f.filed_at) AS last_filed
+              FROM fundamentals f
+              JOIN instruments i USING (instrument_id)
+             WHERE i.symbol = %(symbol)s AND f.concept <> ''
+             GROUP BY f.concept, f.provider, f.unit
+             ORDER BY f.concept, f.provider
+            """,
+            {"symbol": symbol},
+        ).fetchall()
+
+        derived_rows = []
+        for derived, (provider, numerator, denominator) in DERIVED_CONCEPTS.items():
+            derived_rows.extend(
+                conn.execute(
+                    """
+                    SELECT count(*) AS fact_count,
+                           least(min(s.filed_at), min(t.filed_at)) AS first_filed,
+                           greatest(max(s.filed_at), max(t.filed_at)) AS last_filed,
+                           %(derived)s, %(provider)s
+                      FROM fundamentals s
+                      JOIN fundamentals t
+                        ON t.instrument_id = s.instrument_id AND t.filed_at = s.filed_at
+                     WHERE s.instrument_id = (SELECT instrument_id FROM instruments
+                                              WHERE symbol = %(symbol)s)
+                       AND s.provider = %(provider)s AND s.concept = %(numerator)s
+                       AND t.provider = %(provider)s AND t.concept = %(denominator)s
+                    HAVING count(*) > 0
+                    """,
+                    {
+                        "symbol": symbol,
+                        "derived": derived,
+                        "provider": provider,
+                        "numerator": numerator,
+                        "denominator": denominator,
+                    },
+                ).fetchall()
+            )
+
+    items = [
+        {
+            "concept": concept,
+            "provider": provider,
+            "unit": unit,
+            "fact_count": int(fact_count),
+            "first_filed": first_filed.isoformat(),
+            "last_filed": last_filed.isoformat(),
+            "derived": False,
+        }
+        for concept, provider, unit, fact_count, first_filed, last_filed in rows
+    ]
+    items += [
+        {
+            "concept": concept,
+            "provider": provider,
+            "unit": "ratio",
+            "fact_count": int(fact_count),
+            "first_filed": first_filed.isoformat(),
+            "last_filed": last_filed.isoformat(),
+            "derived": True,
+        }
+        for fact_count, first_filed, last_filed, concept, provider in derived_rows
+    ]
+    return {"symbol": symbol, "total": len(items), "items": items}
+
+
+def get_fundamental_facts(
+    wh: Warehouse, symbol: str, concept: str, start: str | None = None
+) -> list[dict]:
+    """One instrument's stored facts for one concept, ascending by filed_at.
+
+    Raw rows as filed: both dates (``filed_at`` the point-in-time anchor,
+    ``period_end`` the period described), the holder for per-holder filings
+    (FCA short positions), and the provider/unit. ``start`` bounds the read to
+    facts filed on or after that date (the runner's warm-up bound). As-of
+    resolution and growth math live in quantlab.fundamentals, not here -- this
+    layer reads.
+    """
+    where = ["i.symbol = %(symbol)s", "f.concept = %(concept)s"]
+    params: dict[str, Any] = {"symbol": symbol, "concept": concept}
+    if start is not None:
+        where.append("f.filed_at >= %(start)s")
+        params["start"] = start
+    with wh.catalog() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT f.value, f.period_start, f.period_end, f.filed_at,
+                   f.provider, f.unit, f.meta->>'holder' AS holder
+              FROM fundamentals f
+              JOIN instruments i USING (instrument_id)
+             WHERE {" AND ".join(where)}
+             ORDER BY f.filed_at, f.provider, holder
+            """,
+            params,
+        ).fetchall()
+
+    return [
+        {
+            "value": float(value),
+            "period_start": period_start.isoformat() if period_start is not None else None,
+            "period_end": period_end.isoformat(),
+            "filed_at": filed_at.isoformat(),
+            "provider": provider,
+            "unit": unit,
+            "holder": holder,
+        }
+        for value, period_start, period_end, filed_at, provider, unit, holder in rows
     ]

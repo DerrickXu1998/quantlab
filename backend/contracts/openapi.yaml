@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: QuantLab Signal Viewer API
-  version: 0.5.0
+  version: 0.9.0
   description: >
     Typed API boundary for the QuantLab demo. This document is the authored
     single source of truth (Constitution V): the FastAPI app is validated
@@ -15,6 +15,47 @@ info:
     branch on which, and every run records which one produced it. Running a
     model remains the one state-changing operation, and it writes only to
     experiment storage -- never to a curated or materialised signal set.
+
+    0.6.0 adds authentication (feature 007). When auth is enabled
+    (QUANTLAB_AUTH, default on), every operation except `getHealth`, `login`
+    and the bootstrap-gated `registerUser` requires the `quantlab_session`
+    cookie issued by `login`; unauthenticated calls answer 401. Experiment
+    runs are scoped to their owner: another user's run id reads as 404, and
+    runs recorded before accounts existed (no owner) stay visible to everyone.
+    With QUANTLAB_AUTH=off the auth operations answer 404 and every other
+    operation behaves exactly as in 0.5.1.
+
+    0.7.0 adds read access to point-in-time fundamentals (feature 008): a
+    per-instrument concept catalog (`listInstrumentFundamentalConcepts`) and a
+    series endpoint (`getFundamentalSeries`) with three transforms -- `raw`
+    (the as-of series: a fact is knowable from its `filed_at`, latest filing
+    wins), `raw_facts` (rows exactly as filed) and `yoy_growth`
+    (year-over-year change of the as-of series). Every response carries
+    `point_in_time: true` and a `provenance` string, and every fact carries
+    both `filed_at` (the visibility anchor) and `period_end` (the period
+    described). Window filters apply to `filed_at`, never `period_end`.
+    Instruments gain a `kind` label (`equity`/`macro`) so BoE/FRED macro
+    pseudo-instruments are identifiable; they are labelled, never filtered
+    out. The synthetic demo dataset holds no fundamentals and answers both
+    operations with empty structures rather than an error.
+    0.8.0 adds configurable signal rules (feature 008, M2): the
+    `/signal-templates` catalog, `/rules` CRUD (session-scoped like runs), and
+    `custom_rule_id` as an alternative model selector on `POST /runs` -- exactly
+    one of `model_name` and `custom_rule_id` is required. A custom-rule run
+    records a snapshot of the resolved definition (template + config + derived
+    lookback) in its `custom_rule` provenance, so editing or deleting the rule
+    never rewrites what the run computed; deleting a rule flips
+    `model_available` to false on its runs while they stay readable.
+    `GET /models` gains `origin` (builtin|custom) and includes the caller's own
+    custom rules.
+    0.9.0 adds the `fundamental-condition` template (feature 008, M3): a custom
+    rule that fires when a fundamental concept's point-in-time series (as-of by
+    `filed_at`, latest filing wins, per-holder filings summed) crosses a
+    threshold, at level or year-over-year growth. Signals characteristically
+    fire ON filing dates. The template declares `inputs:
+    "bars+fundamentals"`, reports `available_on_dataset: false` on the
+    synthetic demo, and a run attempted with it there answers 422 (the demo
+    holds no fundamentals).
 servers:
   - url: /api/v1
 tags:
@@ -24,6 +65,14 @@ tags:
   - name: models
   - name: runs
   - name: replay
+  - name: auth
+  - name: fundamentals
+  - name: rules
+
+# Session-cookie auth applies API-wide; the three operations that bootstrap
+# it (health, login, first-user register) opt out individually below.
+security:
+  - sessionCookie: []
 
 paths:
   /health:
@@ -31,6 +80,7 @@ paths:
       tags: [system]
       operationId: getHealth
       summary: Service health, including seed status
+      security: []
       responses:
         "200":
           description: Backend is up and the seeded database is reachable
@@ -83,6 +133,121 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PriceBarList"
+        "404":
+          description: Unknown symbol
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /instruments/{symbol}/fundamentals/concepts:
+    get:
+      tags: [fundamentals]
+      operationId: listInstrumentFundamentalConcepts
+      summary: One instrument's fundamentals catalog
+      description: >
+        One entry per (concept, provider, unit) group stored for the
+        instrument, with fact count and filed_at range. Raw XBRL facts the
+        ingest did not map onto a canonical concept (empty `concept`) are
+        excluded: this catalog names the concepts a series can be requested
+        for. Concepts marked `derived` (e.g. `short_volume_ratio` = finra
+        short_volume / total_volume) are computed at read time from stored
+        concepts, never stored themselves. Empty on the synthetic demo
+        dataset, which holds no fundamentals.
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[A-Z0-9][A-Z0-9._-]{0,19}$"
+      responses:
+        "200":
+          description: Concept groups, ordered by concept, provider
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FundamentalConceptList"
+        "404":
+          description: Unknown symbol
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /instruments/{symbol}/fundamentals/series:
+    get:
+      tags: [fundamentals]
+      operationId: getFundamentalSeries
+      summary: One instrument's fundamental concept as a point-in-time series
+      description: >
+        Three transforms over the concept's facts:
+
+          * `raw` -- the point-in-time as-of series: one point per filing
+            date, each carrying the value knowable on that date (filed_at <=
+            date, latest filing wins). Per-holder filings (FCA short
+            positions) are summed across holders per date, each holder's
+            latest filing persisting until they file again. With `start_date`,
+            an opening point at `start_date` carries the value knowable as of
+            that date, so a windowed read does not start from the first filing
+            inside the window.
+          * `raw_facts` -- the facts exactly as filed, ascending by filed_at,
+            with both dates on every row.
+          * `yoy_growth` -- year-over-year change of the as-of series; the
+            base is the as-of value one year earlier (a step lookup, not a
+            calendar guess), and points without a base are dropped.
+
+        `start_date`/`end_date` filter on `filed_at`, never `period_end`:
+        asking for a window asks "what was knowable between these dates".
+        Every response carries `point_in_time: true` and a `provenance`
+        string stating exactly how the numbers were produced.
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[A-Z0-9][A-Z0-9._-]{0,19}$"
+        - name: concept
+          in: query
+          required: true
+          description: Canonical or derived concept, e.g. revenue or short_volume_ratio.
+          schema:
+            type: string
+        - name: transform
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [raw, raw_facts, yoy_growth]
+            default: raw
+        - name: start_date
+          in: query
+          required: false
+          description: First filed_at to include (YYYY-MM-DD).
+          schema:
+            type: string
+            format: date
+        - name: end_date
+          in: query
+          required: false
+          description: Last filed_at to include (YYYY-MM-DD).
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: The transformed series
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FundamentalSeries"
+        "400":
+          description: start_date after end_date
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "404":
           description: Unknown symbol
           content:
@@ -195,6 +360,17 @@ paths:
         outside [start_date, end_date] are computed for warm-up but not
         reported. Execution is synchronous; see research.md for the scaling
         boundary this implies.
+
+        An optional `execution` object records user-settable execution
+        criteria (capital, sizing, costs, stops, fill timing) with the run.
+        The criteria do not change the signals; they change how the run's
+        performance report turns those signals into fills, so they are stored
+        as provenance and echoed back on the run.
+
+        The model is selected by `model_name` (a registry builtin) or
+        `custom_rule_id` (one of the caller's rules from POST /rules) --
+        exactly one of the two. A custom rule's config is fixed at definition
+        time, so `parameters` overrides cannot combine with `custom_rule_id`.
       requestBody:
         required: true
         content:
@@ -209,16 +385,21 @@ paths:
               schema:
                 $ref: "#/components/schemas/Run"
         "404":
-          description: Unknown model, or an unknown symbol in the selection
+          description: >
+            Unknown model, unknown custom_rule_id (including one owned by
+            another user), or an unknown symbol in the selection
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
         "422":
           description: >
-            Parameter outside its declared range, window shorter than the
-            model's lookback, start_date after end_date, or a selection larger
-            than the permitted bound. The offending field is named.
+            Both or neither model selector sent, parameter outside its
+            declared range, window shorter than the model's lookback,
+            start_date after end_date, a selection larger than the permitted
+            bound, or a template whose declared inputs the active dataset
+            cannot serve (fundamentals on the synthetic demo). The offending
+            field is named.
           content:
             application/json:
               schema:
@@ -593,7 +774,286 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /signal-templates:
+    get:
+      tags: [models]
+      operationId: listSignalTemplates
+      summary: Catalog of signal templates custom rules are built from
+      description: >
+        Templates, not expressions: a custom rule is a template id plus a
+        config whose fields come from the fixed enums in `config_fields`.
+        `inputs` declares what the template reads ("bars"; "bars+fundamentals"
+        arrives later), and `available_on_dataset` reports whether the active
+        dataset can serve it -- fundamental templates report false on the
+        SQLite demo. Registry-driven: a new template appears here with no
+        change to consumers.
+      responses:
+        "200":
+          description: Registered templates
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SignalTemplateList"
+
+  /rules:
+    post:
+      tags: [rules]
+      operationId: createCustomRule
+      summary: Define a custom signal rule from a template
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CustomRuleRequest"
+      responses:
+        "201":
+          description: Rule created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomRule"
+        "404":
+          description: Unknown template
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Config failed the template's declared validation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    get:
+      tags: [rules]
+      operationId: listCustomRules
+      summary: List the caller's custom rules
+      responses:
+        "200":
+          description: Rules owned by the caller plus unscoped ones
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomRuleList"
+
+  /rules/{rule_id}:
+    parameters:
+      - name: rule_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [rules]
+      operationId: getCustomRule
+      summary: One custom rule
+      responses:
+        "200":
+          description: The rule
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomRule"
+        "404":
+          description: Unknown rule, or one owned by another user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    patch:
+      tags: [rules]
+      operationId: updateCustomRule
+      summary: Rename a rule or replace its config
+      description: >
+        The template is immutable: changing what a rule IS makes a new rule.
+        Runs that already used the rule keep their definition snapshot; edits
+        apply to future runs only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CustomRuleUpdateRequest"
+      responses:
+        "200":
+          description: Updated rule
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomRule"
+        "404":
+          description: Unknown rule, or one owned by another user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Empty patch, or config failed template validation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [rules]
+      operationId: deleteCustomRule
+      summary: Delete a rule
+      description: >
+        Runs that used the rule stay readable (their definition snapshot is
+        recorded on the run) and report model_available=false.
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Unknown rule, or one owned by another user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /auth/register:
+    post:
+      tags: [auth]
+      operationId: registerUser
+      summary: Register a user
+      # Bootstrap-gated: public while zero users exist, then admin-only.
+      security: []
+      description: >
+        Public only while no users exist; that first user is created with
+        `is_admin: true`. Once any user exists, registration requires an
+        admin's session cookie and new users are created non-admin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthCredentials"
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          description: Users exist and the caller has no session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Users exist and the caller is not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Username already taken (comparison is case-insensitive)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Username or password outside its declared bounds
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      summary: Log in, receiving the session cookie
+      security: []
+      description: >
+        On success sets the `quantlab_session` cookie (HttpOnly,
+        SameSite=Lax; Secure only when QUANTLAB_AUTH_COOKIE_SECURE is set,
+        since local development is plain http). Failed attempts are rate
+        limited per client IP.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthCredentials"
+      responses:
+        "200":
+          description: Logged in; the session cookie is set
+          headers:
+            Set-Cookie:
+              description: >
+                `quantlab_session=<token>; HttpOnly; SameSite=Lax; Path=/;
+                Max-Age=1209600` (`Secure` only behind
+                QUANTLAB_AUTH_COOKIE_SECURE)
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          description: Invalid username or password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Username or password outside its declared bounds
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: Too many failed attempts from this client IP
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      summary: Log out, revoking the session
+      responses:
+        "204":
+          description: Session deleted; the cookie is cleared
+        "401":
+          description: No valid session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /auth/me:
+    get:
+      tags: [auth]
+      operationId: getCurrentUser
+      summary: The authenticated user
+      responses:
+        "200":
+          description: The caller's identity
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserPublic"
+        "401":
+          description: No valid session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
 components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: quantlab_session
+      description: >
+        Opaque session token issued by POST /auth/login, stored by the
+        backend only as its SHA-256, valid for 14 days since last use.
   schemas:
     Dataset:
       type: string
@@ -651,7 +1111,7 @@ components:
 
     Instrument:
       type: object
-      required: [symbol, name, currency, regime_profile]
+      required: [symbol, name, currency, kind, regime_profile]
       properties:
         symbol:
           type: string
@@ -662,6 +1122,13 @@ components:
         currency:
           type: string
           example: USD
+        kind:
+          type: string
+          enum: [equity, macro]
+          description: >
+            `macro` labels the warehouse's BoE/FRED pseudo-instruments (a
+            macro series loaded as daily bars). It labels, never filters:
+            macro instruments are served like any other instrument.
         regime_profile:
           type: string
           enum: [trending, mean_reverting, volatile, mixed]
@@ -710,6 +1177,149 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/PriceBar"
+
+    FundamentalConcept:
+      type: object
+      additionalProperties: false
+      required:
+        - concept
+        - provider
+        - unit
+        - fact_count
+        - first_filed
+        - last_filed
+        - derived
+      properties:
+        concept:
+          type: string
+          example: revenue
+        provider:
+          type: string
+          example: sec_edgar
+        unit:
+          type: string
+          example: USD
+        fact_count:
+          type: integer
+          minimum: 0
+        first_filed:
+          type: string
+          format: date
+        last_filed:
+          type: string
+          format: date
+        derived:
+          type: boolean
+          description: >
+            True for concepts computed at read time from stored ones (e.g.
+            short_volume_ratio = finra short_volume / total_volume); derived
+            concepts are never themselves stored.
+
+    FundamentalConceptList:
+      type: object
+      required: [symbol, total, items]
+      properties:
+        symbol:
+          type: string
+        total:
+          type: integer
+          minimum: 0
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/FundamentalConcept"
+
+    FundamentalFact:
+      type: object
+      additionalProperties: false
+      required:
+        - value
+        - period_start
+        - period_end
+        - filed_at
+        - provider
+        - unit
+        - holder
+      properties:
+        value:
+          type: number
+        period_start:
+          type: string
+          format: date
+          nullable: true
+          description: Null for instantaneous (balance-sheet) facts.
+        period_end:
+          type: string
+          format: date
+          description: The fiscal period the value describes. Never a visibility anchor.
+        filed_at:
+          type: string
+          format: date
+          description: >
+            When the market could first know this value. The point-in-time
+            anchor: a fact is visible to a model only from filed_at onwards.
+        provider:
+          type: string
+          example: sec_edgar
+        unit:
+          type: string
+          example: USD
+        holder:
+          type: string
+          nullable: true
+          description: Present on per-holder filings (FCA short positions).
+
+    FundamentalSeriesPoint:
+      type: object
+      additionalProperties: false
+      required: [date, value]
+      properties:
+        date:
+          type: string
+          format: date
+        value:
+          type: number
+          description: The value knowable on that date (the as-of step series).
+
+    FundamentalSeries:
+      type: object
+      additionalProperties: false
+      required:
+        - symbol
+        - concept
+        - transform
+        - point_in_time
+        - provenance
+        - total
+        - items
+      properties:
+        symbol:
+          type: string
+        concept:
+          type: string
+        transform:
+          type: string
+          enum: [raw, raw_facts, yoy_growth]
+        point_in_time:
+          type: boolean
+          description: >
+            Always true: filed_at is the visibility axis on every transform.
+            The flag ships so the UI never has to infer the discipline.
+        provenance:
+          type: string
+          description: How the numbers were produced, stated with the numbers.
+        total:
+          type: integer
+          minimum: 0
+        items:
+          type: array
+          description: >
+            Series points for `raw`/`yoy_growth`; facts as filed for
+            `raw_facts`.
+          items:
+            oneOf:
+              - $ref: "#/components/schemas/FundamentalSeriesPoint"
+              - $ref: "#/components/schemas/FundamentalFact"
 
     Signal:
       type: object
@@ -774,6 +1384,42 @@ components:
         detail:
           type: string
 
+    AuthCredentials:
+      type: object
+      additionalProperties: false
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 64
+        password:
+          type: string
+          minLength: 8
+          maxLength: 256
+
+    User:
+      type: object
+      additionalProperties: false
+      required: [id, username, is_admin]
+      properties:
+        id:
+          type: integer
+        username:
+          type: string
+        is_admin:
+          type: boolean
+
+    UserPublic:
+      type: object
+      additionalProperties: false
+      required: [id, username]
+      properties:
+        id:
+          type: integer
+        username:
+          type: string
+
     ParamSpec:
       type: object
       additionalProperties: false
@@ -804,7 +1450,16 @@ components:
     Model:
       type: object
       additionalProperties: false
-      required: [name, version, parameters, lookback_days, scale_class, direction_semantics]
+      required:
+        - name
+        - version
+        - parameters
+        - lookback_days
+        - scale_class
+        - direction_semantics
+        - origin
+        - custom_rule_id
+        - template
       properties:
         name:
           type: string
@@ -825,6 +1480,17 @@ components:
           enum: [scale_free, price_scaled]
         direction_semantics:
           type: string
+        origin:
+          type: string
+          enum: [builtin, custom]
+        custom_rule_id:
+          type: string
+          nullable: true
+          description: Present for custom rules; use it as custom_rule_id on POST /runs.
+        template:
+          type: string
+          nullable: true
+          description: The template a custom rule instantiates; null for builtins.
 
     ModelList:
       type: object
@@ -841,13 +1507,22 @@ components:
     RunRequest:
       type: object
       additionalProperties: false
-      required: [model_name, symbols, start_date, end_date]
+      required: [symbols, start_date, end_date]
       properties:
         model_name:
           type: string
+          description: >
+            Registry builtin model. Exactly one of model_name and
+            custom_rule_id is required.
         model_version:
           type: string
           description: Omit to use the highest registered version.
+        custom_rule_id:
+          type: string
+          description: >
+            One of the caller's rules from POST /rules. Mutually exclusive
+            with model_name; parameters overrides do not apply to custom
+            rules (their config is fixed at definition time).
         parameters:
           type: object
           additionalProperties: true
@@ -866,6 +1541,234 @@ components:
         end_date:
           type: string
           format: date
+        execution:
+          $ref: "#/components/schemas/ExecutionCriteria"
+
+    CustomRuleSnapshot:
+      type: object
+      additionalProperties: false
+      required: [rule_id, name, slug, template, config, lookback_days]
+      description: >
+        The definition a custom-rule run actually executed, frozen at run
+        time: template + config + derived lookback. Editing or deleting the
+        rule afterwards never rewrites this.
+      properties:
+        rule_id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        template:
+          type: string
+          example: indicator-threshold
+        config:
+          type: object
+          additionalProperties: true
+        lookback_days:
+          type: integer
+          minimum: 1
+
+    CustomRuleRequest:
+      type: object
+      additionalProperties: false
+      required: [name, template, config]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        template:
+          type: string
+          description: Template id from GET /signal-templates.
+        config:
+          type: object
+          additionalProperties: true
+          description: Validated against the template's declared vocabulary.
+
+    CustomRuleUpdateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        config:
+          type: object
+          additionalProperties: true
+      description: At least one of name and config is required.
+
+    CustomRule:
+      type: object
+      additionalProperties: false
+      required:
+        - rule_id
+        - name
+        - slug
+        - template
+        - config
+        - lookback_days
+        - created_at
+        - updated_at
+      properties:
+        rule_id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+          description: Derived from the name; unique within the owner's scope.
+        template:
+          type: string
+        config:
+          type: object
+          additionalProperties: true
+        lookback_days:
+          type: integer
+          minimum: 1
+          description: Derived from the config, not declared.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CustomRuleList:
+      type: object
+      additionalProperties: false
+      required: [total, items]
+      properties:
+        total:
+          type: integer
+          minimum: 0
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CustomRule"
+
+    SignalTemplate:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - version
+        - description
+        - inputs
+        - available_on_dataset
+        - config_fields
+      properties:
+        id:
+          type: string
+          example: indicator-threshold
+        version:
+          type: string
+          example: 1.0.0
+        description:
+          type: string
+        inputs:
+          type: string
+          enum: [bars, "bars+fundamentals"]
+          description: What the template reads.
+        available_on_dataset:
+          type: boolean
+          description: >
+            Whether the active dataset can serve this template. Fundamental
+            templates report false on the SQLite demo.
+        config_fields:
+          type: object
+          additionalProperties: true
+          description: Enums and bounds per config field, for form generation.
+
+    SignalTemplateList:
+      type: object
+      additionalProperties: false
+      required: [total, items]
+      properties:
+        total:
+          type: integer
+          minimum: 0
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SignalTemplate"
+
+    ExecutionCriteria:
+      type: object
+      additionalProperties: false
+      description: >
+        How a run's signals are turned into fills in its performance report.
+        Every field defaults to the historical behaviour, so omitting the
+        object entirely and supplying it with all defaults produce the same
+        numbers: an equal-weight sleeve per selected instrument, filled at the
+        close of the signal date, charged nothing, capped at nothing.
+      properties:
+        initial_capital:
+          type: number
+          exclusiveMinimum: 0
+          default: 100000
+          description: Starting book value.
+        position_sizing:
+          type: string
+          enum: [equal_weight, fixed_fraction]
+          default: equal_weight
+          description: >
+            `equal_weight` splits initial_capital into one sleeve per selected
+            instrument (an untraded sleeve sits in cash). `fixed_fraction`
+            sizes each entry at `fraction` of the book's current value, drawn
+            from one shared cash account.
+        fraction:
+          type: number
+          exclusiveMinimum: 0
+          maximum: 1
+          default: 0.1
+          description: Share of the book's current value per entry; fixed_fraction only.
+        max_open_positions:
+          type: integer
+          minimum: 1
+          nullable: true
+          default: null
+          description: >
+            Cap on concurrently open positions; entries beyond the cap are
+            skipped. Null means uncapped.
+        transaction_cost_bps:
+          type: number
+          minimum: 0
+          default: 0
+          description: Charged on every fill, as basis points of traded value.
+        fixed_cost_per_trade:
+          type: number
+          minimum: 0
+          default: 0
+          description: Charged on every fill, in currency units.
+        stop_loss_pct:
+          type: number
+          exclusiveMinimum: 0
+          exclusiveMaximum: 1
+          nullable: true
+          default: null
+          description: >
+            Exit when a bar's low trades this fraction below the entry price;
+            filled at the stop level, or at the open when the market gaps
+            through it. When a stop and a take-profit trigger on the same bar,
+            the stop is assumed to fill first.
+        take_profit_pct:
+          type: number
+          exclusiveMinimum: 0
+          nullable: true
+          default: null
+          description: >
+            Exit when a bar's high trades this fraction above the entry price;
+            filled at the target level, or at the open on a gap through it.
+        entry_price:
+          type: string
+          enum: [same_close, next_open]
+          default: same_close
+          description: >
+            `same_close` fills at the close of the signal date. `next_open`
+            fills at the open of the next session that has a bar, removing the
+            same-bar fill assumption.
 
     RunCoverage:
       type: object
@@ -971,6 +1874,19 @@ components:
           description: >
             Actions overlapping the window for the selected instruments. Empty
             on the demo dataset, which has none.
+        execution:
+          $ref: "#/components/schemas/ExecutionCriteria"
+          nullable: true
+          description: >
+            The effective execution criteria the run was created with, merged
+            over their defaults. Null for runs recorded without them; their
+            performance uses the historical zero-cost measuring instrument.
+        custom_rule:
+          $ref: "#/components/schemas/CustomRuleSnapshot"
+          nullable: true
+          description: >
+            Set on runs of a custom rule: the definition snapshot. Null for
+            builtin-model runs.
         re_runnable:
           type: boolean
           description: >

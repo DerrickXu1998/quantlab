@@ -51,6 +51,22 @@ def ref_rolling(values, window, fn):
     return out
 
 
+def ref_ema(values, window):
+    """Independent EMA reference: alpha = 2/(window+1), SMA-seeded, leading
+    NaNs skipped (the series' own warmup precedes the EMA warmup)."""
+    alpha = 2.0 / (window + 1)
+    out = [math.nan] * len(values)
+    start = next((i for i, v in enumerate(values) if not math.isnan(v)), None)
+    if start is None or len(values) - start < window:
+        return out
+    acc = sum(values[start : start + window]) / window
+    out[start + window - 1] = acc
+    for i in range(start + window, len(values)):
+        acc += alpha * (values[i] - acc)
+        out[i] = acc
+    return out
+
+
 def assert_nan_prefix(actual, expected):
     assert len(actual) == len(expected)
     for got, want in zip(actual, expected, strict=True):
@@ -64,9 +80,11 @@ def test_registry_lists_builtin_indicators():
     plugins = {(p.name, p.version): p for p in list_indicators()}
     for key, scale_class in [
         (("sma", "1.0.0"), "price_scaled"),
+        (("ema", "1.0.0"), "price_scaled"),
         (("rsi", "1.0.0"), "scale_free"),
         (("rolling-max", "1.0.0"), "price_scaled"),
         (("rolling-min", "1.0.0"), "price_scaled"),
+        (("rolling-std", "1.0.0"), "price_scaled"),
     ]:
         assert key in plugins, f"missing indicator {key}"
         assert plugins[key].scale_class == scale_class
@@ -160,3 +178,42 @@ def test_rolling_max_min_fixed_series():
 def test_rolling_insufficient_history_is_nan():
     rmax = get_indicator("rolling-max").compute
     assert all(math.isnan(v) for v in rmax([1.0, 2.0], window=3))
+
+
+def test_ema_fixed_series():
+    ema = get_indicator("ema", "1.0.0").compute
+    assert_nan_prefix(
+        list(ema([1.0, 2.0, 3.0, 4.0, 5.0], window=3)),
+        # seed = mean(1,2,3) = 2; then alpha=0.5: 2+0.5*(4-2)=3, 3+0.5*(5-3)=4
+        [math.nan, math.nan, 2.0, 3.0, 4.0],
+    )
+    values = [2.5, 3.5, 4.5, 1.5, 6.0, 7.0, 0.5, 8.0]
+    assert_nan_prefix(list(ema(values, window=4)), ref_ema(values, 4))
+
+
+def test_ema_skips_a_leading_nan_warmup():
+    """A series with its own warmup (e.g. a MACD line) is smoothed from its
+    first defined value, not from index 0."""
+    ema = get_indicator("ema").compute
+    values = [math.nan, math.nan, 1.0, 2.0, 3.0, 4.0, 5.0]
+    assert_nan_prefix(list(ema(values, window=3)), ref_ema(values, 3))
+
+
+def test_ema_insufficient_history_is_nan():
+    ema = get_indicator("ema").compute
+    out = ema([1.0, 2.0, 3.0, 4.0], window=5)
+    assert all(math.isnan(v) for v in out)
+    assert list(ema([], window=5)) == []
+
+
+def test_rolling_std_fixed_series():
+    rstd = get_indicator("rolling-std", "1.0.0").compute
+
+    def ref_std(window_values):
+        mean = sum(window_values) / len(window_values)
+        return math.sqrt(sum((v - mean) ** 2 for v in window_values) / len(window_values))
+
+    values = [3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0]
+    assert_nan_prefix(list(rstd(values, window=3)), ref_rolling(values, 3, ref_std))
+    # A flat window has zero dispersion.
+    assert all(v == pytest.approx(0.0) for v in list(rstd([7.0] * 6, window=3))[2:])
