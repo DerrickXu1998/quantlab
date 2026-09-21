@@ -77,7 +77,14 @@ docker pull --quiet "$INGEST_IMAGE" >/dev/null || fail "could not pull $INGEST_I
 # so schema changes apply before the new API serves a single request, and a failed
 # migration stops the deploy here with the old backend still running.
 log "starting the stack"
-compose up -d --remove-orphans
+# When `up` fails here it is almost always migrate, and compose reports only
+# "exit 1" for it -- the actual error lives in the container's own logs, so
+# print them before giving up. Without this the CI log shows the failure but
+# not the reason.
+if ! compose up -d --remove-orphans; then
+	compose logs --tail 50 migrate >&2 || true
+	fail "compose up did not complete -- the migrate logs above have the reason"
+fi
 
 # --- 5. wait for health -------------------------------------------------------
 log "waiting for the backend healthcheck"
