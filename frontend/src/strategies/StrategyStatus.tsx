@@ -49,7 +49,11 @@ export function statusOf(
  * belong to no saved strategy.
  */
 export function executedStrategyNames(
-  runs: readonly { strategy?: { name?: string } | null }[],
+  // Deliberately open: a real `Run` carries twenty other fields, and a
+  // parameter type listing only the one this reads makes every caller — and
+  // every fixture — fail TypeScript's excess-property check for passing a
+  // genuine run.
+  runs: readonly { strategy?: { name?: string } | null; [key: string]: unknown }[],
 ): ReadonlySet<string> {
   const names = new Set<string>();
   for (const run of runs) {

@@ -17,7 +17,7 @@ import sqlite3
 from pathlib import Path
 from typing import Protocol
 
-from quantlab.storage import db, repository, warehouse
+from quantlab.storage import db, facts, repository, warehouse
 
 
 class StorageBackend(Protocol):
@@ -38,6 +38,16 @@ class StorageBackend(Protocol):
     def corporate_actions(self, symbols: list[str], start: str, end: str) -> list[dict]: ...
     def instrument_ids(self, symbols: list[str]) -> dict: ...
     def ingest_run_ids(self, symbols: list[str], start: str, end: str) -> list: ...
+
+    # Point-in-time fundamentals. Only the warehouse has any; the demo answers
+    # empty rather than raising, and the rules then hold their gates shut --
+    # the same shape every other warehouse-only seam here takes.
+    def load_facts_for(
+        self, symbols: list[str], concepts: list[str], start: str, end: str
+    ) -> dict: ...
+    def facts_as_of(
+        self, symbol: str, as_of: str, concepts: list[str] | None = None
+    ) -> list[dict]: ...
 
 
 class SqliteBackend:
@@ -108,6 +118,26 @@ class SqliteBackend:
         # is no ingest lineage to record.
         return []
 
+    def load_facts_for(
+        self, symbols: list[str], concepts: list[str], start: str, end: str
+    ) -> dict[str, facts.FactSeries]:
+        """None. The synthetic universe has prices and nothing else.
+
+        Empty rather than an exception, for the same reason
+        :meth:`corporate_actions` answers ``[]``: the runner must not branch on
+        which store it is talking to. Every fundamental rule then sees no
+        facts, and a rule that sees no facts holds its gate shut and emits no
+        entry -- so a demo strategy with a P/E filter simply never trades,
+        which is the truth, rather than trading on a P/E of zero
+        (docs/FUNDAMENTALS.md §5.5).
+        """
+        return {}
+
+    def facts_as_of(
+        self, symbol: str, as_of: str, concepts: list[str] | None = None
+    ) -> list[dict]:
+        return []
+
 
 class WarehouseBackend:
     """Real ingested history: ClickHouse bars over a Postgres catalog."""
@@ -146,6 +176,16 @@ class WarehouseBackend:
 
     def ingest_run_ids(self, symbols: list[str], start: str, end: str) -> list[int]:
         return warehouse.ingest_run_ids(self.wh, symbols, start, end)
+
+    def load_facts_for(
+        self, symbols: list[str], concepts: list[str], start: str, end: str
+    ) -> dict[str, facts.FactSeries]:
+        return warehouse.load_facts_for(self.wh, symbols, concepts, start, end)
+
+    def facts_as_of(
+        self, symbol: str, as_of: str, concepts: list[str] | None = None
+    ) -> list[dict]:
+        return warehouse.facts_as_of(self.wh, symbol, as_of, concepts)
 
 
 def select_backend(db_path: str | Path | None = None) -> StorageBackend:

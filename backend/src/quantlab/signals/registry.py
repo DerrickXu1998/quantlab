@@ -32,6 +32,11 @@ CATEGORIES: tuple[str, ...] = (
     "mean_reversion",
     "volatility",
     "volume",
+    # Rules reading filed company accounts rather than the tape. Grouped apart
+    # because a user needs to know *before* building that these names may have
+    # no fundamentals at all, and that they step a few times a year rather
+    # than every bar (docs/FUNDAMENTALS.md §6).
+    "fundamental",
 )
 
 #: Which slots in a strategy a rule may occupy. A rule that reports a *regime*
@@ -158,6 +163,16 @@ class SignalRule:
     category: str = "trend"
     summary: str = ""
     roles: tuple[str, ...] = ("entry", "exit")
+    #: Fundamental concepts this rule cannot work without. Empty for every
+    #: rule that reads only bars, which is what keeps the contract backwards
+    #: compatible. The runner loads exactly these, and the catalogue reports
+    #: them so a user can be told which of their instruments will never trade
+    #: before they run rather than after (docs/FUNDAMENTALS.md §5.1).
+    requires_facts: tuple[str, ...] = ()
+
+    @property
+    def needs_facts(self) -> bool:
+        return bool(self.requires_facts)
 
     @property
     def params(self) -> dict[str, Any]:

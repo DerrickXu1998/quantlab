@@ -117,6 +117,29 @@ its own `filed_at`.
 > the greatest `filed_at`. Forward-fill that value across trading dates until
 > the next filing supersedes it.
 
+### Scope: the refinement this rule needed
+
+The rule as first written says "take the greatest `period_end`". Implementing it
+against real data showed that is not quite enough, and the gap matters
+financially.
+
+Facts come in two shapes. A balance-sheet figure is an **instant** — equity *at*
+2024-03-31. An income-statement figure is a **duration** — revenue *over* a
+period, which may be a quarter or a full year, and the table holds both.
+
+Taking the greatest `period_end` across both mixes them. Asked for Caterpillar's
+revenue as known on 2024-06-30, it returns Q1's three-month figure of $15.8bn,
+because Q1 ends later than FY2023 does. Put that in a P/E and the multiple is
+wrong by roughly four times.
+
+So duration concepts resolve at **annual** scope by default — FY2023's $67.06bn,
+filed 2024-02-16 — while instant concepts take the latest quarter. Both are
+equally point-in-time; the difference is which *period length* is the sensible
+default, and for anything that will end up in a ratio it is the annual one.
+
+The reader exposes scope explicitly so a rule that genuinely wants the quarter
+can ask for it.
+
 Three consequences, all load-bearing:
 
 1. **Timing comes from `filed_at`, never `period_end`.** `period_end` answers
