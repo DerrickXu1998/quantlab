@@ -8,10 +8,14 @@ import { EmptyState } from '../components/ui/empty-state';
 import { fieldClasses, Input, Select } from '../components/ui/field';
 import { StatusBadge } from '../components/ui/status-badge';
 import { RunResultsView } from '../components/RunResultsView';
+import { navigate } from '../chrome/router';
 import { Panel } from '../quantlab/chrome/Panel';
 import { useRuns } from '../runs/RunsContext';
 import { useDataWindow } from '../workbench/useDataWindow';
+import { CoverageWarning } from './CoverageWarning';
 import { ExecutionForm } from './ExecutionForm';
+import { isFundamental } from './fundamentals';
+import { useFundamentalsCoverage } from './useFundamentals';
 import { SignalCatalogue } from './SignalCatalogue';
 import { StrategyComponentEditor } from './StrategyComponentEditor';
 import { templateToDraft, useStrategyTemplates } from './templates';
@@ -77,6 +81,12 @@ export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) 
   const [saving, setSaving] = useState(false);
   const [armedDelete, setArmedDelete] = useState<string | null>(null);
   const { startDate, endDate, setStartDate, setEndDate } = useDataWindow(instruments);
+
+  // Only asked for when the registry actually has a rule that reads filings:
+  // a deployment with no fundamental rules has nothing to warn about, and the
+  // request would buy an empty panel.
+  const catalogHasFundamentals = useMemo(() => catalog.some(isFundamental), [catalog]);
+  const fundamentals = useFundamentalsCoverage(catalogHasFundamentals);
 
   const sentence = useMemo(() => describeStrategy(draft, catalog), [draft, catalog]);
   const warnings = useMemo(
@@ -267,7 +277,11 @@ export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) 
           {modelsStatus === 'loading' ? (
             <EmptyState icon={Hourglass} title="Loading the registry…" role="status" />
           ) : (
-            <SignalCatalogue catalog={catalog} onAdd={addComponent} />
+            <SignalCatalogue
+              catalog={catalog}
+              coverage={fundamentals.coverage}
+              onAdd={addComponent}
+            />
           )}
         </Panel>
 
@@ -403,6 +417,25 @@ export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) 
             </p>
           </div>
 
+          {/* Directly under the sentence, and above the ordinary warnings:
+              this one says the strategy cannot do what the sentence just
+              claimed for part of the selection, and it is the last honest
+              moment before a number gets drawn from a run. */}
+          <CoverageWarning
+            draft={draft}
+            catalog={catalog}
+            symbols={symbols}
+            startDate={startDate}
+            endDate={endDate}
+            coverage={fundamentals.coverage}
+            status={fundamentals.status}
+            message={fundamentals.message}
+            onReload={fundamentals.reload}
+            onInspect={(symbol) =>
+              navigate('strategies', { mode: 'inspector', symbol, as_of: endDate })
+            }
+          />
+
           {warnings.length > 0 ? (
             <ul data-testid="strategy-warnings" className="space-y-1">
               {warnings.map((warning) => (
@@ -464,6 +497,7 @@ export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) 
                         component={component}
                         model={findModel(catalog, component.rule_name)}
                         weighted={role === 'exit' ? exitWeighted : entryWeighted}
+                        coverage={fundamentals.coverage}
                         onChange={updateComponent}
                         onRemove={() => removeComponent(component.id)}
                       />

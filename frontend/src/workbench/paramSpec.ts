@@ -1,4 +1,5 @@
 import type { ParamSpec } from '../api/client';
+import { UNIT_PRESENTATION, unitOf, type ParamSpecV2 } from '../api/types';
 
 /**
  * Validation and coercion for a model's declared parameters.
@@ -49,4 +50,50 @@ export function overridesFrom(
     }
   }
   return overrides;
+}
+
+// --- Units ----------------------------------------------------------------
+//
+// A P/E bound is a ratio, an ROE floor is a percentage and a growth threshold
+// is a percentage; a form that renders the three identically will be typed
+// into wrongly (FUNDAMENTALS §6). The execution form already solves this for
+// the percentages the contract stores as fractions, and these are the same two
+// functions made general, so a rule that declares `unit: "fraction"` gets 15%
+// on screen and 0.15 on the wire without the component knowing anything about
+// that particular rule.
+//
+// Unit handling is not analysis: the displayed number and the stored number
+// are the same quantity written two ways (Constitution V).
+
+/** Drop the float noise 0.15 * 100 leaves behind, without rounding real digits. */
+function tidy(value: number, places: number): string {
+  return String(Number(value.toFixed(places)));
+}
+
+/** Wire value → what the field shows. */
+export function displayValue(spec: ParamSpecV2, wire: string): string {
+  const unit = unitOf(spec);
+  if (unit === null || wire === '') return wire;
+  const scale = UNIT_PRESENTATION[unit].scale;
+  if (scale === 1) return wire;
+  const parsed = Number(wire);
+  return Number.isFinite(parsed) ? tidy(parsed * scale, 6) : wire;
+}
+
+/** What was typed → the value the engine is sent. */
+export function wireValue(spec: ParamSpecV2, display: string): string {
+  const unit = unitOf(spec);
+  if (unit === null || display === '') return display;
+  const scale = UNIT_PRESENTATION[unit].scale;
+  if (scale === 1) return display;
+  const parsed = Number(display);
+  return Number.isFinite(parsed) ? tidy(parsed / scale, 10) : display;
+}
+
+/** A declared bound, expressed in the units the field is displayed in. */
+export function displayBound(spec: ParamSpecV2, bound: number | null | undefined): number | undefined {
+  if (bound === null || bound === undefined) return undefined;
+  const unit = unitOf(spec);
+  const scale = unit === null ? 1 : UNIT_PRESENTATION[unit].scale;
+  return Number(tidy(bound * scale, 6));
 }

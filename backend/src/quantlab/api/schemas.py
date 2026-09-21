@@ -99,12 +99,17 @@ class Model(BaseModel):
     # Catalogue metadata, so a builder can group and gate rules without
     # hardcoding anything about any of them (Constitution II).
     category: Literal[
-        "trend", "momentum", "mean_reversion", "volatility", "volume"
+        "trend", "momentum", "mean_reversion", "volatility", "volume", "fundamental"
     ] = "trend"
     summary: str = ""
     #: Which strategy slots this rule may fill. A rule that reports a regime
     #: rather than a tradeable event advertises ["filter"] only.
     roles: list[Literal["entry", "exit", "filter"]] = ["entry", "exit"]
+    #: Fundamental concepts this rule cannot work without. Empty for every rule
+    #: that reads only bars. The builder reports them so a user can be told
+    #: which of their instruments will never trade before they run, not after
+    #: (docs/FUNDAMENTALS.md §5.1).
+    requires_facts: list[str] = []
 
 
 class ModelList(BaseModel):

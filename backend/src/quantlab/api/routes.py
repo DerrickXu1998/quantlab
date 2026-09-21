@@ -178,6 +178,7 @@ def _model_to_schema(rule) -> dict:
         "category": rule.category,
         "summary": rule.summary,
         "roles": list(rule.roles),
+        "requires_facts": list(rule.requires_facts),
     }
 
 

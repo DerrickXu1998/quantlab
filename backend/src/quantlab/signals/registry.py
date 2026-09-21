@@ -20,6 +20,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+# Pure stdlib module -- dataclasses and bisect, no database driver -- so the
+# signal registry can know the fundamental vocabulary without dragging the
+# storage layer into its import path.
+from quantlab.storage.facts import KNOWN_CONCEPTS
+
 DIRECTIONS: tuple[str, ...] = ("bullish", "bearish")
 SCALE_CLASSES: tuple[str, ...] = ("scale_free", "price_scaled")
 PARAM_TYPES: tuple[str, ...] = ("int", "float", "bool", "enum")
@@ -32,6 +37,11 @@ CATEGORIES: tuple[str, ...] = (
     "mean_reversion",
     "volatility",
     "volume",
+    # Rules reading filed company accounts rather than the tape. Grouped apart
+    # because a user needs to know *before* building that these names may have
+    # no fundamentals at all, and that they step a few times a year rather
+    # than every bar (docs/FUNDAMENTALS.md §6).
+    "fundamental",
 )
 
 #: Which slots in a strategy a rule may occupy. A rule that reports a *regime*
@@ -158,6 +168,16 @@ class SignalRule:
     category: str = "trend"
     summary: str = ""
     roles: tuple[str, ...] = ("entry", "exit")
+    #: Fundamental concepts this rule cannot work without. Empty for every
+    #: rule that reads only bars, which is what keeps the contract backwards
+    #: compatible. The runner loads exactly these, and the catalogue reports
+    #: them so a user can be told which of their instruments will never trade
+    #: before they run rather than after (docs/FUNDAMENTALS.md §5.1).
+    requires_facts: tuple[str, ...] = ()
+
+    @property
+    def needs_facts(self) -> bool:
+        return bool(self.requires_facts)
 
     @property
     def params(self) -> dict[str, Any]:
@@ -203,6 +223,7 @@ def register_signal_rule(
     category: str = "trend",
     summary: str = "",
     roles: tuple[str, ...] = ("entry", "exit"),
+    requires_facts: tuple[str, ...] = (),
 ) -> Callable:
     if lookback_days < 1:
         raise ValueError("lookback_days must be >= 1")
@@ -215,6 +236,16 @@ def register_signal_rule(
     unknown_roles = [role for role in roles if role not in ROLES]
     if unknown_roles:
         raise ValueError(f"{name}: invalid roles {unknown_roles}; expected from {ROLES}")
+    # A rule that names a concept nobody ingests would register cleanly and then
+    # never open its gate, which is indistinguishable from a rule that simply
+    # found nothing. Fail at import instead.
+    unknown_concepts = [c for c in requires_facts if c not in KNOWN_CONCEPTS]
+    if unknown_concepts:
+        raise ValueError(
+            f"{name}: requires unknown fundamental concept(s) {unknown_concepts}; "
+            f"expected from {sorted(KNOWN_CONCEPTS)}"
+        )
+
 
     param_specs = _normalise_params(params)
 
@@ -233,6 +264,15 @@ def register_signal_rule(
                         f"{fn.__name__}{signature}"
                     )
 
+        # A rule that reads facts must accept them. Without this it registers
+        # cleanly, the runner loads its concepts, and compute() raises
+        # TypeError partway through the first run that uses it.
+        if requires_facts and not accepts_kwargs and "facts" not in signature.parameters:
+            raise ValueError(
+                f"{name}: declares requires_facts but {fn.__name__}{signature} has no "
+                f"'facts' keyword. Fundamental rules take compute(bars, *, facts=None, ...)."
+            )
+
         key = (name, version)
         if key in _REGISTRY:
             raise ValueError(f"duplicate signal rule registration: {name} v{version}")
@@ -247,6 +287,7 @@ def register_signal_rule(
             category=category,
             summary=summary or (fn.__doc__ or "").strip().split("\n")[0],
             roles=tuple(roles),
+            requires_facts=tuple(requires_facts),
         )
         return fn
 

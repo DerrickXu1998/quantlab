@@ -4,14 +4,16 @@ import { useRoute } from '../../chrome/router';
 import { ModelList } from '../../components/ModelList';
 import { RunConfigForm } from '../../components/RunConfigForm';
 import { RunResultsView } from '../../components/RunResultsView';
+import { FundamentalsInspector } from '../../strategies/FundamentalsInspector';
 import { StrategyBuilder } from '../../strategies/StrategyBuilder';
+import { useDataWindow } from '../../workbench/useDataWindow';
 import { CascadeItem } from '../chrome/Cascade';
 import { EmptyState } from '../chrome/EmptyState';
 import { Panel } from '../chrome/Panel';
 import { useRuns } from '../../runs/RunsContext';
 import type { Instrument } from '../../api/client';
 
-type Mode = 'builder' | 'signal';
+type Mode = 'builder' | 'signal' | 'inspector';
 
 /**
  * Strategies: the destination where a strategy is assembled, and where a
@@ -40,7 +42,31 @@ export function StrategyLabView({ instruments }: { instruments: Instrument[] }) 
   } = useRuns();
   const route = useRoute();
   const modelParam = route.params.get('model');
-  const [mode, setMode] = useState<Mode>(() => (modelParam ? 'signal' : 'builder'));
+  const modeParam = route.params.get('mode');
+  const symbolParam = route.params.get('symbol');
+  const asOfParam = route.params.get('as_of');
+  const [mode, setMode] = useState<Mode>(() =>
+    modeParam === 'inspector' ? 'inspector' : modelParam ? 'signal' : 'builder',
+  );
+
+  // The inspector's subject. Seeded from the hash so the builder's coverage
+  // warning can hand a name over ("this one can never trade — here is what it
+  // knew"), and editable from inside the inspector afterwards.
+  const { endDate } = useDataWindow(instruments);
+  const [subject, setSubject] = useState<string | null>(symbolParam);
+  const [asOf, setAsOf] = useState<string>(asOfParam ?? '');
+  const inspectorDate = asOf || asOfParam || endDate;
+
+  // A handoff from another screen switches the mode and the subject together;
+  // a change made inside the inspector does not write back to the hash, so
+  // the back button still leaves the destination rather than stepping through
+  // every date the researcher tried.
+  useEffect(() => {
+    if (modeParam !== 'inspector') return;
+    setMode('inspector');
+    if (symbolParam) setSubject(symbolParam);
+    if (asOfParam) setAsOf(asOfParam);
+  }, [modeParam, symbolParam, asOfParam]);
 
   // The signal-row handoff: pick the named model once the registry has loaded,
   // and show the surface that can configure it.
@@ -94,10 +120,23 @@ export function StrategyLabView({ instruments }: { instruments: Instrument[] }) 
       >
         {tab('builder', 'Strategy builder', 'Combine several signals into one strategy.')}
         {tab('signal', 'Signal lab', 'Run a single registered rule on its own.')}
+        {tab(
+          'inspector',
+          'Point-in-time',
+          'What had actually been filed for an instrument on a given date.',
+        )}
       </div>
 
       {mode === 'builder' ? (
         <StrategyBuilder instruments={instruments} />
+      ) : mode === 'inspector' ? (
+        <FundamentalsInspector
+          instruments={instruments}
+          symbol={subject}
+          asOf={inspectorDate}
+          onSymbolChange={setSubject}
+          onAsOfChange={setAsOf}
+        />
       ) : modelsStatus === 'error' ? (
         <EmptyState
           testId="strategies-error"

@@ -5,6 +5,8 @@ import type {
   AuthUser,
   Credentials,
   ExecutionConfig,
+  FundamentalFact,
+  FundamentalsCoverage,
   HealthV2,
   RawCatalogModel,
   RunDetailV2,
@@ -282,6 +284,40 @@ export function listStrategyTemplates(): Promise<StrategyTemplateList> {
  */
 export function createStrategyRun(body: StrategyRunRequest, signal?: AbortSignal): Promise<RunV2> {
   return send<RunV2>('/runs', 'POST', body, signal);
+}
+
+// --- Fundamentals (docs/FUNDAMENTALS.md) -----------------------------------
+
+/**
+ * What one instrument's filings said, as of a date.
+ *
+ * The as-of date is the whole request: the server answers with rows whose
+ * `filed_at <= as_of`, which is the only reading of the table that does not
+ * use a document from the future to trade in the past (§2). Sending the date
+ * rather than filtering here is deliberate — a browser-side cut on a full
+ * history would be a second implementation of the rule.
+ *
+ * The response is accepted both as a bare array and as the `{ total, items }`
+ * envelope the rest of the API uses: both are plausible from a backend still
+ * being written, and neither is worth a crash.
+ */
+export async function getFundamentals(symbol: string, asOf: string): Promise<FundamentalFact[]> {
+  const body = await request<FundamentalFact[] | { items?: FundamentalFact[] }>(
+    `/instruments/${encodeURIComponent(symbol)}/fundamentals`,
+    { as_of: asOf },
+  );
+  return Array.isArray(body) ? body : (body.items ?? []);
+}
+
+/**
+ * Which instruments and concepts have any fundamentals at all.
+ *
+ * Read once and held: it is a property of the warehouse, not of the strategy
+ * being edited, and re-reading it on every component added would put a network
+ * round trip inside a keystroke.
+ */
+export function getFundamentalsCoverage(): Promise<FundamentalsCoverage> {
+  return request<FundamentalsCoverage>('/fundamentals/coverage');
 }
 
 export type { ExecutionConfig };

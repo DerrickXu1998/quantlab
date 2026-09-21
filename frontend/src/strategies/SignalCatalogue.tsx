@@ -1,12 +1,13 @@
 import { PackageOpen, Search } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import type { CatalogModel, StrategyRole } from '../api/types';
+import type { CatalogModel, FundamentalsCoverage, StrategyRole } from '../api/types';
 import { CATEGORY_LABELS, ROLE_EXPLAINERS, ROLE_LABELS, STRATEGY_ROLES } from '../api/types';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { EmptyState } from '../components/ui/empty-state';
 import { Input } from '../components/ui/field';
 import { StatusBadge } from '../components/ui/status-badge';
+import { conceptCoverage, conceptLabel } from './fundamentals';
 import { canFillRole, roleRefusal } from './strategyModel';
 
 const MICRO = 'font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground';
@@ -23,9 +24,12 @@ const MICRO = 'font-mono text-[10px] uppercase tracking-[0.12em] text-muted-fore
  */
 function SignalCard({
   model,
+  coverage,
   onAdd,
 }: {
   model: CatalogModel;
+  /** Warehouse coverage, so a fundamental card can say what exists. */
+  coverage: FundamentalsCoverage | null;
   onAdd: (model: CatalogModel, role: StrategyRole) => void;
 }) {
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -57,6 +61,37 @@ function SignalCard({
         <p className={MICRO}>
           <span className="tabular-nums">{model.lookback_days}</span> bar warm-up
         </p>
+
+        {/* The one thing a fundamental card carries that a technical one does
+            not: the filed concepts it depends on, and how much of the
+            warehouse actually has them. A rule that reads a concept covering
+            77 names is a different proposition from one that reads a concept
+            covering 580, and that is not visible anywhere else. */}
+        {model.requires_facts.length > 0 ? (
+          <div data-testid={`requires-facts-card-${model.name}`} className="space-y-0.5">
+            <p className={MICRO}>Reads filed facts</p>
+            <ul>
+              {model.requires_facts.map((concept) => {
+                const entry = conceptCoverage(coverage, concept);
+                return (
+                  <li key={concept} className="flex flex-wrap items-baseline gap-x-2 text-[11px]">
+                    <span className="font-mono">{conceptLabel(concept)}</span>
+                    {entry ? (
+                      <span
+                        className="font-mono tabular-nums text-muted-foreground"
+                        title={`${entry.instruments} instruments have this concept, filed between these dates.`}
+                      >
+                        {entry.instruments} · {entry.first_filed} → {entry.last_filed}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">coverage not reported</span>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ) : null}
 
         <div className="flex flex-wrap items-center gap-1.5 border-t border-border pt-2">
           <span className={MICRO}>Add as</span>
@@ -110,9 +145,11 @@ function SignalCard({
  */
 export function SignalCatalogue({
   catalog,
+  coverage = null,
   onAdd,
 }: {
   catalog: CatalogModel[];
+  coverage?: FundamentalsCoverage | null;
   onAdd: (model: CatalogModel, role: StrategyRole) => void;
 }) {
   const [query, setQuery] = useState('');
@@ -124,7 +161,11 @@ export function SignalCatalogue({
         needle === '' ||
         model.name.toLowerCase().includes(needle) ||
         model.summary.toLowerCase().includes(needle) ||
-        CATEGORY_LABELS[model.category].toLowerCase().includes(needle),
+        CATEGORY_LABELS[model.category].toLowerCase().includes(needle) ||
+        // A concept is a legitimate way to look for a rule: someone who wants
+        // something built on revenue should find `revenue-growth` by typing
+        // what they have in mind rather than the rule's name.
+        model.requires_facts.some((concept) => conceptLabel(concept).includes(needle)),
     );
     const byCategory = new Map<CatalogModel['category'], CatalogModel[]>();
     for (const model of matching) {
@@ -185,7 +226,12 @@ export function SignalCatalogue({
                 controls; it wants a measure, not a column count. */}
               <div className="grid grid-cols-1 gap-2">
               {models.map((model) => (
-                <SignalCard key={`${model.name}@${model.version}`} model={model} onAdd={onAdd} />
+                <SignalCard
+                  key={`${model.name}@${model.version}`}
+                  model={model}
+                  coverage={coverage}
+                  onAdd={onAdd}
+                />
               ))}
             </div>
           </section>

@@ -16,6 +16,7 @@ export const rsiThreshold: CatalogModel = {
   roles: ['entry', 'exit'],
   lookback_days: 14,
   scale_class: 'scale_free',
+  requires_facts: [],
   parameters: [
     {
       name: 'period',
@@ -47,6 +48,7 @@ export const macdCrossover: CatalogModel = {
   roles: ['entry', 'exit'],
   lookback_days: 35,
   scale_class: 'scale_free',
+  requires_facts: [],
   parameters: [
     { name: 'fast', type: 'int', default: 12, minimum: 2, maximum: 100, choices: null },
     { name: 'slow', type: 'int', default: 26, minimum: 3, maximum: 200, choices: null },
@@ -62,6 +64,7 @@ export const adxFilter: CatalogModel = {
   roles: ['filter'],
   lookback_days: 28,
   scale_class: 'scale_free',
+  requires_facts: [],
   parameters: [
     { name: 'period', type: 'int', default: 14, minimum: 2, maximum: 100, choices: null },
     { name: 'threshold', type: 'int', default: 25, minimum: 1, maximum: 100, choices: null },

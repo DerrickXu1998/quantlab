@@ -7,8 +7,15 @@ import type {
   StrategyRole,
   StrategySpec,
 } from '../api/types';
-import { DEFAULT_EXECUTION, ROLE_LABELS, withExecutionDefaults } from '../api/types';
-import { coerce, defaultValues, localError } from '../workbench/paramSpec';
+import {
+  DEFAULT_EXECUTION,
+  ROLE_LABELS,
+  UNIT_PRESENTATION,
+  unitOf,
+  withExecutionDefaults,
+  type ParamSpecV2,
+} from '../api/types';
+import { coerce, defaultValues, displayValue, localError } from '../workbench/paramSpec';
 
 /**
  * The strategy the builder is editing, and the English it reads as.
@@ -112,6 +119,22 @@ export function roleRefusal(model: CatalogModel, role: StrategyRole): string | n
 
 export function findModel(catalog: CatalogModel[], name: string): CatalogModel | null {
   return catalog.find((model) => model.name === name) ?? null;
+}
+
+/**
+ * Whether a rule reads filed facts.
+ *
+ * Duplicated in spirit by `fundamentals.isFundamental`, which also accepts the
+ * category; this one is deliberately the narrow test — it decides whether the
+ * summary sentence makes a claim about restatements, and a rule that reads no
+ * facts must not make the strategy assert one.
+ */
+function readsFacts(model: CatalogModel | null): boolean {
+  // Both hops are optional. `requires_facts` is new, so a catalogue served by
+  // a backend that predates it — or any fixture written before it — has the
+  // model but not the field, and stopping the chain at `model` throws on every
+  // one of them.
+  return (model?.requires_facts?.length ?? 0) > 0;
 }
 
 export function componentFor(model: CatalogModel, role: StrategyRole): DraftComponent {
@@ -275,13 +298,39 @@ function joinList(parts: string[], conjunction: 'and' | 'or'): string {
   return `${parts.slice(0, -1).join(', ')} ${conjunction} ${parts[parts.length - 1]}`;
 }
 
-/** "period 14, oversold 25" — the parameters the user actually set. */
+/**
+ * A bound, read as a bound.
+ *
+ * "max 20" is a field name and a number; "at most 20" is English, and this
+ * sentence is the one place the strategy has to read as English. The rule is a
+ * naming convention applied uniformly to every registered rule — never a table
+ * of known parameters, which would go stale the moment a rule was added
+ * (Constitution II).
+ */
+function boundWord(name: string): string | null {
+  if (/^min(_|$)/.test(name) || /_min$/.test(name)) return 'at least';
+  if (/^max(_|$)/.test(name) || /_max$/.test(name)) return 'at most';
+  return null;
+}
+
+/**
+ * "period 14, oversold 25", "at most 20×", "at least 15%" — the parameters the
+ * user actually set, in the units they were declared in.
+ *
+ * The unit matters most here: a sentence that says a margin filter is set to
+ * 0.15 when the field says 15 describes a strategy the user did not build.
+ */
 function parameterPhrase(component: DraftComponent, model: CatalogModel | null): string {
-  const specs = model?.parameters ?? [];
+  const specs: ParamSpecV2[] = model?.parameters ?? [];
   const parts = specs
     .map((spec) => {
       const raw = component.values[spec.name];
-      return raw === undefined || raw === '' ? null : `${spec.name} ${raw}`;
+      if (raw === undefined || raw === '') return null;
+      const unit = unitOf(spec);
+      const shown =
+        unit === null ? raw : UNIT_PRESENTATION[unit].inSentence(displayValue(spec, raw));
+      const bound = boundWord(spec.name);
+      return bound === null ? `${spec.name} ${shown}` : `${bound} ${shown}`;
     })
     .filter((part): part is string => part !== null);
   return parts.length === 0 ? '' : ` (${parts.join(', ')})`;
@@ -417,6 +466,16 @@ export function describeStrategy(draft: Draft, catalog: CatalogModel[]): string 
       ? 'A bearish entry opens a short; long and short are both in play.'
       : 'Long only — bearish signals are ignored for entry.',
   );
+
+  // The point-in-time rule, said in the sentence the user reads back rather
+  // than only in the run's assumptions (FUNDAMENTALS §5.4). It appears only
+  // when a component actually reads filings, because a claim about
+  // restatements on a purely technical strategy is noise.
+  if (draft.components.some((component) => readsFacts(findModel(catalog, component.rule_name)))) {
+    sentences.push(
+      'Fundamentals are point-in-time on the filing date: a restated figure applies from its own filing forward and never backwards, and a name with no filing is gated out rather than treated as cheap.',
+    );
+  }
 
   return sentences.join(' ');
 }

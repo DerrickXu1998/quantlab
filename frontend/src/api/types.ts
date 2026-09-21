@@ -1,4 +1,4 @@
-import type { Health, Model, Run, RunDetail, RunPerformance, Trade } from './client';
+import type { Health, Model, ParamSpec, Run, RunDetail, RunPerformance, Trade } from './client';
 
 /**
  * Hand-written types for the surfaces added by `docs/CONTRACT_V2.md`.
@@ -52,6 +52,7 @@ export const SIGNAL_CATEGORIES = [
   'mean_reversion',
   'volatility',
   'volume',
+  'fundamental',
 ] as const;
 
 export type SignalCategory = (typeof SIGNAL_CATEGORIES)[number];
@@ -60,15 +61,39 @@ export const STRATEGY_ROLES = ['entry', 'exit', 'filter'] as const;
 
 export type StrategyRole = (typeof STRATEGY_ROLES)[number];
 
+/**
+ * A declared parameter, plus the unit it is expressed in.
+ *
+ * `unit` is the whole of the fundamentals parameter story: a P/E bound is a
+ * ratio, an ROE floor is a percentage and a growth threshold is a percentage,
+ * and a form that renders three bare number boxes will be typed into wrongly
+ * (FUNDAMENTALS §6). It is optional and is never guessed from a parameter's
+ * name — an undeclared unit renders as a plain number, because inferring
+ * "margin" means a fraction and silently dividing the typed value by 100 is
+ * the one failure mode worse than an unlabelled box.
+ */
+export type ParamSpecV2 = ParamSpec & { unit?: ParamUnit | string | null };
+
 /** A registry entry with the §2 additions applied. */
-export type CatalogModel = Model & {
+export type CatalogModel = Omit<Model, 'parameters'> & {
+  parameters: ParamSpecV2[];
   category: SignalCategory | 'uncategorised';
   summary: string;
   roles: StrategyRole[];
+  /**
+   * The fundamental concepts this rule reads (FUNDAMENTALS §4).
+   *
+   * Empty for every technical rule, which is what makes it the honest test of
+   * "is this a fundamental component?" — the category is presentation, this is
+   * the data dependency, and it is what says which instruments can never trade.
+   */
+  requires_facts: string[];
 };
 
 /** What `/models` may actually answer with while the backend is mid-flight. */
-export type RawCatalogModel = Model & Partial<Omit<CatalogModel, keyof Model>>;
+export type RawCatalogModel = Omit<Model, 'parameters'> & {
+  parameters: ParamSpecV2[];
+} & Partial<Omit<CatalogModel, keyof Model>>;
 
 export const CATEGORY_LABELS: Record<CatalogModel['category'], string> = {
   trend: 'Trend',
@@ -76,6 +101,7 @@ export const CATEGORY_LABELS: Record<CatalogModel['category'], string> = {
   mean_reversion: 'Mean reversion',
   volatility: 'Volatility',
   volume: 'Volume',
+  fundamental: 'Fundamentals',
   uncategorised: 'Uncategorised',
 };
 
@@ -270,6 +296,16 @@ export interface ExecutionSummary {
   rejected_shorts_disabled?: number;
   /** Entry and exit both firing on one bar for one symbol. */
   contradictions?: number;
+  /**
+   * Entries suppressed by a shut gate, split by what shut it.
+   *
+   * FUNDAMENTALS §6: without the split, a strategy whose fundamental filter
+   * excluded every name looks identical to one that simply never signalled.
+   * Both are optional — a backend that does not count them renders nothing
+   * rather than a fabricated zero.
+   */
+  gated_by_fundamental?: number;
+  gated_by_technical?: number;
 }
 
 /** Per-trade detail gained in §5. Every field is additive and so optional. */
@@ -292,7 +328,28 @@ export type RunV2 = Run & {
   strategy?: Strategy | StrategySpec | null;
   execution?: ExecutionConfig | null;
   execution_summary?: ExecutionSummary | null;
+  /** What the run's fundamental components could actually see (§5.1, §5.3). */
+  fundamentals?: RunFundamentals | null;
 };
+
+/**
+ * The fundamental half of a run's coverage, recorded by the run itself.
+ *
+ * Separate from `coverage` (which counts bars) because the two denominators
+ * genuinely differ: an instrument can have sixteen years of prices and no
+ * filings at all, and a run that reports only the first number is reporting
+ * the wrong one for a strategy gated on the second.
+ */
+export interface RunFundamentals {
+  instruments_requested: number;
+  instruments_with_facts: number;
+  /** The concepts the run loaded, from the rules' `requires_facts`. */
+  concepts?: string[];
+  /** The names that had no fact at all, and so could never trade. */
+  symbols_without_facts?: string[];
+  /** Fact lineage, the counterpart of the bar `ingest_run_ids` (§5.3). */
+  ingest_run_ids?: string[];
+}
 
 /**
  * A run list carries the same additions as a run detail: the server serialises
@@ -314,6 +371,166 @@ export interface StrategyRunRequest {
   end_date: string;
 }
 
+// --- Fundamentals (docs/FUNDAMENTALS.md) -----------------------------------
+
+/**
+ * The units a declared parameter can be expressed in.
+ *
+ * `fraction` and `percent` are deliberately two different things: a fraction
+ * is 0.15 on the wire and 15% on the screen, a percent is 15 in both. Which
+ * one a rule uses is the rule's business; getting it wrong by a factor of 100
+ * is the exact failure the execution form already avoids for stops and
+ * targets, and this is that mechanism made general.
+ */
+export const PARAM_UNITS = [
+  'ratio',
+  'percent',
+  'fraction',
+  'currency',
+  'days',
+  'quarters',
+  'sigma',
+  'count',
+] as const;
+
+export type ParamUnit = (typeof PARAM_UNITS)[number];
+
+export interface UnitPresentation {
+  /** Shown beside the field, in the same place the execution form puts USD. */
+  suffix: string;
+  /** One line under the field saying what the number means. */
+  help: string;
+  /**
+   * Multiplier from the wire value to the displayed one.
+   *
+   * 100 for a fraction (0.15 → 15), 1 for everything else. Rendering is the
+   * only thing that scales; what the draft holds and sends to the engine is
+   * always the wire value.
+   */
+  scale: number;
+  /** How the value reads inside the plain-English sentence. */
+  inSentence: (display: string) => string;
+}
+
+export const UNIT_PRESENTATION: Record<ParamUnit, UnitPresentation> = {
+  ratio: {
+    suffix: '×',
+    help: 'A ratio, not a percentage: 20 means twenty times.',
+    scale: 1,
+    inSentence: (value) => `${value}×`,
+  },
+  percent: {
+    suffix: '%',
+    help: 'A percentage, entered and stored as one: 15 means 15%.',
+    scale: 1,
+    inSentence: (value) => `${value}%`,
+  },
+  fraction: {
+    suffix: '%',
+    help: 'A percentage. Entered as 15, sent to the engine as 0.15.',
+    scale: 100,
+    inSentence: (value) => `${value}%`,
+  },
+  currency: {
+    suffix: 'USD',
+    help: 'A cash amount, in the reporting currency of the filing.',
+    scale: 1,
+    inSentence: (value) => `${value} USD`,
+  },
+  days: {
+    suffix: 'days',
+    help: 'Calendar days.',
+    scale: 1,
+    inSentence: (value) => `${value} days`,
+  },
+  quarters: {
+    suffix: 'qtrs',
+    help: 'Reported quarters, not bars.',
+    scale: 1,
+    inSentence: (value) => `${value} quarters`,
+  },
+  sigma: {
+    suffix: 'σ',
+    help: 'Standard deviations from the series’ own trend.',
+    scale: 1,
+    inSentence: (value) => `${value}σ`,
+  },
+  count: { suffix: '', help: 'A plain count.', scale: 1, inSentence: (value) => value },
+};
+
+export function unitOf(spec: ParamSpecV2): ParamUnit | null {
+  const declared = spec.unit;
+  return typeof declared === 'string' && (PARAM_UNITS as readonly string[]).includes(declared)
+    ? (declared as ParamUnit)
+    : null;
+}
+
+/**
+ * One filed fact, as `GET /instruments/{symbol}/fundamentals?as_of=` serves it.
+ *
+ * `filed_at` is the only field that answers "when could I have known this?".
+ * `period_end` answers "what period is this?", and answering the first with
+ * the second is the mistake the whole feature exists to avoid (§2).
+ *
+ * `days_stale` arrives from the server. It is not recomputed here: a staleness
+ * the browser derived from two dates it happened to have would be a second
+ * implementation of the PIT rule, and the second one is the one that drifts.
+ */
+export interface FundamentalFact {
+  concept: string;
+  value: number;
+  period_start: string | null;
+  period_end: string;
+  filed_at: string;
+  days_stale: number;
+  /** As filed: USD, shares, pure. Displayed, never converted. */
+  unit?: string | null;
+  /** The filing this row came from — what makes a restatement identifiable. */
+  accession?: string | null;
+  /**
+   * The row the PIT rule selects for this concept on the as-of date.
+   *
+   * Sent by the server when it knows; when it is absent the inspector falls
+   * back to the rule in §2 as an ordering (greatest `period_end`, then
+   * greatest `filed_at`), which is a selection, not a calculation.
+   */
+  in_force?: boolean;
+}
+
+/** One concept's real coverage window, read from the warehouse (§5.2). */
+export interface ConceptCoverage {
+  concept: string;
+  /** How many instruments have at least one fact for it. */
+  instruments: number;
+  first_filed: string | null;
+  last_filed: string | null;
+  /**
+   * The instruments that have it, when the server is willing to enumerate
+   * them. Present means the coverage warning can be concept-exact; absent
+   * means it falls back to "has no fundamentals at all", and says so.
+   */
+  symbols?: string[];
+}
+
+/**
+ * `GET /fundamentals/coverage`: what exists, before anything is run.
+ *
+ * The one figure this cannot do without is which names have nothing: 64 of
+ * 644 instruments have no filings, and a strategy with a fundamental filter
+ * over those names *cannot* trade rather than failing to find trades (§5.1).
+ * The two are indistinguishable in a result, so they have to be distinguished
+ * before the run.
+ */
+export interface FundamentalsCoverage {
+  instruments_total: number;
+  instruments_with_facts: number;
+  concepts: ConceptCoverage[];
+  /** Names with at least one fact of any concept. */
+  symbols_with_facts?: string[];
+  /** Names with none. Preferred over deriving it, when the server sends it. */
+  symbols_without_facts?: string[];
+}
+
 // --- Normalisers -----------------------------------------------------------
 
 /**
@@ -333,6 +550,12 @@ export function asCatalogModel(model: RawCatalogModel): CatalogModel {
     category: model.category ?? 'uncategorised',
     summary: model.summary ?? model.direction_semantics,
     roles: roles.length > 0 ? roles : ['entry', 'exit'],
+    // No fallback guess: a rule that declares nothing reads no facts, and
+    // claiming otherwise would put a coverage warning on a strategy that has
+    // no fundamental component in it.
+    requires_facts: (model.requires_facts ?? []).filter(
+      (concept): concept is string => typeof concept === 'string',
+    ),
   };
 }
 

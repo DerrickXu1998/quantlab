@@ -163,6 +163,20 @@ function ExecutionSummaryStrip({ summary }: { summary: ExecutionSummary }) {
         value={summary.dropped_no_bar}
         alarming
       />
+      {/* Two gates, counted apart. A strategy whose fundamental filter
+          excluded every name looks identical, on the fills alone, to one that
+          never signalled; this is the number that tells them apart. Neither is
+          lit in the loss colour — a gate being shut is not a loss. */}
+      <Counter
+        label="Gated: fundamental"
+        title="Entries suppressed because a fundamental gate was shut, including names with no filing at all — an undefined ratio gates out, it does not read as cheap."
+        value={summary.gated_by_fundamental}
+      />
+      <Counter
+        label="Gated: technical"
+        title="Entries suppressed because a technical filter was not active on that bar."
+        value={summary.gated_by_technical}
+      />
       <Counter
         label="Contradictions"
         title="Bars where an entry and an exit fired for the same symbol at once."

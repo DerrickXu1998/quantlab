@@ -63,18 +63,28 @@ class CompositionStats:
 
 
 def _fire_map(
-    component: StrategyComponent, index: int, bars: list[Any]
+    component: StrategyComponent,
+    index: int,
+    bars: list[Any],
+    facts: Any = None,
 ) -> dict[str, _Firing]:
     """Run one component over one instrument's bars.
 
     Returns the last firing per date. A rule that emits twice on one date for
     one instrument is emitting a state, not an event, and only its final word
     on that date matters.
+
+    ``facts`` is passed only to rules that declared they read them. Handing it
+    to every rule would mean every existing rule had to grow a keyword it never
+    uses, and the declaration is what the runner already keys on to decide
+    which concepts to load.
     """
     rule = component.resolve(index)
     if len(bars) < rule.lookback_days:
         return {}
     parameters = rule.effective_params(component.parameters)
+    if rule.requires_facts:
+        parameters["facts"] = facts
     out: dict[str, _Firing] = {}
     for event in rule.compute(bars, **parameters):
         direction = event.direction
@@ -151,11 +161,17 @@ def compose(
     spec: StrategySpec,
     bars_by_symbol: dict[str, list[Any]],
     symbols: Iterable[str] | None = None,
+    facts_by_symbol: dict[str, Any] | None = None,
 ) -> tuple[list[Decision], CompositionStats]:
     """Evaluate ``spec`` over each instrument and emit its decisions.
 
     Output is sorted by ``(symbol, date, kind)`` so the same spec over the same
     bars produces a byte-identical decision list (Constitution VI).
+
+    ``facts_by_symbol`` carries point-in-time fundamentals for the instruments
+    that have them. A symbol missing from it simply has none, and the rules
+    that read facts shut their gates rather than treating absence as zero
+    (docs/FUNDAMENTALS.md §5.5).
     """
     selection = sorted(symbols) if symbols is not None else sorted(bars_by_symbol)
     entries = [(i, c) for i, c in enumerate(spec.components) if c.role == "entry"]
@@ -173,8 +189,9 @@ def compose(
         dates = [bar.date for bar in bars]
         window = spec.combine_window_days
 
+        facts = (facts_by_symbol or {}).get(symbol)
         active_by_component = {
-            index: _active(_fire_map(component, index, bars), dates, window)
+            index: _active(_fire_map(component, index, bars, facts), dates, window)
             for index, component in enumerate(spec.components)
         }
 
