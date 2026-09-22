@@ -1,4 +1,4 @@
-import type { ComponentType, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { Building2, FlaskConical, Filter, type LucideIcon } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { FillColumn } from '../../components/ui/layout';
@@ -132,11 +132,19 @@ export function ResearchShell({ mode, onModeChange, actions, children }: Researc
         <p className="mt-2 text-xs text-muted-foreground">{definition.purpose}</p>
       </header>
 
+      {/* A flex column, not a plain block.
+          Each mode's root is a `FillColumn`, whose `flex-1` is inert unless
+          its parent is itself a flex container — so as a block this region
+          handed every mode its natural height and the whole destination
+          scrolled the page instead of filling the viewport: 1,838px of
+          document against a 900px window, with the accounts below the fold.
+          `min-h-0` is what lets it shrink far enough for the regions inside
+          to become the scroll edge. */}
       <div
         role="tabpanel"
         id={`research-panel-${mode}`}
         aria-labelledby={`research-tab-${mode}`}
-        className="min-h-0 flex-1"
+        className="flex min-h-0 flex-1 flex-col"
       >
         {children}
       </div>
@@ -166,7 +174,7 @@ export function ResearchPanel({
   actions?: ReactNode;
   children: ReactNode;
   className?: string;
-  icon?: ComponentType<{ size?: number; strokeWidth?: number; className?: string }>;
+  icon?: LucideIcon;
 }) {
   return (
     <section className={cn('flex min-h-0 flex-col border border-border bg-card', className)}>

@@ -12,7 +12,7 @@ import json
 import time
 from dataclasses import asdict
 from datetime import date
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_args
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import StreamingResponse
@@ -24,6 +24,7 @@ from quantlab.replay import engine as replay_engine
 from quantlab.research import errors as research_errors
 from quantlab.research import performance, runner
 from quantlab.signals import registry as signal_registry
+from quantlab.storage import facts as fact_defs
 from quantlab.strategy import StrategySpec, StrategyValidationError, templates
 from quantlab.streaming import bus as streaming_bus
 from quantlab.streaming import live as streaming_live
@@ -148,6 +149,239 @@ def list_signals(
         limit=limit,
         offset=offset,
     )
+
+
+# --- Research: the company, the universe, the screen (docs/RESEARCH.md) ----
+#
+# Thin handlers as everywhere else: these parse a query string and map an
+# absent row to a status code. The point-in-time resolution, the ratios and the
+# coverage arithmetic all live in storage, which is the only place they exist
+# once (Constitution I and V).
+
+
+def _as_of(value: date | None) -> str:
+    """The date to resolve facts on. Today when the caller names none."""
+    return (value or date.today()).isoformat()
+
+
+def _concept_filter(concepts: str | None) -> list[str] | None:
+    """Parse ``concepts=a,b`` into a validated filter, or None for everything.
+
+    An unknown concept is refused rather than silently dropped: a filter that
+    quietly matches nothing returns an empty inspector, which looks exactly
+    like a company that has filed nothing.
+    """
+    if not concepts:
+        return None
+    wanted = [item.strip() for item in concepts.split(",") if item.strip()]
+    unknown = sorted(set(wanted) - fact_defs.KNOWN_CONCEPTS)
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"unknown concepts: {unknown}")
+    return sorted(set(wanted))
+
+
+@router.get(
+    "/instruments/{symbol}/fundamentals",
+    response_model=list[schemas.FundamentalFact],
+    tags=["instruments"],
+    operation_id="getFundamentals",
+    dependencies=[Depends(require_seeded)],
+)
+def get_fundamentals(
+    request: Request,
+    symbol: Annotated[str, Path(pattern=SYMBOL_PATTERN)],
+    as_of: date | None = None,
+    concepts: Annotated[
+        str | None, Query(description="Comma-separated concepts; default is all of them")
+    ] = None,
+) -> list[dict]:
+    """The accounts that were public on a date, each with the filing behind it.
+
+    A bare array rather than the ``{total, items}`` envelope: this is one
+    company's balance sheet, not a page of a collection, and there is nothing
+    to page through.
+    """
+    store = backend(request)
+    if not store.instrument_exists(symbol):
+        raise HTTPException(status_code=404, detail=f"unknown symbol: {symbol}")
+    return store.facts_as_of(symbol, _as_of(as_of), _concept_filter(concepts))
+
+
+@router.get(
+    "/fundamentals/coverage",
+    response_model=schemas.FundamentalsCoverage,
+    tags=["instruments"],
+    operation_id="getFundamentalsCoverage",
+    dependencies=[Depends(require_seeded)],
+)
+def get_fundamentals_coverage(request: Request) -> dict:
+    """What has been filed at all, so a screen can say what it could not measure."""
+    return backend(request).fundamentals_coverage()
+
+
+@router.get(
+    "/instruments/{symbol}/overview",
+    response_model=schemas.CompanyOverview,
+    tags=["instruments"],
+    operation_id="getCompanyOverview",
+    dependencies=[Depends(require_seeded)],
+)
+def get_company_overview(
+    request: Request,
+    symbol: Annotated[str, Path(pattern=SYMBOL_PATTERN)],
+    as_of: date | None = None,
+) -> dict:
+    """One request rather than the four it composes.
+
+    The page needs price bounds, the point-in-time accounts, coverage and
+    signal history before it can render at all; issuing those separately would
+    paint it in four stages, each with its own failure, and a page that is
+    briefly half-wrong is worse than one that is briefly empty.
+    """
+    overview = backend(request).company_overview(symbol, _as_of(as_of))
+    if overview is None:
+        raise HTTPException(status_code=404, detail=f"unknown symbol: {symbol}")
+    return overview
+
+
+@router.get(
+    "/universes",
+    response_model=schemas.UniverseList,
+    tags=["instruments"],
+    operation_id="listUniverses",
+    dependencies=[Depends(require_seeded)],
+)
+def list_universes(request: Request) -> dict:
+    """The dated membership lists a screen may be run over."""
+    return backend(request).list_universes()
+
+
+#: The metric vocabulary, taken from the response schema so the request cannot
+#: accept a metric the response has no column for.
+SCREEN_METRICS: tuple[str, ...] = get_args(schemas.ScreenMetric)
+
+
+def _screen_metrics(metrics: str | None) -> list[str]:
+    if not metrics:
+        return list(SCREEN_METRICS)
+    wanted = [item.strip() for item in metrics.split(",") if item.strip()]
+    unknown = sorted(set(wanted) - set(SCREEN_METRICS))
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"unknown metrics: {unknown}")
+    return wanted
+
+
+def _screen_constraints(constraints: str | None) -> list[tuple[str, float | None, float | None]]:
+    """Parse ``metric:min:max,metric:min:max``; an empty bound is unbounded.
+
+    A GET with the whole screen in the query string, so a screen is linkable
+    and a colleague can be sent the exact one that was run rather than a
+    description of it.
+    """
+    if not constraints:
+        return []
+    parsed: list[tuple[str, float | None, float | None]] = []
+    for clause in constraints.split(","):
+        clause = clause.strip()
+        if not clause:
+            continue
+        parts = clause.split(":")
+        if len(parts) != 3:
+            raise HTTPException(
+                status_code=422,
+                detail=f"constraint must be metric:min:max, got {clause!r}",
+            )
+        metric, low_text, high_text = (part.strip() for part in parts)
+        if metric not in SCREEN_METRICS:
+            raise HTTPException(status_code=422, detail=f"unknown metric: {metric}")
+        try:
+            low = float(low_text) if low_text else None
+            high = float(high_text) if high_text else None
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422, detail=f"constraint bounds must be numbers: {clause!r}"
+            ) from exc
+        if low is not None and high is not None and low > high:
+            raise HTTPException(
+                status_code=422, detail=f"constraint admits nothing: {clause!r}"
+            )
+        parsed.append((metric, low, high))
+    return parsed
+
+
+def _universe_detail(request: Request, universe: str, as_of: str) -> str:
+    """Say which kind of miss it was: a name nobody has, or a date nobody reaches.
+
+    Only ever built on the failure path. "Unknown universe" and "that universe
+    does not go back that far" call for different corrections, and one message
+    covering both would send the caller to fix the wrong half of the request.
+    """
+    dates = [
+        item["as_of"]
+        for item in backend(request).list_universes()["items"]
+        if item["name"] == universe
+    ]
+    if not dates:
+        return f"unknown universe: {universe}"
+    return (
+        f"universe {universe} has no snapshot on or before {as_of}; "
+        f"its earliest is {min(dates)}"
+    )
+
+
+@router.get(
+    "/screen",
+    response_model=schemas.ScreenResult,
+    tags=["instruments"],
+    operation_id="screen",
+    dependencies=[Depends(require_seeded)],
+)
+def screen(
+    request: Request,
+    universe: Annotated[str, Query(min_length=1, description="A universe from /universes")],
+    as_of: date | None = None,
+    metrics: Annotated[
+        str | None, Query(description="Comma-separated metrics; default is all of them")
+    ] = None,
+    constraints: Annotated[
+        str | None, Query(description="metric:min:max,metric:min:max; empty bound is unbounded")
+    ] = None,
+    sort_by: schemas.ScreenMetric | None = None,
+    descending: bool = False,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 100,
+) -> dict:
+    """Narrow a named universe by filed ratios, point-in-time.
+
+    ``universe`` is required by the index rather than by taste:
+    ``fundamentals_pit_idx`` leads with ``instrument_id``, so an unbounded
+    screen falls to a sequential scan and takes 6.7 s against 857 ms bounded
+    (docs/RESEARCH.md §2). It is also what the work is -- nobody screens
+    "everything".
+    """
+    wanted = _screen_metrics(metrics)
+    parsed = _screen_constraints(constraints)
+    # A constrained or sorted metric is reported whether or not it was asked
+    # for: its coverage is the only thing that separates "few qualified" from
+    # "most were never measured", and a sort on an absent column is silent.
+    for metric in [*(metric for metric, _, _ in parsed), *([sort_by] if sort_by else [])]:
+        if metric not in wanted:
+            wanted.append(metric)
+
+    resolved = _as_of(as_of)
+    result = backend(request).screen(
+        universe=universe,
+        as_of=resolved,
+        metrics=wanted,
+        constraints=parsed,
+        sort_by=sort_by,
+        descending=descending,
+        limit=limit,
+    )
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=_universe_detail(request, universe, resolved)
+        )
+    return result
 
 
 # --- Model catalog and experiment runs (feature 005) -----------------------

@@ -497,6 +497,21 @@ export interface FundamentalFact {
   /** The filing this row came from — what makes a restatement identifiable. */
   accession?: string | null;
   /**
+   * Instant or duration — which one decides how the figure may be used.
+   *
+   * A balance-sheet figure is an instant and a P&L figure spans a period, and
+   * mixing them is how a quarterly revenue ends up in an annual P/E, wrong by
+   * four times (docs/FUNDAMENTALS.md §2).
+   */
+  scope?: string | null;
+  /**
+   * The row's period ends after the as-of date, though it was filed before it.
+   *
+   * Legitimate and rare — a filing can carry a forward-looking period — but it
+   * has to be visible rather than silently averaged in with the rest.
+   */
+  forward_dated?: boolean;
+  /**
    * The row the PIT rule selects for this concept on the as-of date.
    *
    * Sent by the server when it knows; when it is absent the inspector falls

@@ -19,12 +19,17 @@ import { useResearchRoute } from '../research/shell/useResearchRoute';
  * still lands on the right name.
  */
 export function ResearchPage() {
-  const { mode, symbol, setMode, selectSymbol } = useResearchRoute();
+  const { mode, symbol, asOf, setMode, setAsOf, selectSymbol } = useResearchRoute();
 
   return (
     <ResearchShell mode={mode} onModeChange={setMode}>
       {mode === 'company' ? (
-        <CompanyView symbol={symbol} onSelectSymbol={(next) => selectSymbol(next)} />
+        <CompanyView
+          symbol={symbol}
+          onSelectSymbol={(next) => selectSymbol(next)}
+          asOf={asOf ?? undefined}
+          onAsOfChange={setAsOf}
+        />
       ) : mode === 'screen' ? (
         <ScreenView onSelectSymbol={(next) => selectSymbol(next)} />
       ) : (

@@ -37,10 +37,7 @@ export function Panel({
   testId?: string;
 }) {
   return (
-    <Card
-      data-testid={testId}
-      className={cn('flex min-h-0 flex-col', fill && 'flex-1', className)}
-    >
+    <Card data-testid={testId} className={cn('flex min-h-0 flex-col', fill && 'flex-1', className)}>
       <CardHeader className="shrink-0">
         <div className="flex min-w-0 items-center gap-2">
           <Icon size={16} strokeWidth={1.5} className="shrink-0 text-muted-foreground" />
@@ -109,8 +106,8 @@ export function PanelState({
         action={
           <Note>
             <p>
-              This is a gap in the API, not a fact about the company. Nothing here means &ldquo;there
-              is none&rdquo;.
+              This is a gap in the API, not a fact about the company. Nothing here means
+              &ldquo;there is none&rdquo;.
             </p>
             {retry}
           </Note>
@@ -167,9 +164,7 @@ export function PanelEmpty({
   icon?: LucideIcon;
   testId?: string;
 }) {
-  return (
-    <EmptyState icon={icon} title={title} detail={detail} testId={testId} className="my-4" />
-  );
+  return <EmptyState icon={icon} title={title} detail={detail} testId={testId} className="my-4" />;
 }
 
 function capitalise(text: string): string {

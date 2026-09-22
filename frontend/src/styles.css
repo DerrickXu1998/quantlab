@@ -124,36 +124,6 @@ body {
 }
 
 /*
-  Dock chrome (tab strips, borders, sashes, drop indicators, floating frames)
-  re-pointed at the app's own tokens so it follows light/dark with everything
-  else. Both dockview theme classes get the same mapping — the tokens already
-  differ per theme, so there is no need for two palettes here.
-*/
-.dockview-theme-light,
-.dockview-theme-dark {
-  --dv-group-view-background-color: hsl(var(--card));
-  --dv-tabs-and-actions-container-background-color: hsl(var(--muted));
-  --dv-activegroup-visiblepanel-tab-background-color: hsl(var(--card));
-  --dv-activegroup-visiblepanel-tab-color: hsl(var(--foreground));
-  --dv-activegroup-hiddenpanel-tab-background-color: hsl(var(--muted));
-  --dv-activegroup-hiddenpanel-tab-color: hsl(var(--muted-foreground));
-  --dv-inactivegroup-visiblepanel-tab-background-color: hsl(var(--card));
-  --dv-inactivegroup-visiblepanel-tab-color: hsl(var(--muted-foreground));
-  --dv-inactivegroup-hiddenpanel-tab-background-color: hsl(var(--muted));
-  --dv-inactivegroup-hiddenpanel-tab-color: hsl(var(--muted-foreground));
-  --dv-separator-border: hsl(var(--border));
-  --dv-tab-divider-color: hsl(var(--border));
-  --dv-paneview-header-border-color: hsl(var(--border));
-  --dv-active-sash-color: hsl(var(--primary));
-  --dv-drag-over-background-color: hsl(var(--primary) / 0.16);
-  --dv-drag-over-border-color: hsl(var(--primary));
-  --dv-edge-dock-indicator-color: hsl(var(--primary));
-  --dv-floating-titlebar-background-color: hsl(var(--muted));
-  --dv-floating-group-border: 1px solid hsl(var(--border));
-  --dv-icon-hover-background-color: hsl(var(--accent));
-}
-
-/*
   Film grain: one static SVG noise tile at 3% over the background only. Sits
   under everything interactive and never receives a pointer event.
 */

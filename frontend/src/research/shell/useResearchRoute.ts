@@ -19,6 +19,16 @@ export interface ResearchRoute {
   mode: ResearchMode;
   /** The instrument the Company mode is looking at, when one is chosen. */
   symbol: string | null;
+  /**
+   * The date the accounts are read as of, when the address carries one.
+   *
+   * Null means "the view decides", which is today. Carried here because a
+   * company is only worth bookmarking together with the date it was read
+   * on -- the same symbol on two dates is two different answers, so a link
+   * that drops the date quietly answers a different question.
+   */
+  asOf: string | null;
+  setAsOf: (asOf: string) => void;
   setMode: (mode: ResearchMode) => void;
   /** Select a name; from Screen this also walks the user over to Company. */
   selectSymbol: (symbol: string, options?: { switchToCompany?: boolean }) => void;
@@ -56,21 +66,27 @@ export function useResearchRoute(): ResearchRoute {
     ? (route.params.get('symbol') ?? route.params.get('instrument'))
     : null;
 
+  const asOf = onResearch ? route.params.get('as_of') : null;
+
   const write = useCallback(
-    (next: { mode?: ResearchMode; symbol?: string | null }) => {
+    (next: { mode?: ResearchMode; symbol?: string | null; asOf?: string | null }) => {
       const params = new URLSearchParams();
       const nextMode = next.mode ?? mode;
       if (nextMode !== DEFAULT_MODE) params.set('mode', nextMode);
       const nextSymbol = next.symbol === undefined ? symbol : next.symbol;
       if (nextSymbol) params.set('symbol', nextSymbol);
+      const nextAsOf = next.asOf === undefined ? asOf : next.asOf;
+      if (nextAsOf) params.set('as_of', nextAsOf);
       replaceRoute('research', params);
     },
-    [mode, symbol],
+    [mode, symbol, asOf],
   );
 
   return {
     mode,
     symbol: symbol && symbol.length > 0 ? symbol : null,
+    asOf: asOf && asOf.length > 0 ? asOf : null,
+    setAsOf: useCallback((next: string) => write({ asOf: next }), [write]),
     setMode: useCallback((next: ResearchMode) => write({ mode: next }), [write]),
     selectSymbol: useCallback(
       (next: string, options?: { switchToCompany?: boolean }) =>

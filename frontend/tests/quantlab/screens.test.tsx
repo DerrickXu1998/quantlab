@@ -499,8 +499,11 @@ describe('cross-destination run state', () => {
     window.location.hash = '#/research';
     renderApp();
 
-    // The Research dock renders every panel (the dockview mock), so the run
-    // form is right there.
+    // Research opens on Company now, and running a rule is its own mode. The
+    // dock used to render all six panels at once, which is why this reached
+    // straight for the form; the walk to Test is the destination being
+    // legible rather than dense (docs/RESEARCH.md §4).
+    await user.click(await screen.findByRole('tab', { name: /test/i }));
     await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
     await user.click(await screen.findByRole('button', { name: /run backtest/i }));
     expect(await screen.findByTestId('run-results')).toBeInTheDocument();

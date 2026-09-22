@@ -173,11 +173,20 @@ with the ingest concept map, not the UI.
 | 8 concepts, no instrument bound | Parallel Seq Scan, 1.78M rows filtered away | **6,700 ms** |
 | 5 concepts, `instrument_id = ANY(644)` | index scan | **836 ms** |
 
-Eight times faster, and sub-second. So the screener takes a universe as an
-argument rather than defaulting to "everything". That is also how research
-actually works — you screen *within* a list — so the constraint and the product
-agree. There is one real universe available, `liquid-500-ftse-core`, with 598
-members.
+Eight times faster. So the screener takes a universe as an argument rather than
+defaulting to "everything". That is also how research actually works — you
+screen *within* a list — so the constraint and the product agree. There is one
+real universe available, `liquid-500-ftse-core`, with 598 members.
+
+**The 836ms is the SQL, and the screen is not that fast.** Measured end to end
+against the live warehouse it is **3–5 seconds**: the query is a fraction of
+it, and the rest is the driver fetching ~348,000 rows and Python building the
+fact series over them. Narrowing the requested metrics cuts it proportionally
+(three metrics is 3.1s). The obvious optimisation — dropping rows older than
+`max_stale_days` before building — is declined on purpose: in a restatement it
+can change which period wins, and a screen that disagrees with a backtest is
+the one outcome this design is organised to prevent. So the screen is an
+explicit action with a visible working state, never a keystroke.
 
 ### What is already built and merely unrouted
 
@@ -295,3 +304,102 @@ point-in-time implementation in the system.
 - **The dock is retired from Research**, with saved layouts falling back rather
   than erroring. It was added to solve arrangement, and the reported problem is
   comprehension — the two want opposite things.
+
+---
+
+## 7. What shipped, verified against the warehouse
+
+Every screenshot below was captured against the live warehouse through an
+isolated backend, not a fixture.
+
+### Company
+
+![Company mode, CAT.US as of 2019-05-15](./img/research-company.png)
+
+`#/research?symbol=CAT.US&as_of=2019-05-15`. The address carries both halves of
+the question, so a company is a bookmark — and a company *on a date*, because a
+link that drops the date silently answers a different question.
+
+The whole page moves with that date. At 2019-05-15 the last close is 127.30,
+the chart is cut there, and 453 signals are counted with their last firings on
+2019-05-13, 05-14 and 04-04. Ask for today instead and the same name reports
+828.
+
+The **As filed** panel is the one that earns the design. Three different
+vintages sit in one table: cash filed 2019-05-06 for the quarter ending
+2019-03-31, nine days old; gross profit still carrying the 2019-02-14 annual
+filing, three months old; and operating cash flow last filed **2011-08-04**,
+eight years stale and marked so. Coverage states 13 concepts filed and one —
+net short position — never filed at all, because an absent concept is not a
+zero.
+
+### Screen
+
+![Screen mode over liquid-500-ftse-core](./img/research-screen.png)
+
+The exclusion ledger keeps *shown*, *did not qualify*, *never measured* and
+*universe* as four separate figures and never sums them. Coverage is reported
+for every metric whether or not it is constrained — P/E 217 of 598 (36%),
+gross margin 176 (29%), leverage 194 (32%) — each naming the concepts it needs.
+Unmeasured cells are em dashes. `AAL.LON` is a row of dashes: a name in the
+universe that has filed nothing.
+
+### Test
+
+![Test mode](./img/research-test.png)
+
+All 22 rules, grouped by category, each with its roles, lookback and the
+concepts it reads. A rule that has never been run says so rather than being
+absent. Selecting `accrual-reversal` states in the form what it needs —
+*"Instruments that never filed them cannot trade on this rule, and are reported
+as uncovered in the result rather than silently skipped."*
+
+### Three defects found only by running it
+
+None of these showed up in 415 passing tests; all three needed a browser and a
+real database.
+
+1. **The company page was not point-in-time.** Bars and facts were bounded by
+   `as_of`; signals were not. Asked for CAT on 2024-06-30 it returned accounts
+   filed by 2024-05-01, a chart cut at 2024-06-30, and a last signal dated
+   **2026-09-01**. Fixed in the query, with a test on the bound.
+2. **The destination scrolled the page instead of filling the viewport** —
+   1,838px of document in a 900px window, with the accounts below the fold. The
+   mode region was a block, so each mode's `FillColumn` had an inert `flex-1`
+   and took its natural height.
+3. **Test mode overflowed by 91px** and its results panel collided with the
+   footer, because the configuration form was `shrink-0` and a rule with
+   several parameters is tall.
+
+### A data-quality finding, which is not a bug in this change
+
+The top of a cheap-P/E screen is contaminated. `JAKK.US` screens at a P/E of
+0.028 and an ROE of 3,982%. The warehouse holds two filings of its FY2025 net
+income:
+
+| value | filed | accession |
+|---|---|---|
+| 9,871,000 | 2026-03-02 | 0001185185-26-000723 |
+| **9,871,000,000** | 2026-04-22 | 0001185185-26-001465 |
+
+Same digits, 1000× apart. JAKKS has $249m of equity and $442m of total assets,
+so a $9.87bn profit would be twenty-two times its balance sheet — the later row
+is a scale error, and point-in-time correctly prefers the later filing.
+
+**This is the screen being right.** `pe-filter` reads the identical figure in a
+backtest, which is the contract this design is built on; a screen that quietly
+disagreed with the rules would be the worse outcome. But it means the ingest is
+carrying bad scale, and not once: **126 `(instrument, concept, period_end)`
+groups** hold an exact 1000× duplicate. It belongs with the ingest's decimals
+handling, alongside the unmapped-EPS work in §2.
+
+## 8. What was retired
+
+Dockview, and with it `src/workspace/`, `SignalsPage`, the dock's theme
+mapping, its stylesheet, its test double and the dependency itself. Research
+was its only consumer. It was added to solve arrangement; the reported problem
+was comprehension, and the two want opposite things.
+
+`usePanelSize` stays. It declares its own structural shape and never imported
+the library, so charts size themselves as before; its test fake moved to
+`tests/mocks/panel-api.ts`.

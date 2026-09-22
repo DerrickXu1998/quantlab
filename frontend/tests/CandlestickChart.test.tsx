@@ -4,7 +4,7 @@ import { CandlestickChart } from '../src/components/CandlestickChart';
 import { PanelApiProvider } from '../src/components/usePanelSize';
 import { ThemeProvider } from '../src/theme/ThemeProvider';
 import { makeBar } from './fixtures';
-import { createFakePanelApi } from './mocks/dockview-react';
+import { createFakePanelApi } from './mocks/panel-api';
 import {
   createdCharts,
   createdMarkerPlugins,

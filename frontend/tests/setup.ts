@@ -5,5 +5,3 @@ import { vi } from 'vitest';
 // test that mounts a chart runs against the fake in tests/mocks/lightweight-charts.ts.
 vi.mock('lightweight-charts', async () => import('./mocks/lightweight-charts'));
 
-// dockview lays out from real element dimensions; jsdom reports every box as 0x0.
-vi.mock('dockview-react', async () => import('./mocks/dockview-react'));
