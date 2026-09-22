@@ -57,7 +57,7 @@ export function AsOfControl({ value, onChange, today, resolved }: AsOfControlPro
   const presets = presetsFor(today);
 
   return (
-    <div className="shrink-0">
+    <div className="w-full min-w-0 lg:w-auto lg:shrink-0">
       <label
         htmlFor={inputId}
         className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground"
@@ -65,7 +65,7 @@ export function AsOfControl({ value, onChange, today, resolved }: AsOfControlPro
         As of
       </label>
       <div className="mt-1 flex flex-wrap items-center gap-2">
-        <div className="relative">
+        <div className="relative min-w-0 flex-1 sm:flex-none">
           <CalendarDays
             size={16}
             strokeWidth={1.5}
@@ -78,7 +78,7 @@ export function AsOfControl({ value, onChange, today, resolved }: AsOfControlPro
             max={today}
             value={value}
             onChange={(event) => onChange(event.target.value)}
-            className={cn(fieldClasses, 'w-44 pl-8')}
+            className={cn(fieldClasses, 'w-full pl-8 sm:w-44')}
           />
         </div>
         <ButtonGroup label="As-of presets" title="Move the as-of date back">
@@ -89,7 +89,7 @@ export function AsOfControl({ value, onChange, today, resolved }: AsOfControlPro
               aria-pressed={preset.value === value}
               onClick={() => onChange(preset.value)}
               className={cn(
-                'h-9 rounded-sm border px-2 font-mono text-[10px] uppercase tracking-[0.12em] transition-colors',
+                'h-11 rounded-sm border px-3 font-mono text-[10px] uppercase tracking-[0.12em] transition-colors lg:h-9 lg:px-2',
                 preset.value === value
                   ? 'border-primary text-primary'
                   : 'border-border text-muted-foreground hover:text-foreground',

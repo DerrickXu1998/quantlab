@@ -314,7 +314,7 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
           explainer="When on, a bearish entry opens a short and a bullish signal covers it. When off, bearish entries are simply ignored."
         >
           {({ id, describedBy }) => (
-            <span className="flex h-9 items-center">
+            <label htmlFor={id} className="flex h-11 w-11 items-center lg:h-9 lg:w-auto">
               <input
                 id={id}
                 type="checkbox"
@@ -323,7 +323,7 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
                 onChange={(event) => patch({ allow_shorts: event.target.checked })}
                 className="h-4 w-4 rounded-sm border-input accent-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               />
-            </span>
+            </label>
           )}
         </Field>
       </Section>

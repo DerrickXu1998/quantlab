@@ -18,10 +18,18 @@ const buttonVariants = cva(
           'border-border bg-card text-foreground hover:border-primary/50 hover:text-primary disabled:opacity-40',
         ghost: 'border-transparent text-muted-foreground hover:text-foreground disabled:opacity-40',
       },
+      // Touch first, then the dense desktop row back at `lg`.
+      //
+      // A 28px control is comfortable with a mouse and unreliable with a
+      // thumb; 44px is the floor a finger hits. The desktop heights are not
+      // changed -- they return at `lg`, so the terminal stays as tight as it
+      // was on the screens it was designed for. Horizontal padding grows with
+      // the height so the proportions hold rather than the label rattling
+      // inside a tall box.
       size: {
-        default: 'h-8 px-3',
-        sm: 'h-7 px-2.5',
-        icon: 'h-8 w-8',
+        default: 'h-11 px-4 lg:h-8 lg:px-3',
+        sm: 'h-11 px-3.5 lg:h-7 lg:px-2.5',
+        icon: 'h-11 w-11 lg:h-8 lg:w-8',
       },
     },
     defaultVariants: {
