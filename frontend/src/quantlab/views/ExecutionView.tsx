@@ -1,7 +1,6 @@
 import { Activity, ListOrdered, ServerCrash } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Instrument } from '../../api/client';
-import { Button } from '../../components/ui/button';
 import { CascadeItem } from '../chrome/Cascade';
 import { EmptyState } from '../chrome/EmptyState';
 import { FlashNumber } from '../chrome/FlashNumber';
@@ -22,12 +21,9 @@ const SIM_POSITIONS = 'Netted from the session’s simulated fills and marked ag
 export function ExecutionView({
   instruments,
   feedError,
-  onFeedRetry,
 }: {
   instruments: Instrument[];
   feedError: string | null;
-  /** Offered on the feed-error state; absent in contexts that cannot retry. */
-  onFeedRetry?: () => void;
 }) {
   const [symbol, setSymbol] = useState<string | null>(null);
   const [fills, setFills] = useState<Fill[]>([]);
@@ -59,13 +55,6 @@ export function ExecutionView({
         tone="error"
         title="Feed disconnected"
         detail={feedError}
-        action={
-          onFeedRetry ? (
-            <Button type="button" variant="outline" size="sm" onClick={onFeedRetry}>
-              Retry
-            </Button>
-          ) : undefined
-        }
       />
     );
   }
@@ -84,12 +73,20 @@ export function ExecutionView({
   return (
     // Order flow reads left to right: the book, then the ticket. Fills and
     // positions close the loop along the bottom.
-    <div className="grid min-h-0 flex-1 grid-cols-1 gap-px overflow-y-auto bg-border lg:grid-cols-[minmax(0,1fr)_320px] lg:grid-rows-[minmax(0,1fr)_auto]">
-      <CascadeItem index={0} className="min-w-0 bg-background p-4">
+    //
+    // The bottom track is `auto`, not a fixed cap: a track whose maximum is a
+    // length grows to that length whether or not anything needs it, which is
+    // how two small empty states were holding a 240px band open. Sized by its
+    // content and limited by a max-height on the cells, it takes the ~140px it
+    // needs and the order book keeps the rest.
+    <div className="grid min-h-0 flex-1 grid-cols-1 gap-px overflow-y-auto bg-border lg:grid-cols-[minmax(0,1fr)_340px] lg:grid-rows-[minmax(0,1fr)_auto] lg:overflow-hidden">
+      <CascadeItem index={0} className="flex min-h-0 min-w-0 flex-col bg-background p-4">
         <Panel
           title={symbol ? `${symbol} — order book` : 'Order book'}
-          className="flex h-full flex-col border-0"
-          bodyClassName="min-h-0 flex-1 p-0"
+          fill
+          scroll
+          className="border-0"
+          bodyClassName="p-0"
           simulated={SIM_BOOK}
           actions={
             <FlashNumber
@@ -108,8 +105,8 @@ export function ExecutionView({
         </Panel>
       </CascadeItem>
 
-      <CascadeItem index={1} className="bg-background p-4">
-        <Panel title="Order ticket" className="border-0" simulated={SIM_FILLS}>
+      <CascadeItem index={1} className="flex min-h-0 flex-col bg-background p-4">
+        <Panel title="Order ticket" fill scroll className="border-0" simulated={SIM_FILLS}>
           <OrderTicket
             instruments={instruments}
             symbol={symbol}
@@ -119,14 +116,28 @@ export function ExecutionView({
         </Panel>
       </CascadeItem>
 
-      <CascadeItem index={2} className="min-w-0 bg-background">
-        <Panel title="Recent fills" className="border-0" bodyClassName="p-0" simulated={SIM_FILLS}>
+      <CascadeItem index={2} className="flex min-h-0 min-w-0 flex-col bg-background lg:max-h-[15rem]">
+        <Panel
+          title="Recent fills"
+          fill
+          scroll
+          className="border-0"
+          bodyClassName="p-0"
+          simulated={SIM_FILLS}
+        >
           <FillsTable fills={fills} />
         </Panel>
       </CascadeItem>
 
-      <CascadeItem index={3} className="min-w-0 bg-background">
-        <Panel title="Positions" className="border-0" bodyClassName="p-0" simulated={SIM_POSITIONS}>
+      <CascadeItem index={3} className="flex min-h-0 min-w-0 flex-col bg-background lg:max-h-[15rem]">
+        <Panel
+          title="Positions"
+          fill
+          scroll
+          className="border-0"
+          bodyClassName="p-0"
+          simulated={SIM_POSITIONS}
+        >
           <ExecutionPositions positions={positions} />
         </Panel>
       </CascadeItem>

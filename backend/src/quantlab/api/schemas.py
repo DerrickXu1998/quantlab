@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel
 
 Dataset = Literal["sqlite", "warehouse"]
 """Which store answered. Two runs from different datasets are never directly
@@ -16,16 +16,16 @@ class Health(BaseModel):
     dataset: Dataset
     seeded: bool
     signal_count: int
+    #: Whether this deployment demands a bearer token. The SPA reads it to
+    #: decide whether to show a sign-in gate at all, so the local demo still
+    #: boots straight into the app.
+    auth_required: bool = True
 
 
 class Instrument(BaseModel):
     symbol: str
     name: str
     currency: str
-    # "macro" labels the warehouse's BoE/FRED pseudo-instruments (a series
-    # loaded as bars); it labels, never filters -- they are served like any
-    # other instrument.
-    kind: Literal["equity", "macro"]
     # Synthetic-demo only: a generated instrument is built to follow a known
     # regime, which is what makes the demo assertable. Real ingested
     # instruments have no such label, so the field is nullable rather than
@@ -53,63 +53,6 @@ class PriceBar(BaseModel):
 class PriceBarList(BaseModel):
     total: int
     items: list[PriceBar]
-
-
-# --- Fundamentals (point-in-time, warehouse-only data) ------------------------
-
-
-class FundamentalConcept(BaseModel):
-    """One (concept, provider, unit) group of an instrument's fundamentals.
-    ``derived`` marks concepts computed at read time from stored ones (e.g.
-    short_volume_ratio), which are never themselves stored."""
-
-    concept: str
-    provider: str
-    unit: str
-    fact_count: int
-    first_filed: str
-    last_filed: str
-    derived: bool
-
-
-class FundamentalConceptList(BaseModel):
-    symbol: str
-    total: int
-    items: list[FundamentalConcept]
-
-
-class FundamentalFact(BaseModel):
-    """One fact exactly as filed. ``filed_at`` is the point-in-time anchor --
-    the date the market could first know the value; ``period_end`` is the
-    fiscal period the value describes. A restatement is a separate row with a
-    later filed_at, never an edit."""
-
-    value: float
-    period_start: str | None = None  # null for instantaneous (balance-sheet) facts
-    period_end: str
-    filed_at: str
-    provider: str
-    unit: str
-    holder: str | None = None  # per-holder filings (FCA short positions)
-
-
-class FundamentalSeriesPoint(BaseModel):
-    """One date of an as-of series: the value knowable on that date."""
-
-    date: str
-    value: float
-
-
-class FundamentalSeries(BaseModel):
-    symbol: str
-    concept: str
-    transform: Literal["raw", "raw_facts", "yoy_growth"]
-    # Always true: filed_at is the visibility axis on every transform. The
-    # flag ships so the UI never has to infer the discipline from the path.
-    point_in_time: bool
-    provenance: str
-    total: int
-    items: list[FundamentalSeriesPoint | FundamentalFact]
 
 
 class Signal(BaseModel):
@@ -153,11 +96,20 @@ class Model(BaseModel):
     lookback_days: int
     scale_class: Literal["scale_free", "price_scaled"]
     direction_semantics: str
-    # "custom" entries are the caller's own template-based rules; their config
-    # is fixed at definition time, so `parameters` is empty for them.
-    origin: Literal["builtin", "custom"]
-    custom_rule_id: str | None = None
-    template: str | None = None
+    # Catalogue metadata, so a builder can group and gate rules without
+    # hardcoding anything about any of them (Constitution II).
+    category: Literal[
+        "trend", "momentum", "mean_reversion", "volatility", "volume", "fundamental"
+    ] = "trend"
+    summary: str = ""
+    #: Which strategy slots this rule may fill. A rule that reports a regime
+    #: rather than a tradeable event advertises ["filter"] only.
+    roles: list[Literal["entry", "exit", "filter"]] = ["entry", "exit"]
+    #: Fundamental concepts this rule cannot work without. Empty for every rule
+    #: that reads only bars. The builder reports them so a user can be told
+    #: which of their instruments will never trade before they run, not after
+    #: (docs/FUNDAMENTALS.md §5.1).
+    requires_facts: list[str] = []
 
 
 class ModelList(BaseModel):
@@ -165,52 +117,25 @@ class ModelList(BaseModel):
     items: list[Model]
 
 
-class ExecutionCriteria(BaseModel):
-    """User-settable execution criteria for a run's performance simulation.
+class RunRequest(BaseModel):
+    """Either shape of run request.
 
-    Every field has a default that reproduces the historical measuring
-    instrument (equal-weight sleeves, close-of-signal-date fills, no costs);
-    a misspelled key is a 422, never silently dropped.
+    Exactly one of ``model_name``, ``strategy_id`` or ``strategy`` identifies
+    what to run. The single-model form is unchanged and still supported; it is
+    promoted internally into a one-rule strategy so there is one execution path
+    and not a legacy branch that slowly stops matching the real one.
     """
 
-    model_config = ConfigDict(extra="forbid")
-
-    initial_capital: float = Field(default=100_000.0, gt=0)
-    position_sizing: Literal["equal_weight", "fixed_fraction"] = "equal_weight"
-    # Share of the book's current value per entry; fixed_fraction sizing only.
-    fraction: float = Field(default=0.1, gt=0, le=1)
-    max_open_positions: int | None = Field(default=None, ge=1)
-    transaction_cost_bps: float = Field(default=0.0, ge=0)
-    fixed_cost_per_trade: float = Field(default=0.0, ge=0)
-    # Fractions of the entry price: 0.1 exits 10% below/above it.
-    stop_loss_pct: float | None = Field(default=None, gt=0, lt=1)
-    take_profit_pct: float | None = Field(default=None, gt=0)
-    entry_price: Literal["same_close", "next_open"] = "same_close"
-
-
-class RunRequest(BaseModel):
-    # Exactly one model selector: model_name (a registry builtin) or
-    # custom_rule_id (one of the caller's template-based rules).
     model_name: str | None = None
     model_version: str | None = None
-    custom_rule_id: str | None = None
     parameters: dict[str, Any] = {}
     symbols: list[str]
     start_date: str
     end_date: str
-    execution: ExecutionCriteria | None = None
-
-
-class CustomRuleSnapshot(BaseModel):
-    """The definition a custom-rule run actually executed, frozen at run time.
-    Editing or deleting the rule afterwards never rewrites this."""
-
-    rule_id: str
-    name: str
-    slug: str
-    template: str
-    config: dict[str, Any]
-    lookback_days: int
+    strategy_id: str | None = None
+    strategy: StrategyRequest | None = None
+    #: Overrides the strategy's own execution criteria for this run only.
+    execution: ExecutionConfigModel | None = None
 
 
 class CorporateActionNotice(BaseModel):
@@ -250,13 +175,13 @@ class Run(BaseModel):
     instrument_ids: list[int] | None = None
     ingest_run_ids: list[int] | None = None
     corporate_actions: list[CorporateActionNotice] = []
-    # Effective execution criteria the run was created with; null for runs
-    # recorded without them (the historical zero-cost measuring instrument).
-    execution: ExecutionCriteria | None = None
-    # Set on runs of a custom rule: the definition snapshot. Null for builtins.
-    custom_rule: CustomRuleSnapshot | None = None
     re_runnable: bool = True
     model_available: bool = True
+    # The strategy and criteria that actually ran, and what the engine did with
+    # them. Null on runs recorded before either existed.
+    strategy: dict[str, Any] | None = None
+    execution: dict[str, Any] | None = None
+    execution_summary: ExecutionSummaryModel | None = None
 
 
 class RunList(BaseModel):
@@ -270,6 +195,10 @@ class ExperimentSignal(BaseModel):
     direction: Literal["bullish", "bearish"]
     trigger_values: dict[str, Any]
     data_window_end: str
+    #: Whether this opens a position, closes one, or both. "both" is what a
+    #: single-model run produces, and is what rows recorded before strategies
+    #: existed mean.
+    kind: Literal["entry", "exit", "both"] = "both"
 
 
 class RunDetail(Run):
@@ -278,61 +207,6 @@ class RunDetail(Run):
 
 class RunNameRequest(BaseModel):
     name: str
-
-
-# --- Custom signal rules (feature 008, M2) -------------------------------------
-
-
-class CustomRuleRequest(BaseModel):
-    """Create: template + config, both validated against the template registry."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    name: str = Field(min_length=1, max_length=200)
-    template: str
-    config: dict[str, Any]
-
-
-class CustomRuleUpdateRequest(BaseModel):
-    """Patch: name and/or config. The template is immutable -- changing it
-    changes what the rule IS, which is a new rule, not an edit."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    name: str | None = Field(default=None, min_length=1, max_length=200)
-    config: dict[str, Any] | None = None
-
-
-class CustomRule(BaseModel):
-    rule_id: str
-    name: str
-    slug: str
-    template: str
-    config: dict[str, Any]
-    lookback_days: int
-    created_at: str
-    updated_at: str
-
-
-class CustomRuleList(BaseModel):
-    total: int
-    items: list[CustomRule]
-
-
-class SignalTemplate(BaseModel):
-    """A fixed rule shape, with its config vocabulary for form generation."""
-
-    id: str
-    version: str
-    description: str
-    inputs: Literal["bars", "bars+fundamentals"]
-    available_on_dataset: bool
-    config_fields: dict[str, Any]
-
-
-class SignalTemplateList(BaseModel):
-    total: int
-    items: list[SignalTemplate]
 
 
 class EquityPoint(BaseModel):
@@ -348,6 +222,17 @@ class Trade(BaseModel):
     exit_price: float
     return_pct: float
     open: bool
+    side: Literal["long", "short"] = "long"
+    qty: float = 0.0
+    #: Why the position closed. "the strategy said so" and "the stop caught it"
+    #: are different facts about a strategy, and averaging them into one win
+    #: rate hides which one is doing the work.
+    exit_reason: Literal[
+        "signal", "stop_loss", "take_profit", "trailing_stop", "max_holding",
+        "end_of_window",
+    ] = "signal"
+    pnl: float = 0.0
+    fees: float = 0.0
 
 
 class PerformanceMetrics(BaseModel):
@@ -362,6 +247,11 @@ class PerformanceMetrics(BaseModel):
     losing_trades: int
 
 
+class CostBreakdown(BaseModel):
+    commission: float = 0.0
+    slippage: float = 0.0
+
+
 class RunPerformance(BaseModel):
     run_id: str
     initial_capital: float
@@ -369,8 +259,13 @@ class RunPerformance(BaseModel):
     benchmark: list[EquityPoint]
     metrics: PerformanceMetrics
     trades: list[Trade]
-    # Carried in the payload so the caveats cannot be lost by a UI refactor.
+    # Carried in the payload so the caveats cannot be lost by a UI refactor,
+    # and now generated from the execution criteria that actually ran -- so a
+    # result can no longer claim "no transaction costs" while having charged
+    # them.
     assumptions: list[str]
+    costs: CostBreakdown = CostBreakdown()
+    exit_reasons: dict[str, int] = {}
 
 
 # --- Historical replay ------------------------------------------------------
@@ -394,27 +289,287 @@ class ReplaySummary(BaseModel):
     winning_trades: int
     losing_trades: int
     assumptions: list[str]
+    exit_reasons: dict[str, int] | None = None
+    total_commission: float = 0.0
+    total_slippage: float = 0.0
 
 
-# --- Authentication (feature 007) -------------------------------------------
+# --- Identity ---------------------------------------------------------------
 
 
-class AuthCredentials(BaseModel):
-    username: str = Field(min_length=1, max_length=64)
-    # 8 characters minimum — a single-node research tool's bar, not a bank's.
-    password: str = Field(min_length=8, max_length=256)
+class Credentials(BaseModel):
+    email: str
+    password: str
 
 
-class User(BaseModel):
-    """The full account shape returned by register/login."""
-
-    id: int
-    username: str
-    is_admin: bool
+class UserOut(BaseModel):
+    id: str
+    email: str
+    created_at: str
 
 
-class UserPublic(BaseModel):
-    """What /auth/me discloses about the caller."""
+class SessionOut(BaseModel):
+    user: UserOut
+    token: str
+    expires_at: str
 
-    id: int
-    username: str
+
+# --- Strategies and execution ----------------------------------------------
+
+
+class StrategyComponentModel(BaseModel):
+    rule_name: str
+    rule_version: str | None = None
+    parameters: dict[str, Any] = {}
+    role: Literal["entry", "exit", "filter"] = "entry"
+    weight: float = 1.0
+    invert: bool = False
+
+
+class ExecutionConfigModel(BaseModel):
+    """Mirrors quantlab.execution.ExecutionConfig.
+
+    Deliberately permissive here and strict in the library: the dataclass
+    validates, and its ValueError becomes a 422 naming the field. Duplicating
+    the bounds as pydantic constraints would mean two places to change and one
+    of them eventually forgotten.
+    """
+
+    initial_capital: float = 100_000.0
+    position_sizing: Literal[
+        "equal_weight", "fixed_fraction", "fixed_notional", "volatility_target"
+    ] = "equal_weight"
+    sizing_value: float | None = None
+    max_positions: int | None = None
+    max_position_pct: float = 1.0
+    fill_timing: Literal["signal_close", "next_open"] = "signal_close"
+    commission_bps: float = 0.0
+    slippage_bps: float = 0.0
+    stop_loss_pct: float | None = None
+    take_profit_pct: float | None = None
+    trailing_stop_pct: float | None = None
+    atr_stop_multiple: float | None = None
+    atr_period: int = 14
+    max_holding_days: int | None = None
+    min_holding_days: int = 0
+    cooldown_days: int = 0
+    allow_shorts: bool = False
+
+
+class StrategyRequest(BaseModel):
+    name: str
+    description: str = ""
+    components: list[StrategyComponentModel]
+    entry_logic: Literal["all", "any", "majority", "weighted"] = "all"
+    exit_logic: Literal["all", "any", "majority", "weighted"] = "any"
+    entry_threshold: float = 1.0
+    exit_threshold: float = 1.0
+    combine_window_days: int = 1
+    execution: ExecutionConfigModel = ExecutionConfigModel()
+
+
+class Strategy(StrategyRequest):
+    id: str
+    owner_id: str | None = None
+    created_at: str
+    updated_at: str
+    #: Legal but probably unintended: no exit component, an unreachable
+    #: combination, filters gating shorts. Reported rather than refused.
+    warnings: list[str] = []
+
+
+class StrategyList(BaseModel):
+    total: int
+    items: list[Strategy]
+
+
+class StrategyTemplate(StrategyRequest):
+    id: str
+
+
+class StrategyTemplateList(BaseModel):
+    total: int
+    items: list[StrategyTemplate]
+
+
+class ExecutionSummaryModel(BaseModel):
+    """What the engine did, including what it refused to do.
+
+    The rejection counters matter as much as the fills: a strategy whose
+    signals were mostly dropped for want of a free slot has not been tested,
+    and without these it looks identical to one that signalled rarely.
+    """
+
+    orders: int = 0
+    fills: int = 0
+    rejected_no_cash: int = 0
+    rejected_max_positions: int = 0
+    rejected_cooldown: int = 0
+    rejected_shorts_disabled: int = 0
+    dropped_no_bar: int = 0
+    total_commission: float = 0.0
+    total_slippage: float = 0.0
+    #: Dates where the entry logic said both "long" and "short", and so said
+    #: nothing. Neither side was taken.
+    contradictions: int = 0
+
+
+# --- Research: the company, the universe, the screen (docs/RESEARCH.md) -----
+
+
+class FundamentalFact(BaseModel):
+    """One filed number, with everything needed to judge whether to trust it.
+
+    ``filed_at`` and ``days_stale`` are not decoration. They are the only
+    columns that reveal a look-ahead: a naive join returns Caterpillar's
+    quarter ending 2024-06-30 from a filing dated 2026-03-26, and nothing else
+    in the row says so (docs/FUNDAMENTALS.md §2).
+    """
+
+    concept: str
+    value: float
+    period_start: str | None = None
+    period_end: str
+    filed_at: str
+    days_stale: int
+    #: Which period length this figure describes. A quarter's revenue and a
+    #: year's are both "revenue", and a ratio built from the wrong one is off
+    #: by roughly four.
+    scope: Literal["instant", "quarter", "interim", "annual"] = "instant"
+    #: ``filed_at < period_end``: 710 rows in the warehouse carry a filing date
+    #: before the period they label. Surfaced rather than dropped -- discarding
+    #: data for looking strange is how a dataset ends up clean and wrong.
+    forward_dated: bool = False
+    #: The row the point-in-time rule selects for this concept on the as-of
+    #: date, so the inspector does not have to re-derive a choice already made.
+    in_force: bool = True
+
+
+class ConceptCoverage(BaseModel):
+    concept: str
+    instruments: int
+    first_filed: str | None = None
+    last_filed: str | None = None
+    #: Which names have it. Enumerated so a coverage warning can be
+    #: concept-exact rather than falling back to "has no fundamentals at all".
+    symbols: list[str] = []
+
+
+class FundamentalsCoverage(BaseModel):
+    """What exists, before anything is run.
+
+    64 of 644 instruments have no filings. A strategy with a fundamental filter
+    over those names does not fail to find trades, it *cannot* trade, and the
+    two are indistinguishable in a result -- so they are distinguished here,
+    before the run (docs/FUNDAMENTALS.md §5.1).
+    """
+
+    instruments_total: int
+    instruments_with_facts: int
+    concepts: list[ConceptCoverage]
+    symbols_with_facts: list[str] = []
+    symbols_without_facts: list[str] = []
+
+
+class CompanySignalCount(BaseModel):
+    rule_name: str
+    count: int
+    last_date: str | None = None
+    last_direction: Literal["bullish", "bearish"] | None = None
+
+
+class CompanyOverview(BaseModel):
+    """Everything filed about one name, as of a date.
+
+    ``concepts_missing`` is carried rather than left to be inferred from a
+    short ``facts`` list: a name that has never filed gross profit and one
+    whose gross profit has not been refiled since 2019 produce the same absence
+    on the page and are not the same fact.
+    """
+
+    symbol: str
+    name: str
+    exchange: str
+    currency: str
+    #: Blank on 607 of 644 catalogued names, and returned blank rather than
+    #: invented -- a fabricated sector would license a peer comparison the
+    #: catalogue cannot support (docs/RESEARCH.md §2).
+    sector: str
+    as_of: str
+    first_bar: str | None = None
+    last_bar: str | None = None
+    last_close: float | None = None
+    facts: list[FundamentalFact] = []
+    concepts_available: list[str] = []
+    concepts_missing: list[str] = []
+    signals: list[CompanySignalCount] = []
+    signal_total: int = 0
+
+
+ScreenMetric = Literal[
+    "pe", "pb", "roe", "leverage", "net_margin", "gross_margin", "current_ratio"
+]
+"""The ratios a screen can constrain, each derived from filed concepts.
+
+The vocabulary lives here because the request has to validate against it;
+which concepts each one needs, and how it is computed, live beside the rules
+whose arithmetic it borrows (quantlab.storage.warehouse). A contract test holds
+the two together.
+"""
+
+
+class ScreenMetricCoverage(BaseModel):
+    """How much of the universe a metric could actually be computed for.
+
+    Per metric, because coverage is not uniform: gross profit is filed by 237
+    names against revenue's 376. A screen that silently returned the difference
+    would read as "few companies qualified" when the truth is "most were never
+    measured" (docs/RESEARCH.md §2).
+    """
+
+    metric: ScreenMetric
+    measured: int
+    universe: int
+    requires: list[str]
+
+
+class ScreenRow(BaseModel):
+    symbol: str
+    name: str
+    #: Null where the inputs were not filed, or where a denominator was not
+    #: positive -- distinct from a zero, and never sorted as one.
+    values: dict[str, float | None] = {}
+
+
+class ScreenResult(BaseModel):
+    as_of: str
+    universe: str
+    universe_size: int
+    rows: list[ScreenRow] = []
+    coverage: list[ScreenMetricCoverage] = []
+    sort_by: ScreenMetric | None = None
+    #: Dropped for failing a constraint, as opposed to being unmeasured. The
+    #: split is the whole point: one is a fact about companies, the other about
+    #: the warehouse.
+    excluded_by_constraint: int = 0
+    excluded_unmeasured: int = 0
+
+
+class UniverseSummary(BaseModel):
+    name: str
+    #: The snapshot's own capture date, not the date that was asked for.
+    as_of: str
+    size: int
+
+
+class UniverseList(BaseModel):
+    total: int
+    items: list[UniverseSummary]
+
+
+# RunRequest and Run reference StrategyRequest, ExecutionConfigModel and
+# ExecutionSummaryModel, which are defined below them. Rebuilding here resolves
+# those forward references now rather than on first request.
+RunRequest.model_rebuild()
+Run.model_rebuild()
+RunDetail.model_rebuild()

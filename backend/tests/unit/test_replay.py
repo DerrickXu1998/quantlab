@@ -153,10 +153,28 @@ def test_a_signal_never_precedes_the_bar_event_of_its_own_date(seeded):
 
 
 def test_every_trading_date_gets_exactly_one_equity_event(seeded):
-    _, _, bars, events = _events(seeded)
-    bar_dates = sorted({bar.date for symbol_bars in bars.values() for bar in symbol_bars})
+    run, _, bars, events = _events(seeded)
+    # Warm-up sessions are inputs to the signals, not part of the replayed
+    # period: the bars are loaded so a stop can be sized, never marked.
+    bar_dates = sorted(
+        {
+            bar.date
+            for symbol_bars in bars.values()
+            for bar in symbol_bars
+            if run["start_date"] <= bar.date <= run["end_date"]
+        }
+    )
     equity_dates = [event.date for event in events if isinstance(event, ReplayEquity)]
     assert equity_dates == bar_dates
+
+
+def test_no_event_predates_the_reported_window(seeded):
+    run, _, _, events = _events(seeded)
+    assert all(
+        event.date >= run["start_date"]
+        for event in events
+        if not isinstance(event, ReplaySummary)
+    )
 
 
 def test_signal_and_fill_events_carry_the_stored_signal(seeded):
@@ -186,6 +204,8 @@ def test_the_summary_reconciles_with_compute_performance(seeded):
         signals=signals,
         bars_by_symbol=bars,
         symbols=list(run["symbols"]),
+        window_start=run["start_date"],
+        window_end=run["end_date"],
     )
 
     assert summary.days == len(expected.equity)
@@ -217,6 +237,8 @@ def test_the_replayed_equity_curve_matches_the_performance_curve(seeded):
         signals=signals,
         bars_by_symbol=bars,
         symbols=list(run["symbols"]),
+        window_start=run["start_date"],
+        window_end=run["end_date"],
     )
     marks = [e for e in events if isinstance(e, ReplayEquity)]
     assert len(marks) == len(expected.equity)

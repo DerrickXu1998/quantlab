@@ -54,7 +54,9 @@ def client(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def run(client):
-    symbols = [item["symbol"] for item in client.get("/api/v1/instruments").json()["items"][:3]]
+    symbols = [
+        item["symbol"] for item in client.get("/api/v1/instruments").json()["items"][:3]
+    ]
     created = client.post(
         "/api/v1/runs",
         json={
@@ -160,7 +162,9 @@ def test_stream_is_sse_and_ends_with_a_summary_frame(client, run):
     # Chronology: dates never go backwards, and every stored signal fires.
     dated = [frame["date"] for frame in frames[:-1]]
     assert dated == sorted(dated)
-    fired = {(frame["symbol"], frame["date"]) for frame in frames if frame["event"] == "signal"}
+    fired = {
+        (frame["symbol"], frame["date"]) for frame in frames if frame["event"] == "signal"
+    }
     assert len(fired) == run["signal_count"]
 
 
@@ -186,7 +190,9 @@ def test_stream_frames_carry_the_documented_fields(client, run):
 
 
 def test_stream_max_events_terminates_with_a_truncated_frame(client, run):
-    response = client.get(f"/api/v1/runs/{run['id']}/replay/stream", params={"max_events": 5})
+    response = client.get(
+        f"/api/v1/runs/{run['id']}/replay/stream", params={"max_events": 5}
+    )
 
     frames = _frames(response)
     assert len(frames) == 6

@@ -85,7 +85,9 @@ def test_bad_requests_are_400_and_bad_params_422(client, monkeypatch):
         == 400
     )
     assert client.get(LIVE_URL, params={**LIVE_QUERY, "params": "not-json"}).status_code == 400
-    assert client.get(LIVE_URL, params={**LIVE_QUERY, "params": '{"fast": 1}'}).status_code == 422
+    assert (
+        client.get(LIVE_URL, params={**LIVE_QUERY, "params": '{"fast": 1}'}).status_code == 422
+    )
 
 
 def test_the_contract_documents_the_live_stream():

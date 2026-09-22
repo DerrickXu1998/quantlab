@@ -1,0 +1,22 @@
+{
+  // Typecheck the tests as well as the source.
+  //
+  // The main tsconfig includes only `src`, so test files and their fixtures
+  // were never checked against the types they claim to implement. They drifted:
+  // `CatalogModel` gained a required `requires_facts` field, the fixtures kept
+  // constructing models without it, nothing complained, and five tests failed
+  // at runtime on a property that the type says is always there.
+  //
+  // A fixture is a claim about what the API returns. An unchecked claim is a
+  // comment.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // ES2022 for `Array.prototype.at`, which the tests use and ES2020 lacks.
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom"],
+    // Tests legitimately declare helpers they use in only some cases.
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  "include": ["src", "tests"]
+}

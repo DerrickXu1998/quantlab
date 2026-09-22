@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { EMPTY_FILTERS, SignalFilters } from '../src/components/SignalFilters';
@@ -56,24 +56,8 @@ describe('SignalFilters', () => {
     expect(props.onChange).toHaveBeenCalledWith({ ...EMPTY_FILTERS, direction: 'bearish' });
 
     const propsAll = renderFilters({ value: { ...EMPTY_FILTERS, direction: 'bullish' } });
-    // Two forms are on screen now; address the direction group by its fieldset.
-    const groups = screen.getAllByRole('group', { name: /direction/i });
-    await user.click(within(groups[1]).getByRole('radio', { name: /^all$/i }));
+    await user.click(screen.getAllByRole('radio', { name: /^all$/i })[1]);
     expect(propsAll.onChange).toHaveBeenCalledWith({ ...EMPTY_FILTERS, direction: '' });
-  });
-
-  it('emits the series kind via its own toggle group, and says it is page-local', async () => {
-    const user = userEvent.setup();
-    const props = renderFilters();
-
-    const group = screen.getByTestId('kind-filter');
-    await user.click(within(group).getByRole('radio', { name: /macro/i }));
-    expect(props.onChange).toHaveBeenCalledWith({ ...EMPTY_FILTERS, kind: 'macro' });
-
-    // The filter is client-side; the control says so while it is active.
-    renderFilters({ value: { ...EMPTY_FILTERS, kind: 'macro' } });
-    const groups = screen.getAllByTestId('kind-filter');
-    expect(groups[1]).toHaveTextContent(/cannot filter by kind/i);
   });
 
   it('emits start and end dates', () => {
@@ -100,7 +84,6 @@ describe('SignalFilters', () => {
         instrument: 'ZZMEAN',
         signalType: 'breakout-20d',
         direction: 'bullish',
-        kind: 'equity',
         startDate: '2024-01-01',
         endDate: '2024-12-31',
         sort: 'date_asc',
@@ -110,7 +93,6 @@ describe('SignalFilters', () => {
     expect(screen.getByLabelText(/instrument/i)).toHaveValue('ZZMEAN');
     expect(screen.getByLabelText(/rule/i)).toHaveValue('breakout-20d');
     expect(screen.getByRole('radio', { name: /bullish/i })).toBeChecked();
-    expect(screen.getByRole('radio', { name: /equities/i })).toBeChecked();
     expect(screen.getByLabelText(/start date/i)).toHaveValue('2024-01-01');
     expect(screen.getByLabelText(/end date/i)).toHaveValue('2024-12-31');
     expect(screen.getByLabelText(/sort/i)).toHaveValue('date_asc');

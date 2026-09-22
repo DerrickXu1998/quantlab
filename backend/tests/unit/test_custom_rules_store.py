@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from quantlab.storage.auth import SqliteAuthStore
+from quantlab.auth import SqliteUserStore
 from quantlab.storage.custom_rules import SqliteCustomRuleStore, slugify
 
 THRESHOLD_CONFIG = {
@@ -26,8 +26,15 @@ def store(tmp_path):
 
 @pytest.fixture()
 def users(tmp_path):
-    auth = SqliteAuthStore(tmp_path / "quantlab.db")
-    return auth.create_user("alice", "hash", True), auth.create_user("bob", "hash", False)
+    # Main's identity store, not this branch's: the merge kept the reviewed
+    # implementation, and scoping has to be tested against the users table the
+    # application actually writes. There is no admin flag -- ownership is the
+    # only thing custom-rule scoping asks about.
+    store = SqliteUserStore(tmp_path / "quantlab.db")
+    return (
+        store.create_user("alice@example.com", "hash").to_dict(),
+        store.create_user("bob@example.com", "hash").to_dict(),
+    )
 
 
 def test_create_assigns_id_slug_and_timestamps(store):

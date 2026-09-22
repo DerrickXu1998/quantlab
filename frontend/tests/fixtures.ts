@@ -20,20 +20,7 @@ export function makeInstrument(overrides: Partial<Instrument> = {}): Instrument 
     symbol: 'ZZTRND',
     name: 'Zeno Trend Industries (synthetic)',
     currency: 'USD',
-    kind: 'equity',
     regime_profile: 'trending',
-    ...overrides,
-  };
-}
-
-/** A warehouse macro pseudo-instrument: daily value series, never a price. */
-export function makeMacroInstrument(overrides: Partial<Instrument> = {}): Instrument {
-  return {
-    symbol: 'UST10Y.FRED',
-    name: '10-Year Treasury constant maturity yield',
-    currency: 'USD',
-    kind: 'macro',
-    regime_profile: 'mixed',
     ...overrides,
   };
 }

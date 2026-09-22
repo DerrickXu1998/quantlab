@@ -6,16 +6,15 @@ import {
   FlaskConical,
   History,
   LayoutDashboard,
-  LogOut,
   Search,
   type LucideIcon,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { useAuth } from '../auth/AuthGate';
+import { UserMenu } from '../auth/UserMenu';
 import { DataDisclaimer } from '../components/DataDisclaimer';
 import { Button } from '../components/ui/button';
 import { StatusBadge } from '../components/ui/status-badge';
-import { SignalsPage } from '../pages/SignalsPage';
+import { ResearchPage } from '../pages/ResearchPage';
 import { GrainOverlay } from '../quantlab/chrome/GrainOverlay';
 import { useWatchlist } from '../quantlab/data/useWatchlist';
 import { FeedProvider, useFeedStatus } from '../quantlab/feed/FeedProvider';
@@ -84,8 +83,7 @@ function FeedStatus() {
  */
 export function AppShell() {
   const route = useRoute();
-  const { instruments, seeds, error, retry } = useWatchlist();
-  const { user, logout } = useAuth();
+  const { instruments, seeds, error } = useWatchlist();
 
   // Legacy hashes (`#/`, `#/lab`, anything unknown) are rewritten to the
   // canonical destination hash, without adding a history entry.
@@ -93,25 +91,12 @@ export function AppShell() {
     if (!route.canonical) replaceRoute(route.destination, route.params);
   }, [route]);
 
-  // The destination is the document title: tabs and history entries name
-  // where they point.
-  const label = NAV.find((item) => item.id === route.destination)?.label ?? 'QuantLab';
-  useEffect(() => {
-    document.title = `${label} — QuantLab`;
-  }, [label]);
-
   return (
     <div className="relative flex h-screen flex-col">
       <GrainOverlay />
 
       {/* Above the grain, which is the whole point of the grain. */}
       <div className="relative z-10 flex min-h-0 flex-1 flex-col">
-        <a
-          href="#main"
-          className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded-sm focus:border focus:border-primary focus:bg-card focus:px-3 focus:py-2 focus:font-mono focus:text-[11px] focus:uppercase focus:tracking-[0.12em] focus:text-primary"
-        >
-          Skip to content
-        </a>
         <FeedProvider seeds={seeds}>
           <header className="flex shrink-0 items-center justify-between gap-6 border-b border-border px-4 py-2.5">
             <div className="flex items-center gap-6">
@@ -148,51 +133,32 @@ export function AppShell() {
               <FeedStatus />
               <Clock />
               <DatasetBadge />
-              {user ? (
-                <>
-                  <span
-                    data-testid="session-user"
-                    className="font-mono text-[11px] text-muted-foreground"
-                  >
-                    {user.username}
-                  </span>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={logout}
-                    aria-label="Log out"
-                  >
-                    <LogOut size={16} strokeWidth={1.5} aria-hidden="true" />
-                    Log out
-                  </Button>
-                </>
-              ) : null}
               <ThemeToggle />
+              <UserMenu />
             </div>
           </header>
 
-          {/* Conditional, never `hidden`: a display:none Dockview measures 0x0
-              and corrupts its layout. layoutStorage restores it on return. */}
-          <main id="main" className="flex min-h-0 flex-1 flex-col">
-            {route.destination === 'overview' ? (
-              <OverviewView />
-            ) : route.destination === 'research' ? (
-              <div className="min-h-0 flex-1">
-                <SignalsPage />
-              </div>
-            ) : route.destination === 'strategies' ? (
-              <StrategyLabView instruments={instruments} />
-            ) : route.destination === 'replay' ? (
-              <div className="flex min-h-0 flex-1 flex-col">
-                <ReplayView />
-              </div>
-            ) : route.destination === 'market' ? (
-              <IndicatorsView instruments={instruments} feedError={error} onFeedRetry={retry} />
-            ) : (
-              <ExecutionView instruments={instruments} feedError={error} onFeedRetry={retry} />
-            )}
-          </main>
+          {/* One destination mounted at a time. This was previously a
+              comment about Dockview corrupting its layout when measured at
+              0x0; that constraint left with the dock (docs/RESEARCH.md §1d),
+              and nothing here needs to be kept alive off-screen any more. */}
+          {route.destination === 'overview' ? (
+            <OverviewView />
+          ) : route.destination === 'research' ? (
+            <div className="min-h-0 flex-1">
+              <ResearchPage />
+            </div>
+          ) : route.destination === 'strategies' ? (
+            <StrategyLabView instruments={instruments} />
+          ) : route.destination === 'replay' ? (
+            <div className="flex min-h-0 flex-1 flex-col">
+              <ReplayView />
+            </div>
+          ) : route.destination === 'market' ? (
+            <IndicatorsView instruments={instruments} feedError={error} />
+          ) : (
+            <ExecutionView instruments={instruments} feedError={error} />
+          )}
 
           <footer className="shrink-0">
             <TickerTape />

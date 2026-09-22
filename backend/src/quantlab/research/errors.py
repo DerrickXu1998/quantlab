@@ -58,13 +58,19 @@ class SelectionTooLargeError(ExperimentError):
     def __init__(self, requested: int, limit: int) -> None:
         self.requested = requested
         self.limit = limit
-        super().__init__(f"selection of {requested} instrument-days exceeds the limit of {limit}")
+        super().__init__(
+            f"selection of {requested} instrument-days exceeds the limit of {limit}"
+        )
 
 
 class DatasetUnsupportedError(ExperimentError):
-    """The resolved model needs data the active dataset does not have
-    (e.g. a fundamental-condition rule against the synthetic demo, which holds
-    no fundamentals). A clean refusal, never a crash on an empty read."""
+    """The resolved rule needs data the active dataset does not hold.
+
+    A fundamental-condition rule against the synthetic demo is the case this
+    exists for: the demo has no filings, so every gate would read shut and the
+    run would look like a strategy that simply never fired. A refusal names the
+    cause; an empty result hides it.
+    """
 
     def __init__(self, requirement: str, dataset: str) -> None:
         self.requirement = requirement

@@ -42,16 +42,6 @@ def test_every_signal_is_point_in_time(tmp_path):
     assert violations == 0
 
 
-BUILTIN_RULE_NAMES = {
-    "sma-crossover",
-    "rsi-threshold",
-    "breakout-20d",
-    "macd-crossover",
-    "bollinger-breakout",
-    "bollinger-mean-reversion",
-}
-
-
 def test_every_starter_rule_fires(tmp_path):
     db_path = tmp_path / "coverage.db"
     seed.run(db_path)
@@ -59,7 +49,7 @@ def test_every_starter_rule_fires(tmp_path):
         counts = dict(
             conn.execute("SELECT rule_name, count(*) FROM signals GROUP BY rule_name").fetchall()
         )
-    for rule_name in BUILTIN_RULE_NAMES:
+    for rule_name in ("sma-crossover", "rsi-threshold", "breakout-20d"):
         assert counts.get(rule_name, 0) >= 1, f"{rule_name} never fired"
 
 
@@ -109,4 +99,12 @@ def test_seed_marks_meta_seeded(tmp_path):
             json.loads(params)  # valid JSON
         for (name,) in conn.execute("SELECT DISTINCT rule_name FROM signals"):
             rule_names[name] += 1
-    assert set(rule_names) == BUILTIN_RULE_NAMES
+    # Every rule that materialises is a tradeable one, and no filter is: a
+    # filter describes a state and emits on every bar, so storing one would
+    # bury the real signals under gate rows.
+    from quantlab.signals.registry import list_rules, tradeable_rules
+
+    assert set(rule_names) <= {rule.name for rule in tradeable_rules()}
+    assert {"sma-crossover", "rsi-threshold", "breakout-20d"} <= set(rule_names)
+    filters = {r.name for r in list_rules() if set(r.roles) == {"filter"}}
+    assert filters and not (filters & set(rule_names))

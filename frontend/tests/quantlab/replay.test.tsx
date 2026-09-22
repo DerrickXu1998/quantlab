@@ -295,3 +295,59 @@ describe('ReplayPanel', () => {
     expect(FakeEventSource.latest().url).toContain('interval_ms=100');
   });
 });
+
+/**
+ * The fitting rules the Replay screen is written to. These are the faults the
+ * layout primitives exist to prevent, and none of them is visible in a unit
+ * test's output — only in the class contract each container carries.
+ */
+describe('ReplayPanel fitting', () => {
+  /** A Panel renders `<section aria-label={title}>`; its body is the last child. */
+  function panelBody(title: string): HTMLElement {
+    return screen.getByLabelText(title).lastElementChild as HTMLElement;
+  }
+
+  it('presents the speed presets as one control, not one control per line', () => {
+    renderPanel();
+
+    const group = screen.getByRole('group', { name: /replay speed/i });
+    expect(within(group).getAllByRole('button')).toHaveLength(4);
+    // Wrapping as a set is what stops `100 ms` reading as a second control.
+    expect(group.className).toContain('flex-wrap');
+  });
+
+  it('says what the equity panel will show before anything has streamed', async () => {
+    renderPanel();
+
+    expect(screen.getByTestId('replay-equity-empty')).toHaveTextContent(/no equity yet/i);
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /^play$/i }));
+    act(() => {
+      FakeEventSource.latest().emit(equityEvent('2024-01-02', 100_123.4));
+    });
+
+    expect(screen.queryByTestId('replay-equity-empty')).not.toBeInTheDocument();
+  });
+
+  it('fills the workspace instead of leaving dead ground under the panels', () => {
+    renderPanel();
+
+    // The control column takes its cell rather than sitting at its natural
+    // height with an empty column beneath it.
+    expect(screen.getByLabelText('Replay').className).toContain('flex-1');
+    expect(screen.getByLabelText('Equity').className).toContain('flex-');
+  });
+
+  it('gives the fill and signal tables a scroll edge, not a clipped row', () => {
+    renderPanel();
+
+    for (const title of ['Fills', 'Signals']) {
+      const body = panelBody(title);
+      expect(body.className).toContain('overflow-y-auto');
+      // Without min-h-0 the body grows to its table and the panel boundary
+      // cuts through a row instead of scrolling.
+      expect(body.className).toContain('min-h-0');
+    }
+  });
+});

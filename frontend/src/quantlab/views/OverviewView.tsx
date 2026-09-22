@@ -9,6 +9,7 @@ import { RunsRail } from '../../components/RunsRail';
 import { DatasetBadge } from '../../workbench/DatasetBadge';
 import { useRuns } from '../../runs/RunsContext';
 import { EquityCurve } from '../charts/EquityCurve';
+import { FillColumn } from '../../components/ui/layout';
 import { CascadeItem } from '../chrome/Cascade';
 import { Chip, FloatingChips } from '../chrome/FloatingChips';
 import { Panel } from '../chrome/Panel';
@@ -45,7 +46,7 @@ function FirstRun() {
             <span className="font-mono text-[11px] text-muted-foreground">02</span>
             <div>
               <Button type="button" size="sm" onClick={() => navigate('strategies')}>
-                Run your first strategy
+                Run your first backtest
               </Button>
               <p className="mt-1 text-[11px] text-muted-foreground">
                 Strategies opens with the first registered model preselected.
@@ -83,7 +84,7 @@ function FirstRun() {
  * completed run; with no runs at all it is the first-run guide.
  */
 export function OverviewView() {
-  const { allRuns, runsStatus, latestCompleted, activeRun, select, reloadRuns } = useRuns();
+  const { allRuns, runsStatus, latestCompleted, activeRun, select } = useRuns();
   const route = useRoute();
   const paramId = route.params.get('run');
   const targetId = paramId ?? latestCompleted?.id ?? null;
@@ -103,11 +104,6 @@ export function OverviewView() {
         tone="error"
         title="Backend unreachable"
         detail="The run history could not be loaded."
-        action={
-          <Button type="button" variant="outline" size="sm" onClick={reloadRuns}>
-            Retry
-          </Button>
-        }
       />
     );
   }
@@ -116,8 +112,8 @@ export function OverviewView() {
     // Asymmetric on purpose: a fixed rail against a fluid workspace, rather
     // than an even split that would read as a dashboard.
     <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)]">
-      <CascadeItem index={0} className="border-b border-border lg:border-b-0 lg:border-r">
-        <Panel title="Runs" className="border-0" bodyClassName="p-0">
+      <CascadeItem index={0} className="hidden min-h-0 flex-col border-r border-border lg:flex">
+        <Panel title="Runs" fill scroll className="border-0" bodyClassName="p-0">
           <RunsRail
             runs={allRuns}
             selectedId={targetId}
@@ -126,7 +122,11 @@ export function OverviewView() {
         </Panel>
       </CascadeItem>
 
-      <div className="min-w-0 overflow-y-auto">
+      {/* A flex column, not a plain block: the panels below stretch to the
+          bottom of the workspace. Left to their natural height they ended a
+          quarter of the way up the viewport, and a terminal with a band of
+          empty ground under its instruments reads as broken, not as airy. */}
+      <div className="flex min-h-0 min-w-0 flex-col overflow-y-auto">
         {runsStatus === 'loading' ? (
           <EmptyState icon={Hourglass} title="Loading…" role="status" />
         ) : allRuns.length === 0 ? (
@@ -135,7 +135,7 @@ export function OverviewView() {
           <EmptyState
             icon={FlaskConical}
             title="No completed runs"
-            detail="Every recorded run failed. Run a strategy in Strategies to produce a result."
+            detail="Every recorded run failed. Run a backtest in Strategies to produce a result."
           />
         ) : !run ? (
           <EmptyState icon={Hourglass} title="Loading…" role="status" />
@@ -161,8 +161,8 @@ export function OverviewView() {
               <PortfolioSummary run={run} performance={performance.performance} />
             </CascadeItem>
 
-            <div className="grid grid-cols-1 gap-px bg-border xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
-              <CascadeItem index={2} className="relative bg-background">
+            <div className="grid min-h-0 flex-1 grid-cols-1 gap-px bg-border xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
+              <CascadeItem index={2} className="relative flex min-h-0 flex-col bg-background">
                 {/* Deliberately crossing the panel's top edge. */}
                 <FloatingChips>
                   <Chip label="Bars" title="Sessions marked in the reported window">
@@ -188,22 +188,31 @@ export function OverviewView() {
                     />
                   </Chip>
                 </FloatingChips>
-                <Panel title="Equity curve" className="border-0">
+                <Panel title="Equity curve" fill className="border-0">
                   <StatRow metrics={performance.performance.metrics} />
-                  <div className="mt-6">
+                  <FillColumn className="mt-6">
                     <EquityCurve
+                      fill
                       equity={performance.performance.equity}
                       benchmark={performance.performance.benchmark}
                       benchmarkLabel="Buy & hold"
                     />
-                  </div>
-                  <Assumptions assumptions={performance.performance.assumptions} />
+                  </FillColumn>
+                  {/* Closed here: the curve is the subject of this screen, and
+                      nine lines of prose under it turned the chart into a
+                      band. The count in the summary still says they exist. */}
+                  <Assumptions
+                    assumptions={performance.performance.assumptions}
+                    defaultOpen={false}
+                  />
                 </Panel>
               </CascadeItem>
 
-              <CascadeItem index={3} className="bg-background">
+              <CascadeItem index={3} className="flex min-h-0 flex-col bg-background">
                 <Panel
                   title="Open positions"
+                  fill
+                  scroll
                   className="border-0"
                   bodyClassName="p-0"
                   simulated="The live column re-marks against the simulated feed."

@@ -75,7 +75,8 @@ def test_warmup_history_is_loaded_so_the_window_does_not_cold_start(conn):
     )
 
     assert result.coverage.instruments_full_warmup > 0, (
-        "instruments with history before the window start must be reported as having full warm-up"
+        "instruments with history before the window start must be reported as "
+        "having full warm-up"
     )
     # Compare against a run over the same window with a much longer history
     # available: the in-window signals must agree, proving the short window was

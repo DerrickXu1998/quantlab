@@ -21,7 +21,7 @@ import logging
 import sys
 
 from quantlab.signals.engine import compute_signals
-from quantlab.signals.registry import list_rules
+from quantlab.signals.registry import tradeable_rules
 from quantlab.storage import warehouse
 
 logger = logging.getLogger(__name__)
@@ -33,8 +33,14 @@ def canonical_json(obj: object) -> str:
 
 
 def sync_rules(conn) -> dict[tuple[str, str, str], int]:
-    """Mirror the registry into signal_rules, returning rule -> rule_id."""
-    rules = list_rules()
+    """Mirror the registry into signal_rules, returning rule -> rule_id.
+
+    Filters are excluded, for the same reason the demo seed excludes them:
+    they describe a state and emit on every bar, so materialising them would
+    bury real signals under an order of magnitude more gate rows. They stay
+    fully available to strategies, which evaluate them live.
+    """
+    rules = tradeable_rules()
     out: dict[tuple[str, str, str], int] = {}
 
     for rule in rules:
@@ -90,7 +96,9 @@ def materialize(
             signals = compute_signals({symbol: bars})
 
             if replace:
-                conn.execute("DELETE FROM signals WHERE instrument_id = %s", (instrument_id,))
+                conn.execute(
+                    "DELETE FROM signals WHERE instrument_id = %s", (instrument_id,)
+                )
 
             rows = []
             for signal in signals:

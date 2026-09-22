@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from quantlab.signals import builtins as _builtins  # noqa: F401  (registers builtin rules)
-from quantlab.signals.registry import SignalRule, list_rules
+from quantlab.signals.registry import SignalRule, tradeable_rules
 
 
 @dataclass(frozen=True)
@@ -29,7 +29,6 @@ def compute_signals(
     bars_by_symbol: dict[str, list[Any]],
     rules: list[SignalRule] | None = None,
     overrides: dict[str, Any] | None = None,
-    facts_by_symbol: dict[str, list[dict]] | None = None,
 ) -> list[ComputedSignal]:
     """Run ``rules`` over the supplied bars.
 
@@ -37,12 +36,14 @@ def compute_signals(
     *effective* parameters (defaults merged with overrides) are what get
     recorded on each signal — recording the bare defaults while executing
     overrides would make the record unreproducible (Constitution VI).
-
-    ``facts_by_symbol`` feeds rules whose declared inputs are
-    "bars+fundamentals" (the fundamental-condition template): each rule
-    receives its symbol's point-in-time facts. Bars-only rules never see them.
     """
-    rules = list(rules) if rules is not None else list_rules()
+    # Filters are excluded by default. This function *materialises* signals --
+    # into the demo seed, into the warehouse catalog -- and a filter describes
+    # a state rather than an event, so it emits on every single bar. Including
+    # them by default would bury real signals under an order of magnitude more
+    # "the gate is shut" rows in every table that stores this output. Strategy
+    # composition does not come through here; it evaluates filters directly.
+    rules = list(rules) if rules is not None else tradeable_rules()
     # Resolved once per rule so an unknown override key fails immediately,
     # rather than after part of the universe has already been processed.
     effective_by_rule = {
@@ -55,18 +56,15 @@ def compute_signals(
         for rule in rules:
             if len(bars) < rule.lookback_days:
                 continue
-            if rule.inputs == "bars":
-                events = rule.compute(bars, **effective_by_rule[(rule.name, rule.version)])
-            else:
-                events = rule.compute(bars, (facts_by_symbol or {}).get(symbol) or [])
-            for event in events:
+            effective = effective_by_rule[(rule.name, rule.version)]
+            for event in rule.compute(bars, **effective):
                 out.append(
                     ComputedSignal(
                         symbol=symbol,
                         date=event.date,
                         rule_name=rule.name,
                         rule_version=rule.version,
-                        parameters=dict(effective_by_rule[(rule.name, rule.version)]),
+                        parameters=dict(effective),
                         direction=event.direction,
                         trigger_values=dict(event.trigger_values),
                         data_window_end=event.data_window_end,

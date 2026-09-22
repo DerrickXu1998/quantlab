@@ -18,7 +18,12 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
-from quantlab.fundamentals import DERIVED_CONCEPTS
+# The screen below derives its ratios with the fundamental rules' own helpers
+# rather than a second copy of them. This module has no other business knowing
+# about quantlab.signals, and the dependency is worth the exception: two
+# implementations of "unknown is not zero" is one that stops being maintained.
+from quantlab.signals import fundamental as fundamental_rules
+from quantlab.storage import facts
 from quantlab.storage.pool import ClientPool, pool_config
 
 DB_URL_ENV = "QUANTLAB_DB_URL"
@@ -176,7 +181,9 @@ def health(wh: Warehouse) -> tuple[bool, int]:
 
 def instrument_exists(wh: Warehouse, symbol: str) -> bool:
     with wh.catalog() as conn:
-        row = conn.execute("SELECT 1 FROM instruments WHERE symbol = %s", (symbol,)).fetchone()
+        row = conn.execute(
+            "SELECT 1 FROM instruments WHERE symbol = %s", (symbol,)
+        ).fetchone()
     return row is not None
 
 
@@ -189,7 +196,7 @@ def list_instruments(wh: Warehouse) -> dict:
     with wh.catalog() as conn:
         rows = conn.execute(
             """
-            SELECT i.instrument_id, i.symbol, i.name, i.currency, i.meta,
+            SELECT i.instrument_id, i.symbol, i.name, i.currency,
                    (SELECT count(*) FROM signals s WHERE s.instrument_id = i.instrument_id)
             FROM instruments i
             ORDER BY i.symbol
@@ -210,17 +217,13 @@ def list_instruments(wh: Warehouse) -> dict:
             "symbol": symbol,
             "name": name or symbol,
             "currency": currency,
-            # Macro pseudo-instruments (BoE/FRED series loaded as bars) are
-            # labelled, never filtered out: they are legitimately in the
-            # catalog, and a reader decides for itself whether to mix kinds.
-            "kind": "macro" if (meta or {}).get("macro") else "equity",
             # Real instruments have no synthetic regime label. The field is
             # optional in the contract precisely so both datasets fit it.
             "regime_profile": None,
             "bar_count": bar_counts.get(int(instrument_id), 0),
             "signal_count": int(signal_count),
         }
-        for instrument_id, symbol, name, currency, meta, signal_count in rows
+        for instrument_id, symbol, name, currency, signal_count in rows
     ]
     return {"total": len(items), "items": items}
 
@@ -254,7 +257,7 @@ def get_prices(
             f"""
             SELECT ts, open, high, low, close, volume
               FROM {BARS_VIEW}
-             WHERE {" AND ".join(clauses)}
+             WHERE {' AND '.join(clauses)}
              ORDER BY ts ASC
             """,
             parameters=params,
@@ -346,17 +349,8 @@ def list_signals(
             "trigger_values": trigger_values,
             "data_window_end": window_end.isoformat(),
         }
-        for (
-            signal_id,
-            symbol,
-            date,
-            rule_name,
-            rule_version,
-            parameters,
-            direction_value,
-            trigger_values,
-            window_end,
-        ) in rows
+        for (signal_id, symbol, date, rule_name, rule_version, parameters,
+             direction_value, trigger_values, window_end) in rows
     ]
     return {"total": int(total), "items": items}
 
@@ -489,7 +483,9 @@ def load_bars_for(
     return out
 
 
-def earliest_bar_dates(wh: Warehouse, symbols: list[str], frequency: str = "1d") -> dict[str, str]:
+def earliest_bar_dates(
+    wh: Warehouse, symbols: list[str], frequency: str = "1d"
+) -> dict[str, str]:
     """First available bar per instrument, for warm-up coverage reporting."""
     ids = _instrument_ids(wh, symbols)
     if not ids:
@@ -585,128 +581,645 @@ def corporate_actions(wh: Warehouse, symbols: list[str], start: str, end: str) -
 
 
 # ---------------------------------------------------------------------------
-# Fundamentals (point-in-time, stamped at filed_at)
+# Point-in-time fundamentals (docs/FUNDAMENTALS.md)
 # ---------------------------------------------------------------------------
 
 
-def list_fundamental_concepts(wh: Warehouse, symbol: str) -> dict:
-    """One instrument's fundamentals catalog: a row per (concept, provider, unit).
+def load_facts_for(
+    wh: Warehouse,
+    symbols: list[str],
+    concepts: list[str],
+    start: str,
+    end: str,
+) -> dict[str, facts.FactSeries]:
+    """Point-in-time fundamentals for a run, keyed by symbol.
 
-    Rows with an empty concept are excluded: they are raw XBRL tags the ingest
-    did not map onto a canonical concept, and this catalog exists to name the
-    concepts a caller can request a series for. Derived concepts (see
-    DERIVED_CONCEPTS) are appended when their inputs are both stored.
+    One query for the whole run, not one per symbol per rule: a strategy with
+    three fundamental components over forty names would otherwise issue a
+    hundred and twenty round trips to answer a question the index can answer
+    once. Measured on the live warehouse, forty instruments across ten concepts
+    is 31,844 rows in 78 ms via ``fundamentals_pit_idx``, whose three columns
+    are exactly the three predicates below.
+
+    **There is deliberately no lower bound on ``filed_at``.** ``start`` is the
+    warm-up start, and the figure in force on that morning was filed before it
+    -- often a year before. Bounding the scan by ``start`` would blank the
+    first year of every window, and blank in the direction that hides itself:
+    the gates would read shut rather than wrong, so nothing would look broken.
+    ``start`` is used only to report which names were already covered when the
+    window opened.
+
+    The ``filed_at <= end`` bound is not an optimisation. It is the rule: a run
+    ending in 2020 must not see a restatement filed in 2024, even though the
+    series is only ever read at dates inside the window.
+    """
+    ids = _instrument_ids(wh, symbols)
+    if not ids or not concepts:
+        return {}
+    by_id = {instrument_id: symbol for symbol, instrument_id in ids.items()}
+
+    with wh.catalog() as conn:
+        rows = conn.execute(
+            """
+            SELECT instrument_id, concept, period_start, period_end, filed_at,
+                   value, tag, run_id
+              FROM fundamentals
+             WHERE instrument_id = ANY(%s)
+               AND concept = ANY(%s)
+               AND filed_at <= %s
+             ORDER BY instrument_id, concept, filed_at, period_end,
+                      period_start NULLS LAST, tag, value
+            """,
+            (list(by_id), sorted(set(concepts)), end),
+        ).fetchall()
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        instrument_id, concept, period_start, period_end, filed_at, value, tag, run_id = row
+        grouped.setdefault(by_id[int(instrument_id)], []).append(
+            {
+                "concept": concept,
+                "period_start": period_start,
+                "period_end": period_end,
+                "filed_at": filed_at,
+                "value": value,
+                "tag": tag,
+                "run_id": run_id,
+            }
+        )
+    return {symbol: facts.build_series(items) for symbol, items in grouped.items()}
+
+
+def facts_as_of(
+    wh: Warehouse, symbol: str, as_of: str, concepts: list[str] | None = None
+) -> list[dict[str, Any]]:
+    """What was knowable about one instrument on one date.
+
+    The inspector's query (docs/FUNDAMENTALS.md §6). Built through the same
+    :func:`load_facts_for` path rather than a second hand-written SQL rule, so
+    the screen that exists to make the point-in-time rule believable cannot
+    disagree with the rule the backtest actually ran.
+    """
+    wanted = sorted(concepts or facts.KNOWN_CONCEPTS)
+    series = load_facts_for(wh, [symbol], wanted, as_of, as_of)
+    found = series.get(symbol)
+    if found is None:
+        return []
+    # ``as_of`` returns exactly the row the rule selects for each concept, so
+    # every row here is in force. Saying so explicitly saves the inspector from
+    # re-deriving a selection the server has already made.
+    return [
+        {**fact.to_dict(as_of), "in_force": True}
+        for fact in found.as_of(as_of, concepts=wanted)
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Coverage, stated before anything is run (docs/RESEARCH.md §2)
+# ---------------------------------------------------------------------------
+
+
+def fundamentals_coverage(wh: Warehouse) -> dict[str, Any]:
+    """Which instruments and concepts have any filings at all.
+
+    Measured on the live warehouse: 644 catalogued instruments, 580 with some
+    fundamentals, and per-concept coverage varying more than two to one --
+    ``net_income`` on 468 names against ``gross_profit`` on 237. Averaging that
+    away is how a gross-margin screen over 237 names reads as "few companies
+    qualified" when the truth is "most were never measured"
+    (docs/FUNDAMENTALS.md §5.1).
+
+    Counted rather than hardcoded: those are the figures the warehouse held on
+    2026-09-21, and an ingest changes them.
+
+    One grouped scan rather than one per concept -- 5.7M rows in, 7,049 out at
+    1.06 s measured -- with the per-concept rollup done here in arithmetic. The
+    caller reads this once and holds it: it is a property of the warehouse, not
+    of whatever is being edited.
+    """
+    with wh.catalog() as conn:
+        instruments = [
+            symbol
+            for (symbol,) in conn.execute(
+                "SELECT symbol FROM instruments ORDER BY symbol"
+            ).fetchall()
+        ]
+        rows = conn.execute(
+            """
+            SELECT f.concept, i.symbol, min(f.filed_at), max(f.filed_at)
+              FROM fundamentals f
+              JOIN instruments  i USING (instrument_id)
+             -- 88.8% of the table carries an empty concept: the ingest kept the
+             -- raw XBRL tag and never mapped it. Counting those rows would
+             -- claim coverage for something no rule can read (RESEARCH.md §2).
+             WHERE f.concept <> ''
+             GROUP BY f.concept, i.symbol
+            """
+        ).fetchall()
+
+    by_concept: dict[str, dict[str, Any]] = {}
+    with_facts: set[str] = set()
+    for concept, symbol, first_filed, last_filed in rows:
+        with_facts.add(symbol)
+        entry = by_concept.setdefault(
+            concept, {"symbols": [], "first": None, "last": None}
+        )
+        entry["symbols"].append(symbol)
+        first, last = _iso_date(first_filed), _iso_date(last_filed)
+        if entry["first"] is None or (first is not None and first < entry["first"]):
+            entry["first"] = first
+        if entry["last"] is None or (last is not None and last > entry["last"]):
+            entry["last"] = last
+
+    concepts = [
+        {
+            "concept": concept,
+            "instruments": len(entry["symbols"]),
+            "first_filed": entry["first"],
+            "last_filed": entry["last"],
+            # Enumerated, so a coverage warning can name the concept a strategy
+            # is missing instead of falling back to "this name has no
+            # fundamentals at all", which is a different and usually false claim.
+            "symbols": sorted(entry["symbols"]),
+        }
+        for concept, entry in sorted(by_concept.items())
+    ]
+    return {
+        "instruments_total": len(instruments),
+        "instruments_with_facts": len(with_facts),
+        "concepts": concepts,
+        "symbols_with_facts": sorted(with_facts),
+        "symbols_without_facts": [s for s in instruments if s not in with_facts],
+    }
+
+
+def _iso_date(value: Any) -> str | None:
+    if value is None:
+        return None
+    return value[:10] if isinstance(value, str) else value.isoformat()[:10]
+
+
+# ---------------------------------------------------------------------------
+# Universes (docs/RESEARCH.md §2)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class UniverseSnapshot:
+    """One dated membership list, and the date it was actually captured.
+
+    ``as_of`` is the snapshot's own date, never the date that was asked for. A
+    screen run on 2026-09-21 against a list captured on 2026-09-20 is running
+    over yesterday's members, and reporting which is the difference between a
+    reconstructed universe and today's survivors wearing a historical label.
+    """
+
+    universe: str
+    as_of: str
+    #: symbol -> display name. Carried together because a screen needs both and
+    #: the membership join already has them in hand.
+    members: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def symbols(self) -> list[str]:
+        return sorted(self.members)
+
+
+def list_universes(wh: Warehouse) -> dict[str, Any]:
+    """Every snapshot of every universe, newest first.
+
+    One row per *snapshot* rather than per universe: membership is dated, and
+    collapsing the dates would offer a list the caller cannot actually ask for.
+    ``size`` is counted from ``universe_members`` rather than read from
+    ``member_count``, which is a number written at ingest rather than the rows
+    themselves.
     """
     with wh.catalog() as conn:
         rows = conn.execute(
             """
-            SELECT f.concept, f.provider, f.unit,
-                   count(*) AS fact_count,
-                   min(f.filed_at) AS first_filed,
-                   max(f.filed_at) AS last_filed
-              FROM fundamentals f
-              JOIN instruments i USING (instrument_id)
-             WHERE i.symbol = %(symbol)s AND f.concept <> ''
-             GROUP BY f.concept, f.provider, f.unit
-             ORDER BY f.concept, f.provider
+            SELECT s.universe, s.snapshot_date, count(m.instrument_id)
+              FROM universe_snapshots s
+              LEFT JOIN universe_members m USING (snapshot_id)
+             GROUP BY s.universe, s.snapshot_date
+             ORDER BY s.universe ASC, s.snapshot_date DESC
+            """
+        ).fetchall()
+    items = [
+        {"name": universe, "as_of": snapshot_date.isoformat(), "size": int(size)}
+        for universe, snapshot_date, size in rows
+    ]
+    return {"total": len(items), "items": items}
+
+
+def resolve_universe(wh: Warehouse, universe: str, as_of: str) -> UniverseSnapshot | None:
+    """The membership of ``universe`` as it stood on ``as_of``, or None.
+
+    The newest snapshot captured on or before the date, which is the rule the
+    fundamentals follow and for the same reason: screening a past date against
+    today's membership is survivorship bias, and it flatters the result rather
+    than breaking it, so nothing announces it.
+
+    None means no snapshot reaches that far back. The caller distinguishes "no
+    such universe" from "no such date" because those need different answers,
+    and neither is an empty result.
+    """
+    with wh.catalog() as conn:
+        row = conn.execute(
+            """
+            SELECT snapshot_id, snapshot_date
+              FROM universe_snapshots
+             WHERE universe = %s AND snapshot_date <= %s
+             ORDER BY snapshot_date DESC
+             LIMIT 1
             """,
-            {"symbol": symbol},
+            (universe, as_of),
+        ).fetchone()
+        if row is None:
+            return None
+        snapshot_id, snapshot_date = row
+        members = conn.execute(
+            """
+            SELECT i.symbol, i.name
+              FROM universe_members m
+              JOIN instruments i USING (instrument_id)
+             WHERE m.snapshot_id = %s
+            """,
+            (snapshot_id,),
+        ).fetchall()
+    return UniverseSnapshot(
+        universe=universe,
+        as_of=snapshot_date.isoformat(),
+        members={symbol: name or symbol for symbol, name in members},
+    )
+
+
+# ---------------------------------------------------------------------------
+# One company (docs/RESEARCH.md §1c)
+# ---------------------------------------------------------------------------
+
+
+def company_overview(wh: Warehouse, symbol: str, as_of: str) -> dict[str, Any] | None:
+    """Everything filed about one name, composed rather than newly sourced.
+
+    The object the destination was missing: identity, the price bounds, the
+    accounts as they stood on ``as_of``, which concepts this name has never
+    filed, and which rules have fired on it. None when the symbol is not in the
+    catalogue.
+
+    The facts come through :func:`facts_as_of`, which comes through
+    :func:`load_facts_for` -- the same path the backtest takes. A company page
+    built on a second point-in-time query would eventually disagree with a run
+    over the same name, and the disagreement would be invisible.
+    """
+    with wh.catalog() as conn:
+        row = conn.execute(
+            """
+            SELECT instrument_id, symbol, name, exchange, currency, sector
+              FROM instruments WHERE symbol = %s
+            """,
+            (symbol,),
+        ).fetchone()
+        if row is None:
+            return None
+        instrument_id, symbol, name, exchange, currency, sector = row
+
+        # Every concept this name has *ever* filed, unbounded by as_of. A hole
+        # in coverage and a figure that is merely stale are different facts
+        # about a company, and only the first is permanent -- so the second
+        # must not be reported as the first.
+        filed = {
+            concept
+            for (concept,) in conn.execute(
+                """
+                SELECT DISTINCT concept FROM fundamentals
+                 WHERE instrument_id = %s AND concept <> ''
+                """,
+                (int(instrument_id),),
+            ).fetchall()
+        }
+        # Bounded by as_of, like the bars and the facts beside it.
+        #
+        # Without the bound this read is the one incoherent thing on the page:
+        # asked for CAT on 2024-06-30 it returned accounts filed by 2024-05-01,
+        # a chart cut at 2024-06-30, and a last signal dated 2026-09-01. A
+        # destination whose whole claim is that it shows what was knowable on a
+        # date cannot show a signal from two years after it. The count moves
+        # with the date for the same reason -- "580 signals" as of 2024 is not
+        # the same fact as "580 signals" today.
+        signal_rows = conn.execute(
+            """
+            SELECT r.rule_name, count(*), max(s.date),
+                   (array_agg(s.direction ORDER BY s.date DESC, s.signal_id DESC))[1]
+              FROM signals s
+              JOIN signal_rules r USING (rule_id)
+             WHERE s.instrument_id = %s
+               AND s.date <= %s
+             GROUP BY r.rule_name
+             ORDER BY count(*) DESC, r.rule_name ASC
+            """,
+            (int(instrument_id), as_of),
         ).fetchall()
 
-        derived_rows = []
-        for derived, (provider, numerator, denominator) in DERIVED_CONCEPTS.items():
-            derived_rows.extend(
-                conn.execute(
-                    """
-                    SELECT count(*) AS fact_count,
-                           least(min(s.filed_at), min(t.filed_at)) AS first_filed,
-                           greatest(max(s.filed_at), max(t.filed_at)) AS last_filed,
-                           %(derived)s, %(provider)s
-                      FROM fundamentals s
-                      JOIN fundamentals t
-                        ON t.instrument_id = s.instrument_id AND t.filed_at = s.filed_at
-                     WHERE s.instrument_id = (SELECT instrument_id FROM instruments
-                                              WHERE symbol = %(symbol)s)
-                       AND s.provider = %(provider)s AND s.concept = %(numerator)s
-                       AND t.provider = %(provider)s AND t.concept = %(denominator)s
-                    HAVING count(*) > 0
-                    """,
-                    {
-                        "symbol": symbol,
-                        "derived": derived,
-                        "provider": provider,
-                        "numerator": numerator,
-                        "denominator": denominator,
-                    },
-                ).fetchall()
+    bounds = _bar_bounds(wh, int(instrument_id), as_of)
+    company_facts = facts_as_of(wh, symbol, as_of)
+    signals = [
+        {
+            "rule_name": rule_name,
+            "count": int(count),
+            "last_date": last_date.isoformat(),
+            "last_direction": last_direction,
+        }
+        for rule_name, count, last_date, last_direction in signal_rows
+    ]
+    return {
+        "symbol": symbol,
+        "name": name or symbol,
+        "exchange": exchange,
+        "currency": currency,
+        # Blank on 607 of 644 names. Passed through as filed rather than
+        # guessed: an invented sector would be indistinguishable from a real
+        # one and would license a peer comparison the catalogue cannot support
+        # (docs/RESEARCH.md §2).
+        "sector": sector,
+        "as_of": as_of,
+        **bounds,
+        "facts": company_facts,
+        "concepts_available": [fact["concept"] for fact in company_facts],
+        "concepts_missing": sorted(facts.KNOWN_CONCEPTS - filed),
+        "signals": signals,
+        "signal_total": sum(item["count"] for item in signals),
+    }
+
+
+def _bar_bounds(
+    wh: Warehouse, instrument_id: int, as_of: str, frequency: str = "1d"
+) -> dict[str, Any]:
+    """First bar, last bar, and the close that was quoted on ``as_of``.
+
+    The bounds describe the whole series, because that is what the price panel
+    can draw. The close is taken on or before the as-of date, because it sits
+    beside accounts resolved to that same date -- a price from after it would
+    make the one number on the page that is not point-in-time the one every
+    ratio is built from.
+    """
+    with wh.bars() as client:
+        rows = client.query(
+            f"""
+            SELECT count(), min(ts), max(ts),
+                   argMaxIf(close, ts, ts <= %(as_of)s),
+                   countIf(ts <= %(as_of)s)
+              FROM {BARS_VIEW}
+             WHERE instrument_id = %(iid)s AND frequency = %(frequency)s
+            """,
+            parameters={
+                "iid": instrument_id,
+                "frequency": frequency,
+                "as_of": f"{as_of} 23:59:59",
+            },
+        ).result_rows
+    # An aggregate over no rows still answers: min(ts) comes back as the epoch
+    # rather than as null, so the row count is what says whether there is a
+    # series at all.
+    if not rows or not int(rows[0][0]):
+        return {"first_bar": None, "last_bar": None, "last_close": None}
+    _, first_ts, last_ts, close, quoted = rows[0]
+    return {
+        "first_bar": first_ts.date().isoformat(),
+        "last_bar": last_ts.date().isoformat(),
+        # argMaxIf over an empty selection returns 0.0, which would read as a
+        # free company rather than as one that had not yet listed.
+        "last_close": float(close) if int(quoted) else None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# The screen (docs/RESEARCH.md §4)
+# ---------------------------------------------------------------------------
+#
+# A screen is a cross-section of the same ratios the fundamental rules gate on,
+# read on one date instead of on every bar. The arithmetic is therefore the
+# rules' own, imported rather than written again: a screen calling a name cheap
+# while a backtest's pe-filter holds its gate shut is the failure this whole
+# feature exists to avoid, and it would be entirely silent.
+
+#: metric -> the filed concepts it cannot be computed without.
+#:
+#: These are the ``requires_facts`` of the rules the metrics mirror: `pe` needs
+#: what `pe-filter` needs, `roe` what `profitability-filter` needs, and so on.
+#: A price is not listed because it is not a filed concept -- it comes from the
+#: bars, and a name with no bar simply has no market cap.
+SCREEN_METRIC_CONCEPTS: dict[str, tuple[str, ...]] = {
+    "pe": ("net_income", "shares_outstanding"),
+    "pb": ("equity", "shares_outstanding"),
+    "roe": ("net_income", "equity"),
+    "leverage": ("long_term_debt", "equity"),
+    "net_margin": ("net_income", "revenue"),
+    "gross_margin": ("gross_profit", "revenue"),
+    "current_ratio": ("current_assets", "current_liabilities"),
+}
+
+#: The canonical order metrics are reported in, whatever order they were asked
+#: for -- so two screens of the same metrics produce the same columns.
+SCREEN_METRICS: tuple[str, ...] = tuple(SCREEN_METRIC_CONCEPTS)
+
+#: How many names' facts are resolved at once.
+#:
+#: The whole 598-name universe across eight concepts is 348,102 rows in 857 ms
+#: against ``fundamentals_pit_idx`` -- the query is fine. What is not fine is
+#: holding every restatement of every period for 598 names in memory at once
+#: just to read one date out of each. Chunking bounds that without touching the
+#: point-in-time path: each chunk is still resolved by ``load_facts_for``, and
+#: the answer for a name does not depend on who else was in its chunk.
+SCREEN_CHUNK = 150
+
+
+def _screen_values(
+    metrics: Sequence[str],
+    series: facts.FactSeries | None,
+    close: float | None,
+    as_of: str,
+    max_stale_days: int,
+) -> dict[str, float | None]:
+    """Every requested ratio for one name, with None meaning *unknown*.
+
+    None is load-bearing in both directions. A missing filing is not a zero,
+    and a non-positive denominator is not an extreme ratio: a company with
+    negative equity has no price-to-book, and dividing anyway would hand it a
+    large negative multiple that sorts as the cheapest name on the screen
+    (docs/FUNDAMENTALS.md §5.5). Both refusals live in ``_ratio``, which is the
+    rules' own.
+    """
+    ratio = fundamental_rules._ratio
+
+    def value(concept: str) -> float | None:
+        return fundamental_rules._value(series, concept, as_of, max_stale_days)
+
+    cap: float | None = None
+    if series is not None and close is not None:
+        # A one-bar list because `_market_cap` reads only `bars[i].close`.
+        # Calling it rather than multiplying here is the point: the screen's
+        # market cap is the rule's market cap, its guard against a
+        # non-positive share count included.
+        cap = fundamental_rules._market_cap(
+            [Bar(as_of, close, close, close, close, 0)], 0, series, as_of, max_stale_days
+        )
+
+    computed: dict[str, float | None] = {
+        "pe": ratio(cap, value("net_income")),
+        "pb": ratio(cap, value("equity")),
+        "roe": ratio(value("net_income"), value("equity")),
+        "leverage": ratio(value("long_term_debt"), value("equity")),
+        "net_margin": ratio(value("net_income"), value("revenue")),
+        "gross_margin": ratio(value("gross_profit"), value("revenue")),
+        "current_ratio": ratio(value("current_assets"), value("current_liabilities")),
+    }
+    # Six places is past any of these ratios' meaningful precision and keeps
+    # float64 repr noise out of the payload (docs/RESEARCH.md §1e).
+    return {
+        metric: None if computed[metric] is None else round(computed[metric], 6)
+        for metric in metrics
+        if metric in computed
+    }
+
+
+def _last_closes(
+    wh: Warehouse, symbols: list[str], as_of: str, frequency: str = "1d"
+) -> dict[str, float]:
+    """The close each name last traded at on or before ``as_of``.
+
+    Bounded by the as-of date for the same reason the facts are: a screen whose
+    accounts are point-in-time and whose prices are current is a look-ahead in
+    the one input every valuation ratio divides by.
+    """
+    ids = _instrument_ids(wh, symbols)
+    if not ids:
+        return {}
+    by_id = {instrument_id: symbol for symbol, instrument_id in ids.items()}
+    with wh.bars() as client:
+        rows = client.query(
+            f"""
+            SELECT instrument_id, argMax(close, ts)
+              FROM {BARS_VIEW}
+             WHERE instrument_id IN %(ids)s
+               AND frequency = %(frequency)s
+               AND ts <= %(as_of)s
+             GROUP BY instrument_id
+            """,
+            parameters={
+                "ids": tuple(by_id),
+                "frequency": frequency,
+                "as_of": f"{as_of} 23:59:59",
+            },
+        ).result_rows
+    return {by_id[int(iid)]: float(close) for iid, close in rows}
+
+
+def screen(
+    wh: Warehouse,
+    *,
+    universe: str,
+    as_of: str,
+    metrics: Sequence[str],
+    constraints: Sequence[tuple[str, float | None, float | None]] = (),
+    sort_by: str | None = None,
+    descending: bool = False,
+    limit: int = 100,
+    max_stale_days: int = fundamental_rules.DEFAULT_MAX_STALE_DAYS,
+) -> dict[str, Any] | None:
+    """Rank a named universe by filed ratios, as of a date. None if unresolved.
+
+    ``universe`` is not a convenience. ``fundamentals_pit_idx`` is
+    ``(instrument_id, concept, filed_at)`` and leads with the instrument, so a
+    screen that names none of them cannot use it: measured, an unbounded eight
+    concept scan is 6,700 ms of parallel sequential scan against 857 ms of
+    index scan once the instruments are named (docs/RESEARCH.md §2). Research
+    also happens *within* a list, so the constraint and the product agree.
+
+    The two exclusion counters are the point of the response. "Failed the
+    filter" and "was never measured" look identical in a short result table,
+    and one of them is a statement about companies while the other is a
+    statement about the warehouse.
+    """
+    snapshot = resolve_universe(wh, universe, as_of)
+    if snapshot is None:
+        return None
+
+    wanted = [metric for metric in SCREEN_METRICS if metric in set(metrics)]
+    concepts = sorted({c for metric in wanted for c in SCREEN_METRIC_CONCEPTS[metric]})
+    symbols = snapshot.symbols
+    closes = _last_closes(wh, symbols, as_of)
+
+    values: dict[str, dict[str, float | None]] = {}
+    for start in range(0, len(symbols), SCREEN_CHUNK):
+        chunk = symbols[start : start + SCREEN_CHUNK]
+        series_by_symbol = load_facts_for(wh, chunk, concepts, as_of, as_of)
+        for symbol in chunk:
+            values[symbol] = _screen_values(
+                wanted, series_by_symbol.get(symbol), closes.get(symbol), as_of,
+                max_stale_days,
             )
 
-    items = [
-        {
-            "concept": concept,
-            "provider": provider,
-            "unit": unit,
-            "fact_count": int(fact_count),
-            "first_filed": first_filed.isoformat(),
-            "last_filed": last_filed.isoformat(),
-            "derived": False,
-        }
-        for concept, provider, unit, fact_count, first_filed, last_filed in rows
-    ]
-    items += [
-        {
-            "concept": concept,
-            "provider": provider,
-            "unit": "ratio",
-            "fact_count": int(fact_count),
-            "first_filed": first_filed.isoformat(),
-            "last_filed": last_filed.isoformat(),
-            "derived": True,
-        }
-        for fact_count, first_filed, last_filed, concept, provider in derived_rows
-    ]
-    return {"symbol": symbol, "total": len(items), "items": items}
+    kept: list[str] = []
+    excluded_by_constraint = 0
+    excluded_unmeasured = 0
+    for symbol in symbols:
+        row = values[symbol]
+        # Unmeasured is checked first and counted separately: a name with no
+        # filed equity has not failed a leverage test, it was never given one.
+        if any(row.get(metric) is None for metric, _, _ in constraints):
+            excluded_unmeasured += 1
+        elif any(
+            (low is not None and row[metric] < low)
+            or (high is not None and row[metric] > high)
+            for metric, low, high in constraints
+        ):
+            excluded_by_constraint += 1
+        else:
+            kept.append(symbol)
+
+    ordered = _rank(kept, values, sort_by, descending)
+    return {
+        "as_of": as_of,
+        "universe": snapshot.universe,
+        "universe_size": len(symbols),
+        "rows": [
+            {"symbol": symbol, "name": snapshot.members[symbol], "values": values[symbol]}
+            for symbol in ordered[:limit]
+        ],
+        "coverage": [
+            {
+                "metric": metric,
+                "measured": sum(1 for row in values.values() if row.get(metric) is not None),
+                "universe": len(symbols),
+                "requires": list(SCREEN_METRIC_CONCEPTS[metric]),
+            }
+            for metric in wanted
+        ],
+        "sort_by": sort_by,
+        "excluded_by_constraint": excluded_by_constraint,
+        "excluded_unmeasured": excluded_unmeasured,
+    }
 
 
-def get_fundamental_facts(
-    wh: Warehouse, symbol: str, concept: str, start: str | None = None
-) -> list[dict]:
-    """One instrument's stored facts for one concept, ascending by filed_at.
+def _rank(
+    symbols: list[str],
+    values: dict[str, dict[str, float | None]],
+    sort_by: str | None,
+    descending: bool,
+) -> list[str]:
+    """Order the survivors, unmeasured names last and ties broken by symbol.
 
-    Raw rows as filed: both dates (``filed_at`` the point-in-time anchor,
-    ``period_end`` the period described), the holder for per-holder filings
-    (FCA short positions), and the provider/unit. ``start`` bounds the read to
-    facts filed on or after that date (the runner's warm-up bound). As-of
-    resolution and growth math live in quantlab.fundamentals, not here -- this
-    layer reads.
+    An unmeasured name never sorts to the top of a ranking in either
+    direction: a null is not a very small number, and putting it first on an
+    ascending P/E screen would present the names nothing is known about as the
+    cheapest ones on the page.
     """
-    where = ["i.symbol = %(symbol)s", "f.concept = %(concept)s"]
-    params: dict[str, Any] = {"symbol": symbol, "concept": concept}
-    if start is not None:
-        where.append("f.filed_at >= %(start)s")
-        params["start"] = start
-    with wh.catalog() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT f.value, f.period_start, f.period_end, f.filed_at,
-                   f.provider, f.unit, f.meta->>'holder' AS holder
-              FROM fundamentals f
-              JOIN instruments i USING (instrument_id)
-             WHERE {" AND ".join(where)}
-             ORDER BY f.filed_at, f.provider, holder
-            """,
-            params,
-        ).fetchall()
-
-    return [
-        {
-            "value": float(value),
-            "period_start": period_start.isoformat() if period_start is not None else None,
-            "period_end": period_end.isoformat(),
-            "filed_at": filed_at.isoformat(),
-            "provider": provider,
-            "unit": unit,
-            "holder": holder,
-        }
-        for value, period_start, period_end, filed_at, provider, unit, holder in rows
-    ]
+    if sort_by is None:
+        return sorted(symbols)
+    measured = [s for s in symbols if values[s].get(sort_by) is not None]
+    unmeasured = [s for s in symbols if values[s].get(sort_by) is None]
+    sign = -1.0 if descending else 1.0
+    # The symbol tiebreak stays ascending either way, so the same screen always
+    # answers in the same order (Constitution VI).
+    measured.sort(key=lambda s: (sign * values[s][sort_by], s))
+    return measured + sorted(unmeasured)

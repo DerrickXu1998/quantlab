@@ -22,28 +22,27 @@ from quantlab.storage.db import canonical_json
 
 
 class ExperimentStore(Protocol):
-    """What the workbench is allowed to ask of experiment persistence.
-
-    Every read and mutation takes an optional ``user_id`` (feature 007):
-    passing one scopes the call to runs that user owns plus pre-auth runs
-    (``user_id IS NULL``), which stay visible to everyone. Passing None —
-    what ``QUANTLAB_AUTH=off`` does — applies no scoping at all, preserving
-    pre-auth behavior byte-for-byte.
-    """
+    """What the workbench is allowed to ask of experiment persistence."""
 
     name: str
 
-    def save_run(self, result: Any, user_id: int | None = None) -> None: ...
-    def get_run(self, run_id: str, user_id: int | None = None) -> dict | None: ...
-    def get_run_signals(self, run_id: str, user_id: int | None = None) -> list[dict]: ...
-    def list_runs(self, saved_only: bool = False, user_id: int | None = None) -> dict: ...
-    def set_run_name(self, run_id: str, name: str, user_id: int | None = None) -> bool: ...
-    def delete_run(self, run_id: str, user_id: int | None = None) -> bool: ...
+    def save_run(self, result: Any) -> None: ...
+    def get_run(self, run_id: str, owner_id: str | None = None) -> dict | None: ...
+    def get_run_signals(self, run_id: str) -> list[dict]: ...
+    def list_runs(self, saved_only: bool = False, owner_id: str | None = None) -> dict: ...
+    def set_run_name(self, run_id: str, name: str, owner_id: str | None = None) -> bool: ...
+    def delete_run(self, run_id: str, owner_id: str | None = None) -> bool: ...
 
 
 def _json_or_none(value: object) -> str | None:
     """Warehouse-only provenance: absent on the demo, stored as NULL."""
     return canonical_json(value) if value else None
+
+
+def _pg_json(value: object) -> str | None:
+    """A JSONB column value, or NULL. Kept separate from _json_or_none so the
+    two stores' encodings stay independently changeable."""
+    return json.dumps(value, sort_keys=True) if value else None
 
 
 def _coverage(requested: int, with_data: int, full_warmup: int) -> dict:
@@ -71,33 +70,16 @@ class SqliteExperimentStore:
         "id, name, model_name, model_version, parameters, symbols, start_date, end_date, "
         "status, error, created_at, signal_count, instruments_requested, "
         "instruments_with_data, instruments_full_warmup, dataset, instrument_ids, "
-        "ingest_run_ids, corporate_actions, execution, custom_rule"
+        "ingest_run_ids, corporate_actions, owner_id, strategy, execution, execution_summary"
     )
 
     @staticmethod
     def _row_to_run(row: tuple) -> dict:
         (
-            run_id,
-            name,
-            model_name,
-            model_version,
-            parameters,
-            symbols,
-            start_date,
-            end_date,
-            status,
-            error,
-            created_at,
-            signal_count,
-            requested,
-            with_data,
-            full_warmup,
-            dataset,
-            instrument_ids,
-            ingest_run_ids,
-            actions,
-            execution,
-            custom_rule,
+            run_id, name, model_name, model_version, parameters, symbols, start_date,
+            end_date, status, error, created_at, signal_count, requested, with_data,
+            full_warmup, dataset, instrument_ids, ingest_run_ids, actions, owner_id,
+            strategy, execution, execution_summary,
         ) = row
         return {
             "id": run_id,
@@ -117,21 +99,22 @@ class SqliteExperimentStore:
             "instrument_ids": json.loads(instrument_ids) if instrument_ids else None,
             "ingest_run_ids": json.loads(ingest_run_ids) if ingest_run_ids else None,
             "corporate_actions": json.loads(actions) if actions else [],
+            "owner_id": owner_id,
+            # Null on runs recorded before strategies and execution criteria
+            # existed. The API reports them as such rather than inventing a
+            # spec those runs never had.
+            "strategy": json.loads(strategy) if strategy else None,
             "execution": json.loads(execution) if execution else None,
-            # Snapshot of the custom rule's definition at run time (feature
-            # 008); NULL for builtin-model runs.
-            "custom_rule": json.loads(custom_rule) if custom_rule else None,
+            "execution_summary": (
+                json.loads(execution_summary) if execution_summary else None
+            ),
         }
 
-    def save_run(self, result: Any, user_id: int | None = None) -> None:
+    def save_run(self, result: Any) -> None:
         with db.connect(self.db_path) as conn:
-            # save_run always writes these columns, so make sure they exist
-            # even on a database seeded before they did.
-            db.ensure_column(conn, "experiment_runs", "user_id INTEGER")
-            db.ensure_column(conn, "experiment_runs", "custom_rule TEXT")
             conn.execute(
-                f"INSERT INTO experiment_runs ({self._COLUMNS}, user_id) "
-                f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                f"INSERT INTO experiment_runs ({self._COLUMNS}) "
+                f"VALUES ({', '.join(['?'] * 23)})",
                 (
                     result.id,
                     result.name,
@@ -152,20 +135,22 @@ class SqliteExperimentStore:
                     _json_or_none(getattr(result, "instrument_ids", None)),
                     _json_or_none(getattr(result, "ingest_run_ids", None)),
                     _json_or_none(getattr(result, "corporate_actions", None)),
+                    getattr(result, "owner_id", None),
+                    _json_or_none(getattr(result, "strategy", None)),
                     _json_or_none(getattr(result, "execution", None)),
-                    _json_or_none(getattr(result, "custom_rule", None)),
-                    user_id,
+                    _json_or_none(getattr(result, "execution_summary", None)),
                 ),
             )
             conn.executemany(
                 "INSERT INTO experiment_signals "
-                "(run_id, symbol, date, direction, trigger_values, data_window_end) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(run_id, symbol, date, kind, direction, trigger_values, data_window_end) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [
                     (
                         result.id,
                         s.symbol,
                         s.date,
+                        getattr(s, "kind", "both"),
                         s.direction,
                         canonical_json(s.trigger_values),
                         s.data_window_end,
@@ -175,33 +160,33 @@ class SqliteExperimentStore:
             )
             conn.commit()
 
-    def _scoped(self, conn, user_id: int | None, placeholder: str = "?") -> tuple[str, list]:
-        """``AND (user_id IS NULL OR user_id = ?)`` — own runs plus pre-auth
-        (NULL-owned) runs — or no clause at all when unscoped."""
-        if user_id is None:
-            return "", []
-        db.ensure_column(conn, "experiment_runs", "user_id INTEGER")
-        return f" AND (user_id IS NULL OR user_id = {placeholder})", [user_id]
+    @staticmethod
+    def _scope(owner_id: str | None, prefix: str = "WHERE") -> tuple[str, tuple]:
+        """The ownership filter, or nothing in single-user mode.
 
-    def get_run(self, run_id: str, user_id: int | None = None) -> dict | None:
+        Applied in SQL rather than by filtering afterwards: a row that is not
+        the caller's must never be loaded at all, let alone loaded and then
+        dropped by a check somebody can forget to write.
+        """
+        if owner_id is None:
+            return "", ()
+        return f"{prefix} owner_id = ?", (owner_id,)
+
+    def get_run(self, run_id: str, owner_id: str | None = None) -> dict | None:
+        scope, params = self._scope(owner_id, "AND")
         with db.connect(self.db_path) as conn:
-            db.ensure_column(conn, "experiment_runs", "custom_rule TEXT")
-            scope, params = self._scoped(conn, user_id)
             row = conn.execute(
-                f"SELECT {self._COLUMNS} FROM experiment_runs WHERE id = ?{scope}",
+                f"SELECT {self._COLUMNS} FROM experiment_runs WHERE id = ? {scope}",
                 (run_id, *params),
             ).fetchone()
         return self._row_to_run(row) if row else None
 
-    def get_run_signals(self, run_id: str, user_id: int | None = None) -> list[dict]:
+    def get_run_signals(self, run_id: str) -> list[dict]:
         with db.connect(self.db_path) as conn:
-            scope, params = self._scoped(conn, user_id)
-            if scope:
-                scope = " AND run_id IN (SELECT id FROM experiment_runs WHERE 1=1" + scope + ")"
             rows = conn.execute(
-                "SELECT symbol, date, direction, trigger_values, data_window_end "
-                f"FROM experiment_signals WHERE run_id = ?{scope} ORDER BY symbol, date",
-                (run_id, *params),
+                "SELECT symbol, date, direction, trigger_values, data_window_end, kind "
+                "FROM experiment_signals WHERE run_id = ? ORDER BY symbol, date",
+                (run_id,),
             ).fetchall()
         return [
             {
@@ -210,46 +195,52 @@ class SqliteExperimentStore:
                 "direction": direction,
                 "trigger_values": json.loads(trigger_values),
                 "data_window_end": data_window_end,
+                # Rows written before strategies existed have no kind; they came
+                # from a single-model run, where one rule both opened and closed.
+                "kind": kind or "both",
             }
-            for symbol, date, direction, trigger_values, data_window_end in rows
+            for symbol, date, direction, trigger_values, data_window_end, kind in rows
         ]
 
-    def list_runs(self, saved_only: bool = False, user_id: int | None = None) -> dict:
+    def list_runs(self, saved_only: bool = False, owner_id: str | None = None) -> dict:
+        clauses, params = [], []
+        if saved_only:
+            clauses.append("name IS NOT NULL")
+        if owner_id is not None:
+            clauses.append("owner_id = ?")
+            params.append(owner_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with db.connect(self.db_path) as conn:
-            db.ensure_column(conn, "experiment_runs", "custom_rule TEXT")
-            scope, params = self._scoped(conn, user_id)
-            where = "WHERE name IS NOT NULL" if saved_only else ""
-            if scope:
-                where = f"WHERE 1=1{scope}" if not where else where + scope
             rows = conn.execute(
                 f"SELECT {self._COLUMNS} FROM experiment_runs {where} "
                 f"ORDER BY created_at DESC, id DESC",
-                params,
+                tuple(params),
             ).fetchall()
         return {"total": len(rows), "items": [self._row_to_run(row) for row in rows]}
 
-    def set_run_name(self, run_id: str, name: str, user_id: int | None = None) -> bool:
+    def set_run_name(self, run_id: str, name: str, owner_id: str | None = None) -> bool:
+        scope, params = self._scope(owner_id, "AND")
         with db.connect(self.db_path) as conn:
-            scope, params = self._scoped(conn, user_id)
             changed = conn.execute(
-                f"UPDATE experiment_runs SET name = ? WHERE id = ?{scope}",
+                f"UPDATE experiment_runs SET name = ? WHERE id = ? {scope}",
                 (name, run_id, *params),
             ).rowcount
             conn.commit()
         return changed > 0
 
-    def delete_run(self, run_id: str, user_id: int | None = None) -> bool:
+    def delete_run(self, run_id: str, owner_id: str | None = None) -> bool:
+        scope, params = self._scope(owner_id, "AND")
         with db.connect(self.db_path) as conn:
-            scope, params = self._scoped(conn, user_id)
-            # Parent first, so the scope clause decides whether anything is
-            # deleted at all. The explicit child delete then covers the case
-            # where the foreign_keys pragma is off: SQLite enforces
-            # ON DELETE CASCADE only when it is on.
+            # The run row goes first and its rowcount is what decides the
+            # answer, so a delete scoped to the wrong owner removes nothing. A
+            # child-first delete would already have destroyed the signals before
+            # discovering the run was not the caller's to delete.
             changed = conn.execute(
-                f"DELETE FROM experiment_runs WHERE id = ?{scope}",
-                (run_id, *params),
+                f"DELETE FROM experiment_runs WHERE id = ? {scope}", (run_id, *params)
             ).rowcount
             if changed:
+                # Explicit child delete: SQLite enforces ON DELETE CASCADE only
+                # when the foreign_keys pragma is on, which is not guaranteed.
                 conn.execute("DELETE FROM experiment_signals WHERE run_id = ?", (run_id,))
             conn.commit()
         return changed > 0
@@ -293,33 +284,16 @@ class PostgresExperimentStore:
         "ingest_run_ids, corporate_actions, dataset, start_date, end_date, status, "
         "error, created_at, "
         "signal_count, instruments_requested, instruments_with_data, instruments_full_warmup, "
-        "execution, custom_rule"
+        "owner_id, strategy, execution, execution_summary"
     )
 
     @staticmethod
     def _row_to_run(row: tuple) -> dict:
         (
-            run_id,
-            name,
-            model_name,
-            model_version,
-            parameters,
-            symbols,
-            instrument_ids,
-            ingest_run_ids,
-            actions,
-            dataset,
-            start_date,
-            end_date,
-            status,
-            error,
-            created_at,
-            signal_count,
-            requested,
-            with_data,
-            full_warmup,
-            execution,
-            custom_rule,
+            run_id, name, model_name, model_version, parameters, symbols, instrument_ids,
+            ingest_run_ids, actions, dataset, start_date, end_date, status, error,
+            created_at, signal_count, requested, with_data, full_warmup, owner_id,
+            strategy, execution, execution_summary,
         ) = row
         return {
             "id": run_id,
@@ -339,19 +313,21 @@ class PostgresExperimentStore:
             "created_at": created_at.isoformat(),
             "signal_count": signal_count,
             "coverage": _coverage(requested, with_data, full_warmup),
+            "owner_id": owner_id,
+            "strategy": strategy,
             "execution": execution,
-            "custom_rule": custom_rule,
+            "execution_summary": execution_summary,
         }
 
-    def save_run(self, result: Any, user_id: int | None = None) -> None:
+    def save_run(self, result: Any) -> None:
         instrument_ids = getattr(result, "instrument_ids", None)
         by_symbol = (
             dict(zip(result.symbols, instrument_ids, strict=False)) if instrument_ids else {}
         )
         with self._connect() as conn:
             conn.execute(
-                f"INSERT INTO experiment_runs ({self._COLUMNS}, user_id) "
-                "VALUES (" + ", ".join(["%s"] * 22) + ")",
+                f"INSERT INTO experiment_runs ({self._COLUMNS}) "
+                "VALUES (" + ", ".join(["%s"] * 23) + ")",
                 (
                     result.id,
                     result.name,
@@ -372,29 +348,23 @@ class PostgresExperimentStore:
                     result.coverage.instruments_requested,
                     result.coverage.instruments_with_data,
                     result.coverage.instruments_full_warmup,
-                    (
-                        json.dumps(result.execution, sort_keys=True)
-                        if getattr(result, "execution", None)
-                        else None
-                    ),
-                    (
-                        json.dumps(result.custom_rule, sort_keys=True)
-                        if getattr(result, "custom_rule", None)
-                        else None
-                    ),
-                    user_id,
+                    getattr(result, "owner_id", None),
+                    _pg_json(getattr(result, "strategy", None)),
+                    _pg_json(getattr(result, "execution", None)),
+                    _pg_json(getattr(result, "execution_summary", None)),
                 ),
             )
             conn.cursor().executemany(
-                "INSERT INTO experiment_signals "
-                "(run_id, instrument_id, symbol, date, direction, trigger_values, data_window_end) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                "INSERT INTO experiment_signals (run_id, instrument_id, symbol, date, kind, "
+                "direction, trigger_values, data_window_end) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                 [
                     (
                         result.id,
                         by_symbol.get(s.symbol),
                         s.symbol,
                         s.date,
+                        getattr(s, "kind", "both"),
                         s.direction,
                         json.dumps(s.trigger_values, sort_keys=True),
                         s.data_window_end,
@@ -405,31 +375,27 @@ class PostgresExperimentStore:
             conn.commit()
 
     @staticmethod
-    def _scoped(user_id: int | None) -> tuple[str, list]:
-        """``AND (user_id IS NULL OR user_id = %s)`` — own runs plus pre-auth
-        (NULL-owned) runs — or no clause at all when unscoped."""
-        if user_id is None:
-            return "", []
-        return " AND (user_id IS NULL OR user_id = %s)", [user_id]
+    def _scope(owner_id: str | None, prefix: str = "WHERE") -> tuple[str, tuple]:
+        """The ownership filter, or nothing in single-user mode."""
+        if owner_id is None:
+            return "", ()
+        return f"{prefix} owner_id = %s", (owner_id,)
 
-    def get_run(self, run_id: str, user_id: int | None = None) -> dict | None:
-        scope, params = self._scoped(user_id)
+    def get_run(self, run_id: str, owner_id: str | None = None) -> dict | None:
+        scope, params = self._scope(owner_id, "AND")
         with self._connect() as conn:
             row = conn.execute(
-                f"SELECT {self._COLUMNS} FROM experiment_runs WHERE run_id = %s{scope}",
+                f"SELECT {self._COLUMNS} FROM experiment_runs WHERE run_id = %s {scope}",
                 (run_id, *params),
             ).fetchone()
         return self._row_to_run(row) if row else None
 
-    def get_run_signals(self, run_id: str, user_id: int | None = None) -> list[dict]:
-        scope, params = self._scoped(user_id)
-        if scope:
-            scope = " AND run_id IN (SELECT run_id FROM experiment_runs WHERE 1=1" + scope + ")"
+    def get_run_signals(self, run_id: str) -> list[dict]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT symbol, date, direction, trigger_values, data_window_end "
-                f"FROM experiment_signals WHERE run_id = %s{scope} ORDER BY symbol, date",
-                (run_id, *params),
+                "SELECT symbol, date, direction, trigger_values, data_window_end, kind "
+                "FROM experiment_signals WHERE run_id = %s ORDER BY symbol, date",
+                (run_id,),
             ).fetchall()
         return [
             {
@@ -438,39 +404,43 @@ class PostgresExperimentStore:
                 "direction": direction,
                 "trigger_values": trigger_values,
                 "data_window_end": data_window_end.isoformat(),
+                "kind": kind or "both",
             }
-            for symbol, date, direction, trigger_values, data_window_end in rows
+            for symbol, date, direction, trigger_values, data_window_end, kind in rows
         ]
 
-    def list_runs(self, saved_only: bool = False, user_id: int | None = None) -> dict:
-        scope, params = self._scoped(user_id)
-        where = "WHERE name IS NOT NULL" if saved_only else ""
-        if scope:
-            where = f"WHERE 1=1{scope}" if not where else where + scope
+    def list_runs(self, saved_only: bool = False, owner_id: str | None = None) -> dict:
+        clauses, params = [], []
+        if saved_only:
+            clauses.append("name IS NOT NULL")
+        if owner_id is not None:
+            clauses.append("owner_id = %s")
+            params.append(owner_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._connect() as conn:
             rows = conn.execute(
                 f"SELECT {self._COLUMNS} FROM experiment_runs {where} "
                 f"ORDER BY created_at DESC, run_id DESC",
-                params,
+                tuple(params),
             ).fetchall()
         return {"total": len(rows), "items": [self._row_to_run(row) for row in rows]}
 
-    def set_run_name(self, run_id: str, name: str, user_id: int | None = None) -> bool:
-        scope, params = self._scoped(user_id)
+    def set_run_name(self, run_id: str, name: str, owner_id: str | None = None) -> bool:
+        scope, params = self._scope(owner_id, "AND")
         with self._connect() as conn:
             changed = conn.execute(
-                f"UPDATE experiment_runs SET name = %s WHERE run_id = %s{scope}",
+                f"UPDATE experiment_runs SET name = %s WHERE run_id = %s {scope}",
                 (name, run_id, *params),
             ).rowcount
             conn.commit()
         return changed > 0
 
-    def delete_run(self, run_id: str, user_id: int | None = None) -> bool:
-        scope, params = self._scoped(user_id)
+    def delete_run(self, run_id: str, owner_id: str | None = None) -> bool:
+        scope, params = self._scope(owner_id, "AND")
         with self._connect() as conn:
             # experiment_signals cascades from the run's foreign key.
             changed = conn.execute(
-                f"DELETE FROM experiment_runs WHERE run_id = %s{scope}",
+                f"DELETE FROM experiment_runs WHERE run_id = %s {scope}",
                 (run_id, *params),
             ).rowcount
             conn.commit()
@@ -492,3 +462,4 @@ __all__ = [
     "SqliteExperimentStore",
     "select_experiment_store",
 ]
+

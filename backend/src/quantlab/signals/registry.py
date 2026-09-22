@@ -20,9 +20,36 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+# Pure stdlib module -- dataclasses and bisect, no database driver -- so the
+# signal registry can know the fundamental vocabulary without dragging the
+# storage layer into its import path.
+from quantlab.storage.facts import KNOWN_CONCEPTS
+
 DIRECTIONS: tuple[str, ...] = ("bullish", "bearish")
 SCALE_CLASSES: tuple[str, ...] = ("scale_free", "price_scaled")
 PARAM_TYPES: tuple[str, ...] = ("int", "float", "bool", "enum")
+
+#: How a rule is grouped in the catalogue. Presentation metadata, not
+#: behaviour: nothing in the engine branches on it.
+CATEGORIES: tuple[str, ...] = (
+    "trend",
+    "momentum",
+    "mean_reversion",
+    "volatility",
+    "volume",
+    # Rules reading filed company accounts rather than the tape. Grouped apart
+    # because a user needs to know *before* building that these names may have
+    # no fundamentals at all, and that they step a few times a year rather
+    # than every bar (docs/FUNDAMENTALS.md §6).
+    "fundamental",
+)
+
+#: Which slots in a strategy a rule may occupy. A rule that reports a *regime*
+#: rather than a tradeable event -- ADX above a threshold, say -- advertises
+#: ("filter",) only, and the strategy validator refuses to wire it as an entry.
+#: Without this a user can build a strategy that enters every single bar and
+#: has no way to see why.
+ROLES: tuple[str, ...] = ("entry", "exit", "filter")
 
 _NUMERIC_TYPES: tuple[str, ...] = ("int", "float")
 
@@ -136,10 +163,30 @@ class SignalRule:
     scale_class: str
     direction_semantics: str
     compute: Callable[..., list[SignalEvent]]
-    #: What the rule reads: "bars" (every builtin) or "bars+fundamentals"
-    #: (custom rules on the fundamental-condition template, feature 008 M3).
-    #: The engine routes stored facts to the latter.
+    #: Catalogue metadata. Defaulted so every rule registered before the
+    #: catalogue existed keeps registering unchanged.
+    category: str = "trend"
+    summary: str = ""
+    roles: tuple[str, ...] = ("entry", "exit")
+    #: Fundamental concepts this rule cannot work without. Empty for every
+    #: rule that reads only bars, which is what keeps the contract backwards
+    #: compatible. The runner loads exactly these, and the catalogue reports
+    #: them so a user can be told which of their instruments will never trade
+    #: before they run rather than after (docs/FUNDAMENTALS.md §5.1).
+    requires_facts: tuple[str, ...] = ()
+    #: What the compute function is handed: "bars", or "bars+fundamentals".
+    #:
+    #: Coarser than `requires_facts` and kept alongside it rather than derived
+    #: from it. A template-built rule names its concept in its *config* rather
+    #: than in the registration, so there is nothing to put in `requires_facts`
+    #: at import time -- but the engine still has to know to fetch facts at all.
+    #: Defaulted, so every rule registered before templates existed is
+    #: unchanged.
     inputs: str = "bars"
+
+    @property
+    def needs_facts(self) -> bool:
+        return bool(self.requires_facts)
 
     @property
     def params(self) -> dict[str, Any]:
@@ -182,11 +229,32 @@ def register_signal_rule(
     lookback_days: int,
     scale_class: str,
     direction_semantics: str,
+    category: str = "trend",
+    summary: str = "",
+    roles: tuple[str, ...] = ("entry", "exit"),
+    requires_facts: tuple[str, ...] = (),
 ) -> Callable:
     if lookback_days < 1:
         raise ValueError("lookback_days must be >= 1")
     if scale_class not in SCALE_CLASSES:
         raise ValueError(f"invalid scale_class {scale_class!r}; expected one of {SCALE_CLASSES}")
+    if category not in CATEGORIES:
+        raise ValueError(f"invalid category {category!r}; expected one of {CATEGORIES}")
+    if not roles:
+        raise ValueError(f"{name}: roles must name at least one of {ROLES}")
+    unknown_roles = [role for role in roles if role not in ROLES]
+    if unknown_roles:
+        raise ValueError(f"{name}: invalid roles {unknown_roles}; expected from {ROLES}")
+    # A rule that names a concept nobody ingests would register cleanly and then
+    # never open its gate, which is indistinguishable from a rule that simply
+    # found nothing. Fail at import instead.
+    unknown_concepts = [c for c in requires_facts if c not in KNOWN_CONCEPTS]
+    if unknown_concepts:
+        raise ValueError(
+            f"{name}: requires unknown fundamental concept(s) {unknown_concepts}; "
+            f"expected from {sorted(KNOWN_CONCEPTS)}"
+        )
+
 
     param_specs = _normalise_params(params)
 
@@ -205,6 +273,15 @@ def register_signal_rule(
                         f"{fn.__name__}{signature}"
                     )
 
+        # A rule that reads facts must accept them. Without this it registers
+        # cleanly, the runner loads its concepts, and compute() raises
+        # TypeError partway through the first run that uses it.
+        if requires_facts and not accepts_kwargs and "facts" not in signature.parameters:
+            raise ValueError(
+                f"{name}: declares requires_facts but {fn.__name__}{signature} has no "
+                f"'facts' keyword. Fundamental rules take compute(bars, *, facts=None, ...)."
+            )
+
         key = (name, version)
         if key in _REGISTRY:
             raise ValueError(f"duplicate signal rule registration: {name} v{version}")
@@ -216,6 +293,10 @@ def register_signal_rule(
             scale_class=scale_class,
             direction_semantics=direction_semantics,
             compute=fn,
+            category=category,
+            summary=summary or (fn.__doc__ or "").strip().split("\n")[0],
+            roles=tuple(roles),
+            requires_facts=tuple(requires_facts),
         )
         return fn
 
@@ -233,3 +314,15 @@ def get_rule(name: str, version: str | None = None) -> SignalRule:
 
 def list_rules() -> list[SignalRule]:
     return [_REGISTRY[key] for key in sorted(_REGISTRY)]
+
+
+def tradeable_rules() -> list[SignalRule]:
+    """Rules that emit events, excluding the pure filters.
+
+    A filter describes a *state*, so it emits on every single bar. That is
+    correct for gating a strategy and wrong for anything that materialises
+    signals into a table: twelve instruments over three years of a filter is
+    tens of thousands of "the gate is shut" rows, which would bury the actual
+    signals in the viewer and inflate every count on the page.
+    """
+    return [rule for rule in list_rules() if set(rule.roles) & {"entry", "exit"}]

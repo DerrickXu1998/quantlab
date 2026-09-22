@@ -12,20 +12,20 @@ import json
 import time
 from dataclasses import asdict
 from datetime import date
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_args
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import StreamingResponse
 
-from quantlab import fundamentals as fundamentals_lib
-from quantlab.api import schemas
-from quantlab.api.auth import require_session, user_id_of
+from quantlab import auth as auth_lib
+from quantlab.api import schemas, security
+from quantlab.api.security import CurrentUser, owner_scope
 from quantlab.replay import engine as replay_engine
 from quantlab.research import errors as research_errors
 from quantlab.research import performance, runner
-from quantlab.signals import builtins as _builtins  # noqa: F401  (registers builtin rules)
 from quantlab.signals import registry as signal_registry
-from quantlab.signals import templates as signal_templates
+from quantlab.storage import facts as fact_defs
+from quantlab.strategy import StrategySpec, StrategyValidationError, templates
 from quantlab.streaming import bus as streaming_bus
 from quantlab.streaming import live as streaming_live
 
@@ -47,9 +47,13 @@ def experiments(request: Request):
     return request.app.state.experiments
 
 
-def custom_rules(request: Request):
-    """Where template-based custom rules live (feature 008)."""
-    return request.app.state.custom_rules
+def strategies_store(request: Request):
+    """Where saved strategies are kept. Every method takes an owner."""
+    return request.app.state.strategies
+
+
+def auth_service(request: Request):
+    return request.app.state.auth
 
 
 def require_seeded(request: Request) -> None:
@@ -68,7 +72,14 @@ def require_seeded(request: Request) -> None:
 def get_health(request: Request) -> schemas.Health:
     active = backend(request)
     has_data, signal_count = active.health()
-    return schemas.Health(dataset=active.name, seeded=has_data, signal_count=signal_count)
+    return schemas.Health(
+        dataset=active.name,
+        seeded=has_data,
+        signal_count=signal_count,
+        # Unauthenticated on purpose: the SPA has to know whether to show a
+        # sign-in gate before it can possibly have a token.
+        auth_required=auth_lib.auth_required(),
+    )
 
 
 @router.get(
@@ -76,7 +87,7 @@ def get_health(request: Request) -> schemas.Health:
     response_model=schemas.InstrumentList,
     tags=["instruments"],
     operation_id="listInstruments",
-    dependencies=[Depends(require_session), Depends(require_seeded)],
+    dependencies=[Depends(require_seeded)],
 )
 def list_instruments(request: Request) -> dict:
     return backend(request).list_instruments()
@@ -87,7 +98,7 @@ def list_instruments(request: Request) -> dict:
     response_model=schemas.PriceBarList,
     tags=["instruments"],
     operation_id="getPrices",
-    dependencies=[Depends(require_session), Depends(require_seeded)],
+    dependencies=[Depends(require_seeded)],
 )
 def get_prices(
     request: Request,
@@ -109,61 +120,11 @@ def get_prices(
 
 
 @router.get(
-    "/instruments/{symbol}/fundamentals/concepts",
-    response_model=schemas.FundamentalConceptList,
-    tags=["fundamentals"],
-    operation_id="listInstrumentFundamentalConcepts",
-    dependencies=[Depends(require_session), Depends(require_seeded)],
-)
-def list_instrument_fundamental_concepts(
-    request: Request,
-    symbol: Annotated[str, Path(pattern=SYMBOL_PATTERN)],
-) -> dict:
-    store = backend(request)
-    if not store.instrument_exists(symbol):
-        raise HTTPException(status_code=404, detail=f"unknown symbol: {symbol}")
-    return store.list_fundamental_concepts(symbol)
-
-
-@router.get(
-    "/instruments/{symbol}/fundamentals/series",
-    response_model=schemas.FundamentalSeries,
-    tags=["fundamentals"],
-    operation_id="getFundamentalSeries",
-    dependencies=[Depends(require_session), Depends(require_seeded)],
-)
-def get_fundamental_series(
-    request: Request,
-    symbol: Annotated[str, Path(pattern=SYMBOL_PATTERN)],
-    concept: str,
-    transform: Literal["raw", "raw_facts", "yoy_growth"] = "raw",
-    start_date: date | None = None,
-    end_date: date | None = None,
-) -> dict:
-    if start_date is not None and end_date is not None and start_date > end_date:
-        raise HTTPException(status_code=400, detail="start_date must be on or before end_date")
-
-    store = backend(request)
-    if not store.instrument_exists(symbol):
-        raise HTTPException(status_code=404, detail=f"unknown symbol: {symbol}")
-    facts, base_provenance = fundamentals_lib.fetch_facts(store, symbol, concept)
-    return fundamentals_lib.build_series(
-        symbol,
-        concept,
-        transform,
-        facts,
-        base_provenance,
-        start=start_date.isoformat() if start_date else None,
-        end=end_date.isoformat() if end_date else None,
-    )
-
-
-@router.get(
     "/signals",
     response_model=schemas.SignalList,
     tags=["signals"],
     operation_id="listSignals",
-    dependencies=[Depends(require_session), Depends(require_seeded)],
+    dependencies=[Depends(require_seeded)],
 )
 def list_signals(
     request: Request,
@@ -188,6 +149,239 @@ def list_signals(
         limit=limit,
         offset=offset,
     )
+
+
+# --- Research: the company, the universe, the screen (docs/RESEARCH.md) ----
+#
+# Thin handlers as everywhere else: these parse a query string and map an
+# absent row to a status code. The point-in-time resolution, the ratios and the
+# coverage arithmetic all live in storage, which is the only place they exist
+# once (Constitution I and V).
+
+
+def _as_of(value: date | None) -> str:
+    """The date to resolve facts on. Today when the caller names none."""
+    return (value or date.today()).isoformat()
+
+
+def _concept_filter(concepts: str | None) -> list[str] | None:
+    """Parse ``concepts=a,b`` into a validated filter, or None for everything.
+
+    An unknown concept is refused rather than silently dropped: a filter that
+    quietly matches nothing returns an empty inspector, which looks exactly
+    like a company that has filed nothing.
+    """
+    if not concepts:
+        return None
+    wanted = [item.strip() for item in concepts.split(",") if item.strip()]
+    unknown = sorted(set(wanted) - fact_defs.KNOWN_CONCEPTS)
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"unknown concepts: {unknown}")
+    return sorted(set(wanted))
+
+
+@router.get(
+    "/instruments/{symbol}/fundamentals",
+    response_model=list[schemas.FundamentalFact],
+    tags=["instruments"],
+    operation_id="getFundamentals",
+    dependencies=[Depends(require_seeded)],
+)
+def get_fundamentals(
+    request: Request,
+    symbol: Annotated[str, Path(pattern=SYMBOL_PATTERN)],
+    as_of: date | None = None,
+    concepts: Annotated[
+        str | None, Query(description="Comma-separated concepts; default is all of them")
+    ] = None,
+) -> list[dict]:
+    """The accounts that were public on a date, each with the filing behind it.
+
+    A bare array rather than the ``{total, items}`` envelope: this is one
+    company's balance sheet, not a page of a collection, and there is nothing
+    to page through.
+    """
+    store = backend(request)
+    if not store.instrument_exists(symbol):
+        raise HTTPException(status_code=404, detail=f"unknown symbol: {symbol}")
+    return store.facts_as_of(symbol, _as_of(as_of), _concept_filter(concepts))
+
+
+@router.get(
+    "/fundamentals/coverage",
+    response_model=schemas.FundamentalsCoverage,
+    tags=["instruments"],
+    operation_id="getFundamentalsCoverage",
+    dependencies=[Depends(require_seeded)],
+)
+def get_fundamentals_coverage(request: Request) -> dict:
+    """What has been filed at all, so a screen can say what it could not measure."""
+    return backend(request).fundamentals_coverage()
+
+
+@router.get(
+    "/instruments/{symbol}/overview",
+    response_model=schemas.CompanyOverview,
+    tags=["instruments"],
+    operation_id="getCompanyOverview",
+    dependencies=[Depends(require_seeded)],
+)
+def get_company_overview(
+    request: Request,
+    symbol: Annotated[str, Path(pattern=SYMBOL_PATTERN)],
+    as_of: date | None = None,
+) -> dict:
+    """One request rather than the four it composes.
+
+    The page needs price bounds, the point-in-time accounts, coverage and
+    signal history before it can render at all; issuing those separately would
+    paint it in four stages, each with its own failure, and a page that is
+    briefly half-wrong is worse than one that is briefly empty.
+    """
+    overview = backend(request).company_overview(symbol, _as_of(as_of))
+    if overview is None:
+        raise HTTPException(status_code=404, detail=f"unknown symbol: {symbol}")
+    return overview
+
+
+@router.get(
+    "/universes",
+    response_model=schemas.UniverseList,
+    tags=["instruments"],
+    operation_id="listUniverses",
+    dependencies=[Depends(require_seeded)],
+)
+def list_universes(request: Request) -> dict:
+    """The dated membership lists a screen may be run over."""
+    return backend(request).list_universes()
+
+
+#: The metric vocabulary, taken from the response schema so the request cannot
+#: accept a metric the response has no column for.
+SCREEN_METRICS: tuple[str, ...] = get_args(schemas.ScreenMetric)
+
+
+def _screen_metrics(metrics: str | None) -> list[str]:
+    if not metrics:
+        return list(SCREEN_METRICS)
+    wanted = [item.strip() for item in metrics.split(",") if item.strip()]
+    unknown = sorted(set(wanted) - set(SCREEN_METRICS))
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"unknown metrics: {unknown}")
+    return wanted
+
+
+def _screen_constraints(constraints: str | None) -> list[tuple[str, float | None, float | None]]:
+    """Parse ``metric:min:max,metric:min:max``; an empty bound is unbounded.
+
+    A GET with the whole screen in the query string, so a screen is linkable
+    and a colleague can be sent the exact one that was run rather than a
+    description of it.
+    """
+    if not constraints:
+        return []
+    parsed: list[tuple[str, float | None, float | None]] = []
+    for clause in constraints.split(","):
+        clause = clause.strip()
+        if not clause:
+            continue
+        parts = clause.split(":")
+        if len(parts) != 3:
+            raise HTTPException(
+                status_code=422,
+                detail=f"constraint must be metric:min:max, got {clause!r}",
+            )
+        metric, low_text, high_text = (part.strip() for part in parts)
+        if metric not in SCREEN_METRICS:
+            raise HTTPException(status_code=422, detail=f"unknown metric: {metric}")
+        try:
+            low = float(low_text) if low_text else None
+            high = float(high_text) if high_text else None
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422, detail=f"constraint bounds must be numbers: {clause!r}"
+            ) from exc
+        if low is not None and high is not None and low > high:
+            raise HTTPException(
+                status_code=422, detail=f"constraint admits nothing: {clause!r}"
+            )
+        parsed.append((metric, low, high))
+    return parsed
+
+
+def _universe_detail(request: Request, universe: str, as_of: str) -> str:
+    """Say which kind of miss it was: a name nobody has, or a date nobody reaches.
+
+    Only ever built on the failure path. "Unknown universe" and "that universe
+    does not go back that far" call for different corrections, and one message
+    covering both would send the caller to fix the wrong half of the request.
+    """
+    dates = [
+        item["as_of"]
+        for item in backend(request).list_universes()["items"]
+        if item["name"] == universe
+    ]
+    if not dates:
+        return f"unknown universe: {universe}"
+    return (
+        f"universe {universe} has no snapshot on or before {as_of}; "
+        f"its earliest is {min(dates)}"
+    )
+
+
+@router.get(
+    "/screen",
+    response_model=schemas.ScreenResult,
+    tags=["instruments"],
+    operation_id="screen",
+    dependencies=[Depends(require_seeded)],
+)
+def screen(
+    request: Request,
+    universe: Annotated[str, Query(min_length=1, description="A universe from /universes")],
+    as_of: date | None = None,
+    metrics: Annotated[
+        str | None, Query(description="Comma-separated metrics; default is all of them")
+    ] = None,
+    constraints: Annotated[
+        str | None, Query(description="metric:min:max,metric:min:max; empty bound is unbounded")
+    ] = None,
+    sort_by: schemas.ScreenMetric | None = None,
+    descending: bool = False,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 100,
+) -> dict:
+    """Narrow a named universe by filed ratios, point-in-time.
+
+    ``universe`` is required by the index rather than by taste:
+    ``fundamentals_pit_idx`` leads with ``instrument_id``, so an unbounded
+    screen falls to a sequential scan and takes 6.7 s against 857 ms bounded
+    (docs/RESEARCH.md §2). It is also what the work is -- nobody screens
+    "everything".
+    """
+    wanted = _screen_metrics(metrics)
+    parsed = _screen_constraints(constraints)
+    # A constrained or sorted metric is reported whether or not it was asked
+    # for: its coverage is the only thing that separates "few qualified" from
+    # "most were never measured", and a sort on an absent column is silent.
+    for metric in [*(metric for metric, _, _ in parsed), *([sort_by] if sort_by else [])]:
+        if metric not in wanted:
+            wanted.append(metric)
+
+    resolved = _as_of(as_of)
+    result = backend(request).screen(
+        universe=universe,
+        as_of=resolved,
+        metrics=wanted,
+        constraints=parsed,
+        sort_by=sort_by,
+        descending=descending,
+        limit=limit,
+    )
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=_universe_detail(request, universe, resolved)
+        )
+    return result
 
 
 # --- Model catalog and experiment runs (feature 005) -----------------------
@@ -215,6 +409,10 @@ def _model_to_schema(rule) -> dict:
         "lookback_days": rule.lookback_days,
         "scale_class": rule.scale_class,
         "direction_semantics": rule.direction_semantics,
+        "category": rule.category,
+        "summary": rule.summary,
+        "roles": list(rule.roles),
+        "requires_facts": list(rule.requires_facts),
     }
 
 
@@ -223,75 +421,12 @@ def _model_to_schema(rule) -> dict:
     response_model=schemas.ModelList,
     tags=["models"],
     operation_id="listModels",
-    dependencies=[Depends(require_session)],
 )
-def list_models(
-    request: Request, user: Annotated[dict | None, Depends(require_session)]
-) -> dict:
+def list_models() -> dict:
     """Assembled from the registry at request time, so registering a model
-    changes this response with no code change (Constitution II). Custom rules
-    join the same catalog with ``origin: "custom"`` -- a model is a model."""
-    items = [
-        {
-            **_model_to_schema(rule),
-            "origin": "builtin",
-            "custom_rule_id": None,
-            "template": None,
-        }
-        for rule in signal_registry.list_rules()
-    ]
-    for record in custom_rules(request).list_rules(user_id_of(user))["items"]:
-        try:
-            template = signal_templates.get_template(record["template"])
-            lookback = template.lookback_days(record["config"])
-            scale_class = template.scale_class(record["config"])
-        except (KeyError, ValueError):
-            # A rule whose template no longer exists cannot run; it stays in
-            # the rule list but not in the runnable catalog.
-            continue
-        items.append(
-            {
-                "name": record["slug"],
-                "version": template.version,
-                "parameters": [],
-                "lookback_days": lookback,
-                "scale_class": scale_class,
-                "direction_semantics": template.direction_semantics,
-                "origin": "custom",
-                "custom_rule_id": record["rule_id"],
-                "template": template.id,
-            }
-        )
-    return {"total": len(items), "items": items}
-
-
-@router.get(
-    "/signal-templates",
-    response_model=schemas.SignalTemplateList,
-    tags=["models"],
-    operation_id="listSignalTemplates",
-    dependencies=[Depends(require_session)],
-)
-def list_signal_templates(request: Request) -> dict:
-    """The template catalog, assembled from the registry at request time:
-    registering a template changes this response with no code change."""
-    dataset = backend(request).name
-    items = [
-        {
-            "id": template.id,
-            "version": template.version,
-            "description": template.description,
-            "inputs": template.inputs,
-            # Templates reading fundamentals need the warehouse; bars-only
-            # templates run on either dataset.
-            "available_on_dataset": (
-                template.inputs == "bars" or dataset == "warehouse"
-            ),
-            "config_fields": template.config_fields,
-        }
-        for template in signal_templates.list_templates()
-    ]
-    return {"total": len(items), "items": items}
+    changes this response with no code change (Constitution II)."""
+    rules = signal_registry.list_rules()
+    return {"total": len(rules), "items": [_model_to_schema(rule) for rule in rules]}
 
 
 def _is_registered(model_name: str, model_version: str) -> bool:
@@ -302,25 +437,54 @@ def _is_registered(model_name: str, model_version: str) -> bool:
     return True
 
 
-def _run_response(
-    run: dict, dataset: str = "sqlite", rules_store=None, user_id: int | None = None
-) -> dict:
+def _run_response(run: dict, dataset: str = "sqlite") -> dict:
     run = dict(run)
-    snapshot = run.get("custom_rule")
-    if snapshot is not None and rules_store is not None:
-        # A custom-rule run is reproducible from its snapshot, but
-        # "model_available" answers "could I run this rule again": false once
-        # the rule is deleted (or owned by someone else).
-        run["model_available"] = (
-            rules_store.get_rule(snapshot["rule_id"], user_id) is not None
-        )
-    else:
-        run["model_available"] = _is_registered(run["model_name"], run["model_version"])
+    run.pop("owner_id", None)  # internal; the caller is the owner by construction
+    run["model_available"] = _is_registered(run["model_name"], run["model_version"])
     run.setdefault("dataset", dataset)
     # A run recorded against a different dataset stays readable but cannot be
     # reproduced as recorded.
     run["re_runnable"] = run["dataset"] == dataset
     return run
+
+
+def _resolve_request_strategy(request: Request, body: schemas.RunRequest, user) -> dict | None:
+    """The strategy a run request names, whichever way it names it.
+
+    Exactly one of the three forms is accepted. Silently preferring one when
+    two are given would run something other than what the caller wrote.
+    """
+    given = [
+        name
+        for name, value in (
+            ("model_name", body.model_name),
+            ("strategy_id", body.strategy_id),
+            ("strategy", body.strategy),
+        )
+        if value
+    ]
+    if len(given) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail=f"give exactly one of model_name, strategy_id or strategy; got {given}",
+        )
+    if not given:
+        raise HTTPException(
+            status_code=400,
+            detail="a run needs one of model_name, strategy_id or strategy",
+        )
+
+    if body.strategy_id:
+        saved = strategies_store(request).get(owner_scope(user) or user.id, body.strategy_id)
+        if saved is None:
+            # Another user's strategy reads as absent, never as forbidden.
+            raise HTTPException(
+                status_code=404, detail=f"unknown strategy: {body.strategy_id}"
+            )
+        return saved
+    if body.strategy is not None:
+        return body.strategy.model_dump()
+    return None
 
 
 @router.post(
@@ -329,48 +493,30 @@ def _run_response(
     status_code=201,
     tags=["runs"],
     operation_id="createRun",
-    dependencies=[Depends(require_session), Depends(require_seeded)],
+    dependencies=[Depends(require_seeded)],
 )
-def create_run(
-    request: Request,
-    body: schemas.RunRequest,
-    user: Annotated[dict | None, Depends(require_session)],
-) -> dict:
+def create_run(request: Request, body: schemas.RunRequest, user: CurrentUser) -> dict:
     active = backend(request)
     store = experiments(request)
-    rule_record = None
-    if body.custom_rule_id is not None:
-        if body.model_name is not None:
-            raise HTTPException(
-                status_code=422,
-                detail="model_name and custom_rule_id are mutually exclusive",
-            )
-        rule_record = custom_rules(request).get_rule(body.custom_rule_id, user_id_of(user))
-        if rule_record is None:
-            raise HTTPException(
-                status_code=404, detail=f"unknown custom rule: {body.custom_rule_id}"
-            )
+    spec = _resolve_request_strategy(request, body, user)
     try:
         result = runner.run_experiment(
             active,
+            strategy=spec,
             model_name=body.model_name,
             model_version=body.model_version,
             overrides=body.parameters,
+            execution=body.execution.model_dump() if body.execution else None,
             symbols=body.symbols,
             start_date=body.start_date,
             end_date=body.end_date,
-            execution=body.execution.model_dump() if body.execution else None,
-            custom_rule=rule_record,
+            owner_id=user.id,
         )
     except research_errors.UnknownModelError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except research_errors.UnknownSymbolError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except research_errors.ParameterValidationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except research_errors.DatasetUnsupportedError as exc:
-        # The template is valid; the active dataset cannot serve it (the demo
-        # holds no fundamentals).
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except (
         research_errors.InvalidWindowError,
@@ -379,9 +525,9 @@ def create_run(
     ) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    store.save_run(result, user_id=user_id_of(user))
-    stored = store.get_run(result.id, user_id=user_id_of(user))
-    return _run_response(stored, active.name, custom_rules(request), user_id_of(user))
+    store.save_run(result)
+    stored = store.get_run(result.id, owner_scope(user))
+    return _run_response(stored, active.name)
 
 
 @router.get(
@@ -389,21 +535,14 @@ def create_run(
     response_model=schemas.RunList,
     tags=["runs"],
     operation_id="listRuns",
-    dependencies=[Depends(require_session), Depends(require_seeded)],
+    dependencies=[Depends(require_seeded)],
 )
-def list_runs(
-    request: Request,
-    user: Annotated[dict | None, Depends(require_session)],
-    saved_only: bool = False,
-) -> dict:
-    result = experiments(request).list_runs(saved_only=saved_only, user_id=user_id_of(user))
+def list_runs(request: Request, user: CurrentUser, saved_only: bool = False) -> dict:
+    result = experiments(request).list_runs(
+        saved_only=saved_only, owner_id=owner_scope(user)
+    )
     active = backend(request).name
-    store = custom_rules(request)
-    uid = user_id_of(user)
-    return {
-        "total": result["total"],
-        "items": [_run_response(r, active, store, uid) for r in result["items"]],
-    }
+    return {"total": result["total"], "items": [_run_response(r, active) for r in result["items"]]}
 
 
 @router.get(
@@ -411,38 +550,28 @@ def list_runs(
     response_model=schemas.RunDetail,
     tags=["runs"],
     operation_id="getRun",
-    dependencies=[Depends(require_session), Depends(require_seeded)],
+    dependencies=[Depends(require_seeded)],
 )
-def get_run(
-    request: Request, run_id: str, user: Annotated[dict | None, Depends(require_session)]
-) -> dict:
+def get_run(request: Request, run_id: str, user: CurrentUser) -> dict:
     store = experiments(request)
-    run = store.get_run(run_id, user_id=user_id_of(user))
+    run = store.get_run(run_id, owner_scope(user))
     if run is None:
         raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
-    signals = store.get_run_signals(run_id, user_id=user_id_of(user))
-    return {
-        **_run_response(
-            run, backend(request).name, custom_rules(request), user_id_of(user)
-        ),
-        "signals": signals,
-    }
-
+    signals = store.get_run_signals(run_id)
+    return {**_run_response(run, backend(request).name), "signals": signals}
 
 @router.get(
     "/runs/{run_id}/performance",
     response_model=schemas.RunPerformance,
     tags=["runs"],
     operation_id="getRunPerformance",
-    dependencies=[Depends(require_session), Depends(require_seeded)],
+    dependencies=[Depends(require_seeded)],
 )
-def get_run_performance(
-    request: Request, run_id: str, user: Annotated[dict | None, Depends(require_session)]
-) -> dict:
+def get_run_performance(request: Request, run_id: str, user: CurrentUser) -> dict:
     """Still a thin handler: the analytics live in research.performance, which
     is where the frontend cannot reach them (Constitution V)."""
     store = experiments(request)
-    run = store.get_run(run_id, user_id=user_id_of(user))
+    run = store.get_run(run_id, owner_scope(user))
     if run is None:
         raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
     # A failed run has no performance. Zeroed figures would read as a flat
@@ -452,16 +581,18 @@ def get_run_performance(
         raise HTTPException(status_code=409, detail=f"run {run_id} failed; it has no performance")
 
     symbols = list(run["symbols"])
-    # The reported window only: warm-up bars are inputs to the signals, not
-    # part of the period being measured.
-    bars = backend(request).load_bars_for(symbols, run["start_date"], run["end_date"])
-    criteria = performance.execution_criteria(run["execution"]) if run.get("execution") else None
+    # Bars are loaded from the warm-up start, not the window start: a stop set
+    # from an ATR on the first session of the window needs the sessions behind
+    # it. Nothing can happen in the warm-up -- no signal is dated there.
+    signals, bars = replay_engine.load_replay_inputs(backend(request), store, run)
     result = performance.compute_performance(
         run_id=run_id,
-        signals=store.get_run_signals(run_id, user_id=user_id_of(user)),
+        signals=signals,
         bars_by_symbol=bars,
         symbols=symbols,
-        execution=criteria,
+        execution=runner.execution_config_for(run),
+        window_start=run["start_date"],
+        window_end=run["end_date"],
     )
     return asdict(result)
 
@@ -471,19 +602,16 @@ def get_run_performance(
     response_model=schemas.Run,
     tags=["runs"],
     operation_id="saveRun",
-    dependencies=[Depends(require_session), Depends(require_seeded)],
+    dependencies=[Depends(require_seeded)],
 )
 def save_run(
-    request: Request,
-    run_id: str,
-    body: schemas.RunNameRequest,
-    user: Annotated[dict | None, Depends(require_session)],
+    request: Request, run_id: str, body: schemas.RunNameRequest, user: CurrentUser
 ) -> dict:
     store = experiments(request)
-    if not store.set_run_name(run_id, body.name, user_id=user_id_of(user)):
+    if not store.set_run_name(run_id, body.name, owner_scope(user)):
         raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
-    run = store.get_run(run_id, user_id=user_id_of(user))
-    return _run_response(run, backend(request).name, custom_rules(request), user_id_of(user))
+    run = store.get_run(run_id, owner_scope(user))
+    return _run_response(run, backend(request).name)
 
 
 @router.delete(
@@ -491,133 +619,11 @@ def save_run(
     status_code=204,
     tags=["runs"],
     operation_id="deleteRun",
-    dependencies=[Depends(require_session), Depends(require_seeded)],
+    dependencies=[Depends(require_seeded)],
 )
-def delete_run(
-    request: Request, run_id: str, user: Annotated[dict | None, Depends(require_session)]
-) -> None:
-    if not experiments(request).delete_run(run_id, user_id=user_id_of(user)):
+def delete_run(request: Request, run_id: str, user: CurrentUser) -> None:
+    if not experiments(request).delete_run(run_id, owner_scope(user)):
         raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
-
-
-# --- Custom signal rules (feature 008, M2) ------------------------------------
-#
-# Thin handlers over the CustomRuleStore seam; template validation lives in
-# quantlab.signals.templates. Scoping mirrors runs: another user's rule id
-# reads as 404.
-
-
-def _rule_response(record: dict) -> dict:
-    template = signal_templates.get_template(record["template"])
-    return {**record, "lookback_days": template.lookback_days(record["config"])}
-
-
-def _get_scoped_rule(request: Request, rule_id: str, user_id: int | None) -> dict:
-    record = custom_rules(request).get_rule(rule_id, user_id)
-    if record is None:
-        raise HTTPException(status_code=404, detail=f"unknown custom rule: {rule_id}")
-    return record
-
-
-@router.post(
-    "/rules",
-    response_model=schemas.CustomRule,
-    status_code=201,
-    tags=["rules"],
-    operation_id="createCustomRule",
-    dependencies=[Depends(require_session)],
-)
-def create_custom_rule(
-    request: Request,
-    body: schemas.CustomRuleRequest,
-    user: Annotated[dict | None, Depends(require_session)],
-) -> dict:
-    try:
-        template = signal_templates.get_template(body.template)
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"unknown template: {body.template}") from None
-    try:
-        template.validate(body.config)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    record = custom_rules(request).create_rule(
-        user_id_of(user), body.name, template.id, body.config
-    )
-    return _rule_response(record)
-
-
-@router.get(
-    "/rules",
-    response_model=schemas.CustomRuleList,
-    tags=["rules"],
-    operation_id="listCustomRules",
-    dependencies=[Depends(require_session)],
-)
-def list_custom_rules(
-    request: Request, user: Annotated[dict | None, Depends(require_session)]
-) -> dict:
-    result = custom_rules(request).list_rules(user_id_of(user))
-    return {"total": result["total"], "items": [_rule_response(r) for r in result["items"]]}
-
-
-@router.get(
-    "/rules/{rule_id}",
-    response_model=schemas.CustomRule,
-    tags=["rules"],
-    operation_id="getCustomRule",
-    dependencies=[Depends(require_session)],
-)
-def get_custom_rule(
-    request: Request,
-    rule_id: str,
-    user: Annotated[dict | None, Depends(require_session)],
-) -> dict:
-    return _rule_response(_get_scoped_rule(request, rule_id, user_id_of(user)))
-
-
-@router.patch(
-    "/rules/{rule_id}",
-    response_model=schemas.CustomRule,
-    tags=["rules"],
-    operation_id="updateCustomRule",
-    dependencies=[Depends(require_session)],
-)
-def update_custom_rule(
-    request: Request,
-    rule_id: str,
-    body: schemas.CustomRuleUpdateRequest,
-    user: Annotated[dict | None, Depends(require_session)],
-) -> dict:
-    record = _get_scoped_rule(request, rule_id, user_id_of(user))
-    if body.name is None and body.config is None:
-        raise HTTPException(status_code=422, detail="nothing to update: send name and/or config")
-    if body.config is not None:
-        try:
-            signal_templates.get_template(record["template"]).validate(body.config)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-    updated = custom_rules(request).update_rule(
-        rule_id, user_id_of(user), name=body.name, config=body.config
-    )
-    return _rule_response(updated)
-
-
-@router.delete(
-    "/rules/{rule_id}",
-    status_code=204,
-    tags=["rules"],
-    operation_id="deleteCustomRule",
-    dependencies=[Depends(require_session)],
-)
-def delete_custom_rule(
-    request: Request,
-    rule_id: str,
-    user: Annotated[dict | None, Depends(require_session)],
-) -> None:
-    # Deleting a rule never touches the runs that used it: their snapshot
-    # keeps them reproducible, and model_available flips to false.
-    if not custom_rules(request).delete_rule(rule_id, user_id_of(user)):
-        raise HTTPException(status_code=404, detail=f"unknown custom rule: {rule_id}")
 
 
 # --- Historical replay ------------------------------------------------------
@@ -627,9 +633,9 @@ def delete_custom_rule(
 # and frame the events.
 
 
-def _replayable_run(request: Request, run_id: str, user_id: int | None = None) -> dict:
+def _replayable_run(request: Request, run_id: str, user) -> dict:
     store = experiments(request)
-    run = store.get_run(run_id, user_id=user_id)
+    run = store.get_run(run_id, owner_scope(user))
     if run is None:
         raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
     # A failed run has nothing to replay; as with performance, zeroed output
@@ -643,17 +649,17 @@ def _replayable_run(request: Request, run_id: str, user_id: int | None = None) -
     "/runs/{run_id}/replay/stream",
     tags=["replay"],
     operation_id="streamRunReplay",
-    dependencies=[Depends(require_session), Depends(require_seeded)],
+    dependencies=[Depends(require_seeded)],
 )
 def stream_run_replay(
     request: Request,
     run_id: str,
-    user: Annotated[dict | None, Depends(require_session)],
+    user: CurrentUser,
     interval_ms: Annotated[int, Query(ge=0, le=10_000)] = 0,
     max_events: Annotated[int, Query(ge=1, le=5_000_000)] = 250_000,
     step: Annotated[int, Query(ge=1)] = 1,
 ) -> StreamingResponse:
-    run = _replayable_run(request, run_id, user_id_of(user))
+    run = _replayable_run(request, run_id, user)
     signals, bars = replay_engine.load_replay_inputs(backend(request), experiments(request), run)
 
     def frames():
@@ -685,12 +691,10 @@ def stream_run_replay(
     response_model=schemas.ReplaySummary,
     tags=["replay"],
     operation_id="getRunReplaySummary",
-    dependencies=[Depends(require_session), Depends(require_seeded)],
+    dependencies=[Depends(require_seeded)],
 )
-def get_run_replay_summary(
-    request: Request, run_id: str, user: Annotated[dict | None, Depends(require_session)]
-) -> dict:
-    run = _replayable_run(request, run_id, user_id_of(user))
+def get_run_replay_summary(request: Request, run_id: str, user: CurrentUser) -> dict:
+    run = _replayable_run(request, run_id, user)
     signals, bars = replay_engine.load_replay_inputs(backend(request), experiments(request), run)
     return asdict(replay_engine.replay_summary(run, signals, bars))
 
@@ -707,7 +711,6 @@ def get_run_replay_summary(
     "/replay/live/stream",
     tags=["replay"],
     operation_id="streamLiveReplay",
-    dependencies=[Depends(require_session)],
 )
 def stream_live_replay(
     model: str = "sma-crossover",
@@ -762,12 +765,7 @@ def stream_live_replay(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     events = streaming_live.live_replay_events(
-        model,
-        overrides,
-        symbol_list,
-        start.isoformat(),
-        end.isoformat(),
-        stream,
+        model, overrides, symbol_list, start.isoformat(), end.isoformat(), stream,
         initial_cash=initial_cash,
     )
 
@@ -794,3 +792,215 @@ def stream_live_replay(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# --- Identity ---------------------------------------------------------------
+#
+# Thin handlers again: every security decision lives in quantlab.auth, and this
+# only maps a typed failure to a status code. The one rule enforced here is
+# that registration is helpful about *why* a request failed and login is not --
+# a login that explains itself is an account-enumeration oracle.
+
+
+@router.post(
+    "/auth/register",
+    response_model=schemas.SessionOut,
+    status_code=201,
+    tags=["auth"],
+    operation_id="register",
+)
+def register(request: Request, body: schemas.Credentials) -> dict:
+    try:
+        session = auth_service(request).register(body.email, body.password)
+    except auth_lib.EmailAlreadyRegistered as exc:
+        # A 409 here does disclose that an address is registered. That is
+        # unavoidable for a self-service signup form -- refusing to say so
+        # would mean silently not creating the account -- and it is why the
+        # *login* path is the one hardened against enumeration.
+        raise HTTPException(
+            status_code=409, detail="that email address is already registered"
+        ) from exc
+    except auth_lib.PasswordPolicyError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "user": session.user.to_dict(),
+        "token": session.token,
+        "expires_at": session.expires_at,
+    }
+
+
+@router.post(
+    "/auth/login",
+    response_model=schemas.SessionOut,
+    tags=["auth"],
+    operation_id="login",
+)
+def login(request: Request, body: schemas.Credentials) -> dict:
+    try:
+        session = auth_service(request).login(body.email, body.password)
+    except auth_lib.RateLimited as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=str(exc),
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+    except auth_lib.AuthError as exc:
+        raise HTTPException(
+            status_code=401,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+    return {
+        "user": session.user.to_dict(),
+        "token": session.token,
+        "expires_at": session.expires_at,
+    }
+
+
+@router.post(
+    "/auth/logout",
+    status_code=204,
+    tags=["auth"],
+    operation_id="logout",
+)
+def logout(request: Request, user: CurrentUser) -> None:
+    """Revoke this session and no other.
+
+    Possible only because a session is a row. A signed stateless token could
+    not be withdrawn before it expired, which would make this endpoint a
+    gesture rather than a control.
+    """
+    token = security.bearer_token(request.headers.get("authorization"))
+    if token:
+        auth_service(request).logout(token)
+
+
+@router.get(
+    "/auth/me",
+    response_model=schemas.UserOut,
+    tags=["auth"],
+    operation_id="getCurrentUser",
+)
+def get_current_user(user: CurrentUser) -> dict:
+    return user.to_dict()
+
+
+# --- Strategies -------------------------------------------------------------
+#
+# Every handler is scoped to the caller. A strategy that is not theirs reads as
+# absent rather than forbidden: a 403 confirms the row exists.
+
+
+def _strategy_response(stored: dict) -> dict:
+    """Attach the warnings a spec generates about itself.
+
+    Computed rather than stored: a strategy with no exit component was legal
+    when it was saved and is still legal, but what is worth flagging about it
+    can change as the engine does, and a stored copy would go stale.
+    """
+    body = dict(stored)
+    try:
+        body["warnings"] = StrategySpec.from_dict(stored).warnings
+    except (StrategyValidationError, ValueError):
+        # A stored spec this build can no longer validate is still readable;
+        # saying so is more useful than refusing to list it at all.
+        body["warnings"] = [
+            "This strategy cannot be validated by this version of QuantLab and "
+            "may not be runnable."
+        ]
+    return body
+
+
+def _parse_strategy(body: schemas.StrategyRequest) -> StrategySpec:
+    try:
+        return StrategySpec.from_dict(body.model_dump())
+    except (StrategyValidationError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get(
+    "/strategies",
+    response_model=schemas.StrategyList,
+    tags=["strategies"],
+    operation_id="listStrategies",
+)
+def list_strategies(request: Request, user: CurrentUser) -> dict:
+    result = strategies_store(request).list(user.id)
+    return {
+        "total": result["total"],
+        "items": [_strategy_response(item) for item in result["items"]],
+    }
+
+
+@router.post(
+    "/strategies",
+    response_model=schemas.Strategy,
+    status_code=201,
+    tags=["strategies"],
+    operation_id="createStrategy",
+)
+def create_strategy(
+    request: Request, body: schemas.StrategyRequest, user: CurrentUser
+) -> dict:
+    spec = _parse_strategy(body)
+    return _strategy_response(strategies_store(request).create(user.id, spec))
+
+
+@router.get(
+    "/strategies/{strategy_id}",
+    response_model=schemas.Strategy,
+    tags=["strategies"],
+    operation_id="getStrategy",
+)
+def get_strategy(request: Request, strategy_id: str, user: CurrentUser) -> dict:
+    stored = strategies_store(request).get(user.id, strategy_id)
+    if stored is None:
+        raise HTTPException(status_code=404, detail=f"unknown strategy: {strategy_id}")
+    return _strategy_response(stored)
+
+
+@router.put(
+    "/strategies/{strategy_id}",
+    response_model=schemas.Strategy,
+    tags=["strategies"],
+    operation_id="replaceStrategy",
+)
+def replace_strategy(
+    request: Request,
+    strategy_id: str,
+    body: schemas.StrategyRequest,
+    user: CurrentUser,
+) -> dict:
+    spec = _parse_strategy(body)
+    stored = strategies_store(request).replace(user.id, strategy_id, spec)
+    if stored is None:
+        raise HTTPException(status_code=404, detail=f"unknown strategy: {strategy_id}")
+    return _strategy_response(stored)
+
+
+@router.delete(
+    "/strategies/{strategy_id}",
+    status_code=204,
+    tags=["strategies"],
+    operation_id="deleteStrategy",
+)
+def delete_strategy(request: Request, strategy_id: str, user: CurrentUser) -> None:
+    if not strategies_store(request).delete(user.id, strategy_id):
+        raise HTTPException(status_code=404, detail=f"unknown strategy: {strategy_id}")
+
+
+@router.get(
+    "/strategy-templates",
+    response_model=schemas.StrategyTemplateList,
+    tags=["strategies"],
+    operation_id="listStrategyTemplates",
+)
+def list_strategy_templates() -> dict:
+    """Complete starter strategies, for a builder that would otherwise be a wall.
+
+    Unauthenticated: they are identical for everyone and contain nothing of
+    anybody's. Assembled at request time, so adding a template needs no change
+    here.
+    """
+    items = templates.catalogue()
+    return {"total": len(items), "items": items}

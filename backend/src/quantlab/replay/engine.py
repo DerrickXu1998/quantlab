@@ -1,16 +1,22 @@
-"""Replay engine: interleave a run's bars and signals into an event stream.
+"""Replay engine: a run's window as a chronological event stream.
 
 Pure computation (Constitutions I and VI): ``replay_events`` takes the run
 record, its stored signals and its window's bars, and yields typed events in
 strict chronological order -- bars first on each date, then the signals that
-fire that day, then their fills at that day's close, then one equity mark.
-A signal therefore never precedes the bar event of its own date, and the
-simulator never touches a later bar (Constitution VII).
+fire that day, then the fills they produced, then one equity mark. A signal
+therefore never precedes the bar event of its own date, and the simulator never
+touches a later bar (Constitution VII).
 
-The summary event reuses ``research.performance.metrics`` over the replayed
-equity curve and the simulator's trade list rather than re-implementing
-anything, so the replay's bottom line reconciles with
-``GET /runs/{id}/performance`` on the same run.
+The book is driven by :class:`~quantlab.execution.ExecutionSimulator`, the same
+engine that produced the run and that ``research.performance`` re-executes. This
+module used to carry its own copy of the sizing and pairing rules, which meant
+a replay and its performance report agreed only for as long as somebody kept
+two implementations in step by hand. They now cannot disagree.
+
+That change also fixed a quieter bug: the old replay reduced every bar to its
+close before the simulator saw it, so a stop or a target -- which are triggered
+by a session's high and low -- could never fire in a replay even when the run
+that produced the same numbers had them.
 """
 
 from __future__ import annotations
@@ -19,12 +25,9 @@ from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from quantlab.replay.portfolio import PortfolioSimulator
+from quantlab.execution import ExecutionConfig, ExecutionSimulator
 from quantlab.research import performance
-
-#: Sizing disclosures, shared with compute_performance so a replayed run and
-#: its performance report ship the same caveats.
-ASSUMPTIONS = performance.ASSUMPTIONS
+from quantlab.research.runner import execution_config_for
 
 
 @dataclass(frozen=True)
@@ -44,19 +47,25 @@ class ReplaySignal:
     direction: str
     trigger_values: dict[str, Any]
     data_window_end: str
+    #: entry / exit / both -- what the strategy meant by it.
+    kind: str = "both"
 
 
 @dataclass(frozen=True)
 class ReplayFill:
-    """A trade the simulator executed at the close of the signal date."""
+    """A trade the simulator executed."""
 
     date: str
     symbol: str
-    side: str  # "buy" | "sell"
+    side: str  # "buy" | "sell" | "short" | "cover"
     qty: float
     price: float
     value: float
     realized_pnl: float
+    #: "signal" on the way in; on the way out, which criterion closed it.
+    reason: str = "signal"
+    commission: float = 0.0
+    slippage: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -86,6 +95,9 @@ class ReplaySummary:
     winning_trades: int
     losing_trades: int
     assumptions: list[str]
+    exit_reasons: dict[str, int] | None = None
+    total_commission: float = 0.0
+    total_slippage: float = 0.0
 
 
 ReplayEvent = ReplayBar | ReplaySignal | ReplayFill | ReplayEquity | ReplaySummary
@@ -109,12 +121,44 @@ def to_dict(event: ReplayEvent) -> dict:
 def load_replay_inputs(backend, experiments, run: dict) -> tuple[list[dict], dict]:
     """The I/O seam: everything a replay needs, loaded once.
 
-    Only the reported window's bars are loaded -- warm-up bars were inputs to
-    the signals, not part of the period being replayed.
+    Bars are loaded from the run's warm-up start, not its window start. The
+    reported events still begin at the window -- no decision exists before it --
+    but an ATR stop set on the first session needs the sessions behind it, and
+    loading only the window silently disabled it.
     """
+    from quantlab.research import runner as research_runner
+
     signals = experiments.get_run_signals(run["id"])
-    bars = backend.load_bars_for(list(run["symbols"]), run["start_date"], run["end_date"])
+    lookback = _lookback_days(run)
+    warmup_start = _shift(run["start_date"], -lookback * research_runner._CALENDAR_DAYS_PER_BAR)
+    bars = backend.load_bars_for(list(run["symbols"]), warmup_start, run["end_date"])
     return signals, bars
+
+
+def _lookback_days(run: dict) -> int:
+    """How much warm-up this run's strategy needs, from its stored spec."""
+    from quantlab.strategy import StrategySpec, StrategyValidationError
+
+    stored = run.get("strategy")
+    if stored:
+        try:
+            return StrategySpec.from_dict(stored).lookback_days
+        except (StrategyValidationError, ValueError):
+            pass
+    # A run recorded before strategies existed, or one whose spec this build
+    # cannot read: fall back to the rule it names, then to nothing.
+    from quantlab.signals.registry import get_rule
+
+    try:
+        return get_rule(run["model_name"], run.get("model_version")).lookback_days
+    except (KeyError, TypeError):
+        return 0
+
+
+def _shift(iso_date: str, days: int) -> str:
+    from datetime import date, timedelta
+
+    return (date.fromisoformat(iso_date) + timedelta(days=days)).isoformat()
 
 
 def replay_events(
@@ -122,80 +166,87 @@ def replay_events(
     signals: list[dict],
     bars_by_symbol: dict,
     *,
-    initial_cash: float = performance.INITIAL_CAPITAL,
+    initial_cash: float | None = None,
     step: int = 1,
+    config: ExecutionConfig | None = None,
 ) -> Iterator[ReplayEvent]:
     """Yield the run's window as a chronological event stream.
 
-    ``step`` thins bar events to every Nth date (equity, signal and fill
-    events are never thinned); a date that carries a signal always gets its
-    bar event regardless, so a fill never appears without the price that
-    produced it.
+    ``step`` thins bar events to every Nth date (equity, signal and fill events
+    are never thinned); a date that carries a signal always gets its bar event
+    regardless, so a fill never appears without the price that produced it.
     """
     symbols = list(run["symbols"])
-    sim = PortfolioSimulator(symbols, initial_cash)
+    config = config or execution_config_for(run)
+    if initial_cash is not None and initial_cash != config.initial_capital:
+        from dataclasses import replace
 
-    bars_on: dict[str, dict[str, float]] = {}
-    for symbol in symbols:
-        for bar in bars_by_symbol.get(symbol) or []:
-            bars_on.setdefault(bar.date, {})[symbol] = float(bar.close)
+        config = replace(config, initial_capital=initial_cash)
 
+    decisions = performance.to_decisions(signals)
     signals_on: dict[str, list[dict]] = {}
     for signal in signals:
         signals_on.setdefault(signal["date"], []).append(signal)
     for same_day in signals_on.values():
         same_day.sort(key=lambda s: s["symbol"])  # deterministic within a date
 
-    # A signal dated on a day with no bars at all still fires (it cannot
-    # transact), but only dates with a bar enter the equity curve -- that is
-    # the same union of bar dates performance.equity_series marks over.
-    dates = sorted(set(bars_on) | set(signals_on))
+    simulator = ExecutionSimulator(symbols, bars_by_symbol, config)
+    # Absent when a caller hands over only the window's bars and has no warm-up
+    # to skip -- in which case every date supplied is part of the replay.
+    window_start = run.get("start_date")
     curve: list[performance.EquityPoint] = []
+    emitted = 0
 
-    for index, day in enumerate(dates):
-        closes = bars_on.get(day, {})
-        if closes:
-            if index % step == 0 or day in signals_on:
-                yield ReplayBar(date=day, closes=closes)
-            sim.mark(closes)
-        for signal in signals_on.get(day, []):
+    for day in simulator.iter_days(decisions):
+        # Warm-up sessions are inputs, not part of the period being replayed.
+        # Nothing can have happened in them: no decision is dated there.
+        if window_start is not None and day.date < window_start:
+            continue
+
+        if day.closes and (emitted % step == 0 or day.date in signals_on):
+            yield ReplayBar(date=day.date, closes=day.closes)
+        emitted += 1
+
+        for signal in signals_on.get(day.date, []):
             yield ReplaySignal(
-                date=day,
+                date=day.date,
                 symbol=signal["symbol"],
                 direction=signal["direction"],
                 trigger_values=signal["trigger_values"],
                 data_window_end=signal["data_window_end"],
+                kind=signal.get("kind") or "both",
             )
-            fill = sim.apply_signal(
-                day, signal["symbol"], signal["direction"], closes.get(signal["symbol"])
-            )
-            if fill is not None:
-                yield ReplayFill(
-                    date=fill.date,
-                    symbol=fill.symbol,
-                    side=fill.side,
-                    qty=fill.qty,
-                    price=fill.price,
-                    value=fill.value,
-                    realized_pnl=fill.realized_pnl,
-                )
-        equity = sim.equity()
-        yield ReplayEquity(
-            date=day,
-            equity=equity,
-            cash=sim.cash,
-            positions=len(sim.open_positions()),
-            realized_pnl=sim.realized_pnl(),
-        )
-        if closes:
-            curve.append(performance.EquityPoint(date=day, value=equity))
 
-    yield summary_event(run["id"], sim, curve)
+        for fill in day.fills:
+            yield ReplayFill(
+                date=fill.date,
+                symbol=fill.symbol,
+                side=fill.side,
+                qty=fill.qty,
+                price=fill.price,
+                value=fill.value,
+                realized_pnl=fill.realized_pnl,
+                reason=fill.reason,
+                commission=fill.commission,
+                slippage=fill.slippage,
+            )
+
+        yield ReplayEquity(
+            date=day.date,
+            equity=day.equity,
+            cash=day.cash,
+            positions=day.positions,
+            realized_pnl=day.realized_pnl,
+        )
+        if day.closes:
+            curve.append(performance.EquityPoint(date=day.date, value=day.equity))
+
+    yield summary_event(run["id"], simulator, curve)
 
 
 def summary_event(
     run_id: str,
-    sim: PortfolioSimulator,
+    simulator: ExecutionSimulator,
     curve: list[performance.EquityPoint],
 ) -> ReplaySummary:
     """Reduce a finished simulation to its terminal event.
@@ -203,20 +254,30 @@ def summary_event(
     Shared by the batch replay and the live (Kafka-consumed) replay so both
     paths reduce the book with exactly the same helpers.
     """
-    metrics = performance.metrics(curve, sim.trades())
+    trades = simulator.trades()
+    stats = performance.metrics(curve, trades)
+    summary = simulator.summary()
+    reasons: dict[str, int] = {}
+    for trade in trades:
+        reasons[trade.exit_reason] = reasons.get(trade.exit_reason, 0) + 1
+
     return ReplaySummary(
         run_id=run_id,
         days=len(curve),
-        initial_cash=sim.initial_cash,
-        final_equity=curve[-1].value if curve else sim.initial_cash,
-        total_return=metrics.total_return,
-        sharpe_ratio=metrics.sharpe_ratio,
-        max_drawdown=metrics.max_drawdown,
-        win_rate=metrics.win_rate,
-        trade_count=metrics.trade_count,
-        winning_trades=metrics.winning_trades,
-        losing_trades=metrics.losing_trades,
-        assumptions=list(ASSUMPTIONS),
+        initial_cash=simulator.config.initial_capital,
+        final_equity=curve[-1].value if curve else simulator.config.initial_capital,
+        total_return=stats.total_return,
+        sharpe_ratio=stats.sharpe_ratio,
+        max_drawdown=stats.max_drawdown,
+        win_rate=stats.win_rate,
+        trade_count=stats.trade_count,
+        winning_trades=stats.winning_trades,
+        losing_trades=stats.losing_trades,
+        # Generated from the criteria that actually ran, not a fixed tuple.
+        assumptions=simulator.config.assumptions(),
+        exit_reasons=dict(sorted(reasons.items())),
+        total_commission=summary.total_commission,
+        total_slippage=summary.total_slippage,
     )
 
 
@@ -225,10 +286,19 @@ def replay_summary(
     signals: list[dict],
     bars_by_symbol: dict,
     *,
-    initial_cash: float = performance.INITIAL_CAPITAL,
+    initial_cash: float | None = None,
+    config: ExecutionConfig | None = None,
 ) -> ReplaySummary:
     """Run the same engine to completion and keep only the terminal event."""
-    for event in replay_events(run, signals, bars_by_symbol, initial_cash=initial_cash):
+    for event in replay_events(
+        run, signals, bars_by_symbol, initial_cash=initial_cash, config=config
+    ):
         if isinstance(event, ReplaySummary):
             return event
     raise AssertionError("replay_events always ends with a summary")  # pragma: no cover
+
+
+#: Kept as a name for callers that imported it. It is no longer the source of
+#: truth -- assumptions are generated per run from the execution criteria that
+#: ran -- and reads as the default configuration's disclosure.
+ASSUMPTIONS = tuple(ExecutionConfig().assumptions())

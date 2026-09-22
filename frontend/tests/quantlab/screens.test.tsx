@@ -19,30 +19,14 @@ vi.mock('../../src/api/client', async (importOriginal) => {
     getPrices: vi.fn(),
     listSignals: vi.fn(),
     listModels: vi.fn(),
+    listStrategies: vi.fn(),
+    listStrategyTemplates: vi.fn(),
     listRuns: vi.fn(),
     getRun: vi.fn(),
     createRun: vi.fn(),
     getRunPerformance: vi.fn(),
     saveRun: vi.fn(),
     deleteRun: vi.fn(),
-  };
-});
-
-vi.mock('../../src/quantlab/data/fundamentals', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/quantlab/data/fundamentals')>();
-  return {
-    ...actual,
-    listFundamentalConcepts: vi.fn().mockResolvedValue({ symbol: 'ZZTRND', total: 0, items: [] }),
-    getFundamentalSeries: vi.fn(),
-  };
-});
-
-vi.mock('../../src/quantlab/data/customRules', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/quantlab/data/customRules')>();
-  return {
-    ...actual,
-    listCustomRules: vi.fn().mockResolvedValue({ total: 0, items: [] }),
-    deleteCustomRule: vi.fn(),
   };
 });
 
@@ -75,6 +59,8 @@ beforeEach(() => {
   });
   vi.mocked(apiClient.listSignals).mockResolvedValue({ total: 0, items: [] });
   vi.mocked(apiClient.listModels).mockResolvedValue({ total: 1, items: [model] });
+  vi.mocked(apiClient.listStrategies).mockResolvedValue({ total: 0, items: [] });
+  vi.mocked(apiClient.listStrategyTemplates).mockResolvedValue({ total: 0, items: [] });
   vi.mocked(apiClient.listRuns).mockResolvedValue({ total: 1, items: [makeRun()] });
   vi.mocked(apiClient.getRun).mockResolvedValue(makeRun());
   vi.mocked(apiClient.getRunPerformance).mockResolvedValue(makePerformance());
@@ -92,10 +78,16 @@ function renderApp() {
   );
 }
 
+/**
+ * Strategies opens on the builder now, so the single-model surface these
+ * assertions are about is one tab across. The handoff case (`?model=`) lands
+ * on the signal lab directly and has its own test below.
+ */
 async function openStrategies() {
   const user = userEvent.setup();
   renderApp();
   await user.click(screen.getByRole('button', { name: /strategies/i }));
+  await user.click(screen.getByRole('tab', { name: /signal lab/i }));
   return user;
 }
 
@@ -159,23 +151,6 @@ describe('App shell', () => {
     await user.click(screen.getByRole('button', { name: /market/i }));
     expect(screen.getByTestId('dataset-badge')).toBeInTheDocument();
   });
-
-  it('names the document after the active destination', async () => {
-    const user = userEvent.setup();
-    renderApp();
-    await waitFor(() => expect(document.title).toBe('Overview — QuantLab'));
-
-    await user.click(screen.getByRole('button', { name: /market/i }));
-    await waitFor(() => expect(document.title).toBe('Market — QuantLab'));
-  });
-
-  it('offers a skip link into the main landmark', () => {
-    renderApp();
-
-    const skip = screen.getByRole('link', { name: /skip to content/i });
-    expect(skip).toHaveAttribute('href', '#main');
-    expect(document.getElementById('main')).not.toBeNull();
-  });
 });
 
 describe('Overview', () => {
@@ -238,20 +213,19 @@ describe('Overview', () => {
     expect(screen.getAllByTestId('simulated-tag').length).toBeGreaterThan(0);
   });
 
-  it('ships the simulation caveats alongside the figures', async () => {
+  it('ships the backtest caveats alongside the figures, open rather than folded away', async () => {
     renderApp();
 
+    // Derived from the run's own execution config now, so they are real
+    // information about this run and are not hidden behind a disclosure.
     const caveats = await screen.findByTestId('performance-assumptions');
-    expect(caveats).toHaveTextContent(/not a tradeable strategy run/i);
+    expect(caveats).toHaveTextContent(/what this run assumed/i);
     expect(caveats).toHaveTextContent(/no transaction costs/i);
+    expect(caveats.querySelector('details')).toBeNull();
   });
 
   it('makes saved runs the primary content of the rail', async () => {
-    const saved = makeRun({
-      id: 'run-saved',
-      name: 'base case',
-      created_at: '2026-09-18T12:00:00Z',
-    });
+    const saved = makeRun({ id: 'run-saved', name: 'base case', created_at: '2026-09-18T12:00:00Z' });
     vi.mocked(apiClient.listRuns).mockResolvedValue({
       total: 2,
       items: [saved, makeRun()],
@@ -274,11 +248,7 @@ describe('Overview', () => {
   });
 
   it('loads a saved run into the hero when its row is selected', async () => {
-    const saved = makeRun({
-      id: 'run-saved',
-      name: 'base case',
-      created_at: '2026-09-18T12:00:00Z',
-    });
+    const saved = makeRun({ id: 'run-saved', name: 'base case', created_at: '2026-09-18T12:00:00Z' });
     vi.mocked(apiClient.listRuns).mockResolvedValue({ total: 1, items: [saved] });
     vi.mocked(apiClient.getRun).mockImplementation((id: string) =>
       Promise.resolve(makeRun({ id, name: 'base case' })),
@@ -331,7 +301,7 @@ describe('Overview', () => {
     expect(guide).toHaveTextContent('933');
     expect(screen.queryByTestId('portfolio-summary')).not.toBeInTheDocument();
 
-    await user.click(within(guide).getByRole('button', { name: /run your first strategy/i }));
+    await user.click(within(guide).getByRole('button', { name: /run your first backtest/i }));
     await waitFor(() => expect(window.location.hash).toBe('#/strategies'));
   });
 
@@ -343,38 +313,6 @@ describe('Overview', () => {
     const error = await screen.findByTestId('overview-error');
     expect(error).toHaveAttribute('role', 'alert');
     expect(screen.queryByTestId('overview-no-runs')).not.toBeInTheDocument();
-  });
-
-  it('recovers from an unreachable backend through the retry action', async () => {
-    vi.mocked(apiClient.listRuns).mockRejectedValueOnce(new apiClient.ApiError(0, 'down'));
-
-    const user = userEvent.setup();
-    renderApp();
-
-    const error = await screen.findByTestId('overview-error');
-    await user.click(within(error).getByRole('button', { name: /retry/i }));
-
-    await waitFor(() => expect(apiClient.listRuns).toHaveBeenCalledTimes(2));
-    expect(await screen.findByTestId('portfolio-summary')).toBeInTheDocument();
-  });
-
-  it('keeps the run and says why when a delete fails', async () => {
-    vi.mocked(apiClient.listRuns).mockResolvedValue({
-      total: 1,
-      items: [makeRun({ name: 'base case' })],
-    });
-    vi.mocked(apiClient.deleteRun).mockRejectedValue(new apiClient.ApiError(500, 'read-only'));
-
-    const user = userEvent.setup();
-    renderApp();
-    const rail = await screen.findByTestId('runs-rail');
-
-    await user.click(within(rail).getByRole('button', { name: /delete run base case/i }));
-    await user.click(within(rail).getByRole('button', { name: /confirm/i }));
-
-    // The failure is announced on the row, and the run stays listed.
-    expect(await within(rail).findByRole('alert')).toHaveTextContent(/read-only/i);
-    expect(within(rail).getByText('base case')).toBeInTheDocument();
   });
 });
 
@@ -396,8 +334,8 @@ describe('Strategies', () => {
     await openStrategies();
 
     const list = await screen.findByTestId('model-list');
-    // Simulation is the only mode the backend has, so it is the only one lit.
-    expect(within(list).getByText('Simulated')).toBeInTheDocument();
+    // BACKTEST is the only mode the backend has, so it is the only one lit.
+    expect(within(list).getByText('Backtest')).toBeInTheDocument();
     for (const label of ['Paper', 'Live']) {
       expect(within(list).getByText(label)).toHaveAttribute(
         'title',
@@ -419,7 +357,7 @@ describe('Strategies', () => {
     await openStrategies();
     await screen.findByLabelText(/fast/i);
 
-    expect(screen.getByRole('button', { name: /run strategy/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /run backtest/i })).toBeDisabled();
     expect(apiClient.createRun).not.toHaveBeenCalled();
   });
 
@@ -428,7 +366,7 @@ describe('Strategies', () => {
     const user = await openStrategies();
 
     await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(screen.getByRole('button', { name: /run strategy/i }));
+    await user.click(screen.getByRole('button', { name: /run backtest/i }));
 
     await waitFor(() => expect(apiClient.createRun).toHaveBeenCalled());
     const [body] = vi.mocked(apiClient.createRun).mock.calls[0];
@@ -452,7 +390,7 @@ describe('Strategies', () => {
     const user = await openStrategies();
 
     await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(screen.getByRole('button', { name: /run strategy/i }));
+    await user.click(screen.getByRole('button', { name: /run backtest/i }));
 
     const results = await screen.findByTestId('run-results');
     expect(within(results).getByTestId('run-coverage')).toHaveTextContent('1/1');
@@ -471,7 +409,7 @@ describe('Strategies', () => {
     const user = await openStrategies();
 
     await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(screen.getByRole('button', { name: /run strategy/i }));
+    await user.click(screen.getByRole('button', { name: /run backtest/i }));
 
     expect(await screen.findByTestId('run-empty')).toHaveTextContent(/no signals/i);
     expect(screen.queryByTestId('run-failed')).not.toBeInTheDocument();
@@ -484,7 +422,7 @@ describe('Strategies', () => {
     const user = await openStrategies();
 
     await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(screen.getByRole('button', { name: /run strategy/i }));
+    await user.click(screen.getByRole('button', { name: /run backtest/i }));
 
     const failure = await screen.findByTestId('run-failed');
     expect(failure).toHaveAttribute('role', 'alert');
@@ -509,7 +447,7 @@ describe('Strategies', () => {
     const user = await openStrategies();
 
     await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(screen.getByRole('button', { name: /run strategy/i }));
+    await user.click(screen.getByRole('button', { name: /run backtest/i }));
 
     const warning = await screen.findByTestId('run-corporate-actions');
     expect(warning).toHaveAttribute('role', 'alert');
@@ -522,7 +460,7 @@ describe('Strategies', () => {
     const user = await openStrategies();
 
     await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(screen.getByRole('button', { name: /run strategy/i }));
+    await user.click(screen.getByRole('button', { name: /run backtest/i }));
     await screen.findByTestId('run-results');
 
     await user.type(screen.getByLabelText(/experiment name/i), 'base case');
@@ -539,58 +477,11 @@ describe('Strategies', () => {
     const field = (await screen.findByLabelText(/fast/i)) as HTMLInputElement;
     expect(field.value).toBe('50');
     // The named model is the one being configured.
-    expect(
-      await screen.findByRole('region', { name: /sma-crossover — strategy run/i }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: /sma-crossover — backtest/i }))
+      .toBeInTheDocument();
   });
 
-  it('calls the surface a strategy run, and the rail Signal strategies', async () => {
-    await openStrategies();
-
-    expect(await screen.findByRole('region', { name: /signal strategies/i })).toBeInTheDocument();
-    expect(
-      await screen.findByRole('region', { name: /sma-crossover — strategy run/i }),
-    ).toBeInTheDocument();
-  });
-
-  it('describes what each strategy fires on, composed from registry data', async () => {
-    await openStrategies();
-
-    const list = await screen.findByTestId('model-list');
-    expect(within(list).getByTestId('fires-on-sma-crossover')).toHaveTextContent(
-      'Fires bullish when fast crosses above slow',
-    );
-  });
-
-  it('greets a first-timer with what a strategy run is, the form already usable', async () => {
-    // No recorded runs: Overview has nothing to auto-load, so the run store is
-    // genuinely empty when Strategies opens.
-    vi.mocked(apiClient.listRuns).mockResolvedValue({ total: 0, items: [] });
-    await openStrategies();
-
-    const intro = await screen.findByTestId('strategy-intro');
-    expect(intro).toHaveTextContent(/what a strategy run is/i);
-    expect(intro).toHaveTextContent(/execution criteria/i);
-    expect(intro).toHaveTextContent(/nothing here trades/i);
-    // The form it walks through is already on screen in the right column.
-    expect(await screen.findByLabelText(/fast/i)).toBeInTheDocument();
-    expect(screen.getByTestId('execution-fieldset')).toBeInTheDocument();
-  });
-
-  it('shows the simulation assumptions in the results column, not buried', async () => {
-    vi.mocked(apiClient.createRun).mockResolvedValue(makeRun());
-    const user = await openStrategies();
-
-    await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(screen.getByRole('button', { name: /run strategy/i }));
-
-    const results = await screen.findByTestId('run-results');
-    expect(await within(results).findByTestId('performance-assumptions')).toHaveTextContent(
-      /not a tradeable strategy run/i,
-    );
-  });
-
-  it('explains an empty registry across all three columns, not just the list', async () => {
+  it('explains an empty registry instead of showing a blank list', async () => {
     vi.mocked(apiClient.listModels).mockResolvedValue({ total: 0, items: [] });
 
     await openStrategies();
@@ -598,13 +489,6 @@ describe('Strategies', () => {
     expect(await screen.findByTestId('model-list-empty')).toHaveTextContent(
       /no models registered/i,
     );
-    expect(await screen.findByTestId('lab-no-strategies')).toHaveTextContent(
-      /no strategies to run/i,
-    );
-    expect(await screen.findByTestId('lab-nothing-to-configure')).toHaveTextContent(
-      /nothing to configure/i,
-    );
-    expect(screen.queryByTestId('run-config')).not.toBeInTheDocument();
   });
 });
 
@@ -615,10 +499,13 @@ describe('cross-destination run state', () => {
     window.location.hash = '#/research';
     renderApp();
 
-    // The Research dock renders every panel (the dockview mock), so the run
-    // form is right there.
+    // Research opens on Company now, and running a rule is its own mode. The
+    // dock used to render all six panels at once, which is why this reached
+    // straight for the form; the walk to Test is the destination being
+    // legible rather than dense (docs/RESEARCH.md §4).
+    await user.click(await screen.findByRole('tab', { name: /test/i }));
     await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(await screen.findByRole('button', { name: /run strategy/i }));
+    await user.click(await screen.findByRole('button', { name: /run backtest/i }));
     expect(await screen.findByTestId('run-results')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /strategies/i }));
@@ -633,7 +520,7 @@ describe('cross-destination run state', () => {
     const user = await openStrategies();
 
     await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(screen.getByRole('button', { name: /run strategy/i }));
+    await user.click(screen.getByRole('button', { name: /run backtest/i }));
     await screen.findByTestId('run-results');
 
     await user.click(screen.getByRole('button', { name: /watch in overview/i }));

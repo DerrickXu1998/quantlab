@@ -4,6 +4,7 @@ import { getPrices, type Instrument, type PriceBar } from '../../api/client';
 import { navigate } from '../../chrome/router';
 import { CandlestickChart } from '../../components/CandlestickChart';
 import { Button } from '../../components/ui/button';
+import { FillColumn, ScrollRegion } from '../../components/ui/layout';
 import { StatusBadge } from '../../components/ui/status-badge';
 import { MacdChart } from '../charts/MacdChart';
 import { PriceChart } from '../charts/PriceChart';
@@ -28,9 +29,7 @@ import {
 } from '../data/indicators';
 import { useRollingSeries } from '../feed/useRollingSeries';
 import { useTick } from '../feed/FeedProvider';
-import { FundamentalsPanel } from '../panels/FundamentalsPanel';
 import { WatchlistRail } from '../panels/WatchlistRail';
-import { ValueLineChart } from '../charts/ValueLineChart';
 
 type IndicatorId = 'rsi' | 'macd' | 'bollinger' | 'vwap';
 
@@ -40,40 +39,28 @@ const SIM_VWAP =
   'The feed carries no volume, so VWAP weights every tick equally — a cumulative average price.';
 const REAL_HISTORY =
   'Stored end-of-day bars from the active dataset — nothing here is simulated.';
-const MACRO_SERIES =
-  'A value series — yield, percent or index points — not a price. Shown as a line from stored daily bars; macro instruments are excluded from the simulated tick feed.';
 
-/** Real stored bars for the daily-history view. */
-type DailyBars =
-  | { status: 'loading' }
-  | { status: 'ready'; bars: PriceBar[] }
-  | { status: 'error' };
-
-/**
- * A failed read is an error state, never an empty series — an empty array here
- * used to render as "Loading history…" forever.
- */
-function useDailyBars(symbol: string | null, enabled: boolean): DailyBars & { retry: () => void } {
-  const [state, setState] = useState<DailyBars>({ status: 'loading' });
-  const [nonce, setNonce] = useState(0);
+/** Real stored bars for the daily-history view; null while loading. */
+function useDailyBars(symbol: string | null, enabled: boolean): PriceBar[] | null {
+  const [bars, setBars] = useState<PriceBar[] | null>(null);
 
   useEffect(() => {
     if (!symbol || !enabled) return;
     let cancelled = false;
-    setState({ status: 'loading' });
+    setBars(null);
     getPrices(symbol)
       .then((result) => {
-        if (!cancelled) setState({ status: 'ready', bars: result.items });
+        if (!cancelled) setBars(result.items);
       })
       .catch(() => {
-        if (!cancelled) setState({ status: 'error' });
+        if (!cancelled) setBars([]);
       });
     return () => {
       cancelled = true;
     };
-  }, [symbol, enabled, nonce]);
+  }, [symbol, enabled]);
 
-  return { ...state, retry: () => setNonce((n) => n + 1) };
+  return enabled ? bars : null;
 }
 
 /** A FloatingChips-styled toggle: same chip, but a button that switches state. */
@@ -93,7 +80,7 @@ function ToggleChip({
       type="button"
       aria-pressed={active}
       onClick={onToggle}
-      className={`pointer-events-auto flex items-center gap-1.5 rounded-sm border px-2 py-1 transition-colors focus-visible:outline-none focus-visible:border-primary ${
+      className={`pointer-events-auto flex items-center gap-1.5 rounded-sm border px-2 py-1 transition-colors ${
         active
           ? 'border-primary/50 bg-primary/10 text-primary'
           : 'border-border bg-card text-foreground hover:bg-accent/40'
@@ -109,10 +96,14 @@ function ToggleChip({
 
 function WarmingUp({ needed, have }: { needed: number; have: number }) {
   return (
+    // Compact, and sized like the chart it stands in for: at the default
+    // padding a warming-up sub-panel was taller than the price chart above it,
+    // which inverts the hierarchy for the half-minute it takes to fill.
     <EmptyState
       icon={Activity}
       title={`Warming up — ${Math.max(0, needed - have)} more ticks`}
       role="status"
+      className="py-6"
     />
   );
 }
@@ -120,23 +111,15 @@ function WarmingUp({ needed, have }: { needed: number; have: number }) {
 export function IndicatorsView({
   instruments,
   feedError,
-  onFeedRetry,
 }: {
   instruments: Instrument[];
   feedError: string | null;
-  /** Offered on the feed-error state; absent in contexts that cannot retry. */
-  onFeedRetry?: () => void;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [active, setActive] = useState<Set<IndicatorId>>(new Set());
   // 'ticks' is the simulated feed; 'daily' is the real stored history.
   const [mode, setMode] = useState<'ticks' | 'daily'>('ticks');
-
-  const selectedInstrument = instruments.find((item) => item.symbol === selected) ?? null;
-  // Macro series have no tick feed: the daily history is the only honest view.
-  const isMacro = selectedInstrument?.kind === 'macro';
-  const effectiveMode = isMacro ? 'daily' : mode;
-  const dailyBars = useDailyBars(selected, effectiveMode === 'daily');
+  const dailyBars = useDailyBars(selected, mode === 'daily');
 
   useEffect(() => {
     if (selected === null && instruments.length > 0) setSelected(instruments[0].symbol);
@@ -181,26 +164,22 @@ export function IndicatorsView({
         tone="error"
         title="Feed disconnected"
         detail={feedError}
-        action={
-          onFeedRetry ? (
-            <Button type="button" variant="outline" size="sm" onClick={onFeedRetry}>
-              Retry
-            </Button>
-          ) : undefined
-        }
       />
     );
   }
 
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)]">
-      <CascadeItem index={0} className="border-b border-border lg:border-b-0 lg:border-r">
-        <Panel title="Instruments" className="border-0" bodyClassName="p-0">
+    <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[240px_minmax(0,1fr)]">
+      <CascadeItem index={0} className="hidden min-h-0 border-r border-border lg:flex lg:flex-col">
+        <Panel title="Instruments" fill scroll className="border-0" bodyClassName="p-0">
           <WatchlistRail instruments={instruments} selected={selected} onSelect={setSelected} error={feedError} />
         </Panel>
       </CascadeItem>
 
-      <div className="min-w-0 overflow-y-auto p-4">
+      {/* A workspace, not a page. The chart takes the height the toggled-off
+          sub-panels are not using, and this column only scrolls once RSI and
+          MACD are both on and genuinely do not fit. */}
+      <ScrollRegion testId="market-workspace" className="flex min-w-0 flex-col gap-4 p-4">
         {instruments.length === 0 ? (
           <EmptyState
             testId="indicators-empty"
@@ -217,8 +196,8 @@ export function IndicatorsView({
           />
         ) : (
           <>
-            <CascadeItem index={1} className="relative">
-              {effectiveMode === 'ticks' ? (
+            <CascadeItem index={1} className="relative flex min-h-[18rem] flex-1 flex-col">
+              {mode === 'ticks' ? (
                 <FloatingChips>
                   <ToggleChip
                     label={`RSI ${RSI_PERIOD}`}
@@ -272,18 +251,13 @@ export function IndicatorsView({
               ) : null}
 
               <Panel
-                title={
-                  effectiveMode === 'daily' ? `${selected} — daily history` : `${selected} — intraday`
-                }
+                fill
+                title={mode === 'daily' ? `${selected} — daily history` : `${selected} — intraday`}
                 className="border-0 pt-2"
-                simulated={effectiveMode === 'ticks' ? SIM_CHART : undefined}
+                simulated={mode === 'ticks' ? SIM_CHART : undefined}
                 actions={
                   <span className="flex items-center gap-2">
-                    {isMacro ? (
-                      <StatusBadge tone="idle" title={MACRO_SERIES} testId="macro-badge">
-                        Macro series — value, not price
-                      </StatusBadge>
-                    ) : effectiveMode === 'daily' ? (
+                    {mode === 'daily' ? (
                       <StatusBadge tone="good" title={REAL_HISTORY} testId="real-data-badge">
                         Real history
                       </StatusBadge>
@@ -295,27 +269,15 @@ export function IndicatorsView({
                         className="text-[11px]"
                       />
                     )}
-                    {isMacro ? (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled
-                        title="Macro series have no simulated tick feed — daily history only."
-                      >
-                        Live ticks
-                      </Button>
-                    ) : (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        aria-pressed={effectiveMode === 'daily'}
-                        onClick={() => setMode(mode === 'daily' ? 'ticks' : 'daily')}
-                      >
-                        {effectiveMode === 'daily' ? 'Live ticks' : 'Daily history'}
-                      </Button>
-                    )}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      aria-pressed={mode === 'daily'}
+                      onClick={() => setMode(mode === 'daily' ? 'ticks' : 'daily')}
+                    >
+                      {mode === 'daily' ? 'Live ticks' : 'Daily history'}
+                    </Button>
                     <Button
                       type="button"
                       variant="ghost"
@@ -327,58 +289,23 @@ export function IndicatorsView({
                   </span>
                 }
               >
-                {effectiveMode === 'daily' ? (
-                  dailyBars.status === 'error' ? (
-                    <EmptyState
-                      testId="daily-history-error"
-                      icon={ServerCrash}
-                      tone="error"
-                      title="History unavailable"
-                      detail={`The stored daily bars for ${selected} could not be loaded.`}
-                      action={
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={dailyBars.retry}
-                        >
-                          Retry
-                        </Button>
-                      }
-                    />
-                  ) : dailyBars.status === 'ready' && dailyBars.bars.length === 0 ? (
-                    <EmptyState
-                      icon={LineChart}
-                      title="No stored bars"
-                      detail={`The active dataset has no daily history for ${selected}.`}
-                    />
-                  ) : dailyBars.status === 'ready' ? (
-                    isMacro ? (
-                      // Degenerate OHLC (open=high=low=close=value, volume=0):
-                      // candles and a volume pane would both be theatre.
-                      <ValueLineChart
-                        points={dailyBars.bars.map((bar) => ({ date: bar.date, value: bar.close }))}
-                        height={320}
-                        testId="macro-history-chart"
-                      />
-                    ) : (
-                      <CandlestickChart bars={dailyBars.bars} autoSize />
-                    )
+                {mode === 'daily' ? (
+                  dailyBars && dailyBars.length > 0 ? (
+                    // Already `h-full`; it just needs a column that fills.
+                    <FillColumn>
+                      <CandlestickChart bars={dailyBars} autoSize />
+                    </FillColumn>
                   ) : (
                     <EmptyState icon={Activity} title="Loading history…" role="status" />
                   )
                 ) : (
-                  <PriceChart series={series} bands={bands} vwap={vwapSeries} />
+                  <PriceChart fill series={series} bands={bands} vwap={vwapSeries} />
                 )}
               </Panel>
             </CascadeItem>
 
-            <CascadeItem index={4} className="mt-4">
-              <FundamentalsPanel symbol={selected} />
-            </CascadeItem>
-
-            {effectiveMode === 'ticks' && active.has('rsi') && rsiSeries ? (
-              <CascadeItem index={2} className="mt-4">
+            {mode === 'ticks' && active.has('rsi') && rsiSeries ? (
+              <CascadeItem index={2} className="shrink-0">
                 <Panel
                   title={`RSI (${RSI_PERIOD})`}
                   bodyClassName="p-0"
@@ -399,8 +326,8 @@ export function IndicatorsView({
               </CascadeItem>
             ) : null}
 
-            {effectiveMode === 'ticks' && active.has('macd') && macdResult ? (
-              <CascadeItem index={3} className="mt-4">
+            {mode === 'ticks' && active.has('macd') && macdResult ? (
+              <CascadeItem index={3} className="shrink-0">
                 <Panel
                   title={`MACD (${MACD_FAST}, ${MACD_SLOW}, ${MACD_SIGNAL})`}
                   bodyClassName="p-0"
@@ -421,14 +348,14 @@ export function IndicatorsView({
               </CascadeItem>
             ) : null}
 
-            {effectiveMode === 'ticks' && active.has('vwap') ? (
-              <p className="mt-4 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+            {mode === 'ticks' && active.has('vwap') ? (
+              <p className="shrink-0 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
                 {SIM_VWAP}
               </p>
             ) : null}
           </>
         )}
-      </div>
+      </ScrollRegion>
     </div>
   );
 }

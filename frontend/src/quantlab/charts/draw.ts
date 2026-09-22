@@ -11,12 +11,6 @@ export interface Series {
   /** Dashed lines read as "reference", which is what a benchmark is. */
   dashed?: boolean;
   fill?: string;
-  /**
-   * Step interpolation: the value holds flat until the next dated point, then
-   * jumps. The honest shape for filing-stamped (point-in-time) data — a
-   * diagonal would invent values between filings.
-   */
-  step?: boolean;
 }
 
 export interface Scale {
@@ -27,7 +21,18 @@ export interface Scale {
   length: number;
 }
 
-export const PADDING = { top: 10, right: 52, bottom: 20, left: 10 };
+/**
+ * Plot insets. `right` is the value-axis gutter and is sized from the widest
+ * label it has to hold, not guessed: JetBrains Mono advances 0.6em, so a 10px
+ * label is 6px a character, and a seven-figure book renders as `$1,184,633` —
+ * ten characters, 60px — plus the 8px it sits off the plot edge. At 52 the
+ * gutter was two pixels short of a six-figure label and clipped the last digit
+ * off every axis on the Overview.
+ */
+export const PADDING = { top: 10, right: 70, bottom: 20, left: 10 };
+
+/** Gap between the plot's right edge and the start of its axis labels. */
+export const AXIS_LABEL_GAP = 8;
 
 export function buildScale(seriesList: Series[], size: CanvasSize): Scale | null {
   const lengths = seriesList.map((s) => s.points.length);
@@ -89,7 +94,7 @@ export function drawGrid(
     ctx.moveTo(PADDING.left, y);
     ctx.lineTo(size.width - PADDING.right, y);
     ctx.stroke();
-    ctx.fillText(formatValue(value), size.width - PADDING.right + 6, y);
+    ctx.fillText(formatValue(value), size.width - PADDING.right + AXIS_LABEL_GAP, y);
   }
   ctx.restore();
 }
@@ -100,30 +105,21 @@ export function drawSeries(ctx: CanvasRenderingContext2D, series: Series, scale:
   const path = new Path2D();
   let started = false;
   let lastDrawn = -1;
-  let lastY = 0;
   series.points.forEach((point, index) => {
     if (point.value === null) return;
     const x = scale.x(index);
     const y = scale.y(point.value);
     // A gap breaks the line rather than bridging it with an invented segment.
-    if (!started || index !== lastDrawn + 1) {
-      path.moveTo(x, y);
-    } else if (series.step) {
-      path.lineTo(x, lastY);
-      path.lineTo(x, y);
-    } else {
-      path.lineTo(x, y);
-    }
+    if (!started || index !== lastDrawn + 1) path.moveTo(x, y);
+    else path.lineTo(x, y);
     started = true;
     lastDrawn = index;
-    lastY = y;
   });
 
   if (series.fill) {
     const area = new Path2D();
     let firstX: number | null = null;
     let lastX: number | null = null;
-    let fillLastY = 0;
     series.points.forEach((point, index) => {
       if (point.value === null) return;
       const x = scale.x(index);
@@ -131,14 +127,10 @@ export function drawSeries(ctx: CanvasRenderingContext2D, series: Series, scale:
       if (firstX === null) {
         area.moveTo(x, y);
         firstX = x;
-      } else if (series.step) {
-        area.lineTo(x, fillLastY);
-        area.lineTo(x, y);
       } else {
         area.lineTo(x, y);
       }
       lastX = x;
-      fillLastY = y;
     });
     if (firstX !== null && lastX !== null && lastX > firstX) {
       const baseline = scale.y(scale.min);

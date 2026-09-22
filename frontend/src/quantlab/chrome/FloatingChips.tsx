@@ -7,10 +7,26 @@ import type { ReactNode } from 'react';
  * reads as instrumentation layered over a workspace instead of a column of
  * cards. Kept to one element per screen — repeated, it stops being a deliberate
  * break and becomes noise.
+ *
+ * Anchored right, because a panel's title occupies the top *left*. Anchored
+ * left, the chips landed squarely on the heading and struck it through — an
+ * overlap that destroys a label is not a deliberate break, it is a collision.
+ * Right-aligned, the row still crosses the border and still breaks the grid,
+ * and the title stays readable.
  */
-export function FloatingChips({ children }: { children: ReactNode }) {
+export function FloatingChips({
+  children,
+  align = 'right',
+}: {
+  children: ReactNode;
+  align?: 'left' | 'right';
+}) {
   return (
-    <div className="pointer-events-none absolute -top-3 left-4 z-10 flex flex-wrap items-center gap-1.5">
+    <div
+      className={`pointer-events-none absolute -top-3 z-10 flex flex-wrap items-center gap-1.5 ${
+        align === 'right' ? 'right-4' : 'left-4'
+      }`}
+    >
       {children}
     </div>
   );

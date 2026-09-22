@@ -70,7 +70,9 @@ def _publish(payloads: list[dict], *, finished: bool = True) -> list[dict]:
 
 def test_single_publish_stops_at_its_end_marker():
     records, offsets = _log(_publish([_bar("ZZMEAN", "2024-01-02")]))
-    assert list(bus.select_bars(records, {"ZZMEAN"}, offsets)) == [_bar("ZZMEAN", "2024-01-02")]
+    assert list(bus.select_bars(records, {"ZZMEAN"}, offsets)) == [
+        _bar("ZZMEAN", "2024-01-02")
+    ]
 
 
 def test_second_publish_is_not_hidden_by_the_first_end_marker():
@@ -128,7 +130,9 @@ def test_unknown_partition_falls_back_to_stopping_at_the_first_marker():
 
 
 def test_symbols_outside_the_selection_are_dropped():
-    records, offsets = _log(_publish([_bar("ZZMEAN", "2024-01-02"), _bar("ZZTRND", "2024-01-02")]))
+    records, offsets = _log(
+        _publish([_bar("ZZMEAN", "2024-01-02"), _bar("ZZTRND", "2024-01-02")])
+    )
     got = list(bus.select_bars(records, {"ZZMEAN"}, offsets))
     assert [bar["symbol"] for bar in got] == ["ZZMEAN"]
 
@@ -197,7 +201,9 @@ def test_live_replay_over_a_twice_published_log_matches_batch(bars_by_symbol):
         _publish(_wire(bars_by_symbol)),
     )
     stream = bus.select_bars(records, set(SYMBOLS), offsets)
-    events = list(live.live_replay_events("sma-crossover", None, list(SYMBOLS), START, END, stream))
+    events = list(
+        live.live_replay_events("sma-crossover", None, list(SYMBOLS), START, END, stream)
+    )
 
     rule = signal_registry.get_rule("sma-crossover")
     computed = compute_signals(bars_by_symbol, rules=[rule])

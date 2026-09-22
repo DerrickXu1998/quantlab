@@ -1,4 +1,4 @@
-"""Reference-value and boundary tests for the builtin signal rules."""
+"""Reference-value and boundary tests for the three starter signal rules."""
 
 from __future__ import annotations
 
@@ -42,45 +42,11 @@ def ref_sma(values, window):
     return out
 
 
-def ref_ema(values, window):
-    """Independent EMA reference: alpha = 2/(window+1), SMA-seeded."""
-    alpha = 2.0 / (window + 1)
-    out = [math.nan] * len(values)
-    start = next((i for i, v in enumerate(values) if not math.isnan(v)), None)
-    if start is None or len(values) - start < window:
-        return out
-    acc = sum(values[start : start + window]) / window
-    out[start + window - 1] = acc
-    for i in range(start + window, len(values)):
-        acc += alpha * (values[i] - acc)
-        out[i] = acc
-    return out
-
-
-def ref_bollinger(closes, window, num_std):
-    """Independent band reference: SMA +/- num_std * population stdev."""
-    upper = [math.nan] * len(closes)
-    lower = [math.nan] * len(closes)
-    for i in range(window - 1, len(closes)):
-        segment = closes[i - window + 1 : i + 1]
-        mean = sum(segment) / window
-        sd = math.sqrt(sum((v - mean) ** 2 for v in segment) / window)
-        upper[i] = mean + num_std * sd
-        lower[i] = mean - num_std * sd
-    return upper, lower
-
-
-def test_registry_lists_the_builtin_rules():
+def test_registry_lists_three_builtin_rules():
     rules = {(r.name, r.version): r for r in list_rules()}
-    for name in (
-        "sma-crossover",
-        "rsi-threshold",
-        "breakout-20d",
-        "macd-crossover",
-        "bollinger-breakout",
-        "bollinger-mean-reversion",
-    ):
-        assert (name, "1.0.0") in rules, f"missing rule {name}"
+    assert ("sma-crossover", "1.0.0") in rules
+    assert ("rsi-threshold", "1.0.0") in rules
+    assert ("breakout-20d", "1.0.0") in rules
     for rule in rules.values():
         assert rule.lookback_days >= 1
         assert rule.direction_semantics
@@ -211,154 +177,9 @@ def test_engine_orders_output_deterministically():
     assert [(s.symbol, s.date, s.rule_name) for s in signals] == sorted(
         (s.symbol, s.date, s.rule_name) for s in signals
     )
-    # A step up out of a flat series is both a 20-day breakout and a zero-width
-    # band breakout; macd-crossover's lookback (35) exceeds the 21 bars given.
-    assert [s.rule_name for s in signals] == ["bollinger-breakout", "breakout-20d"]
-
-
-# --- macd-crossover --------------------------------------------------------
-
-
-def _ref_macd_events(closes, fast, slow, signal):
-    line = [
-        (f - s) if not (math.isnan(f) or math.isnan(s)) else math.nan
-        for f, s in zip(ref_ema(closes, fast), ref_ema(closes, slow), strict=True)
-    ]
-    signal_line = ref_ema(line, signal)
-    events = []
-    for i in range(1, len(closes)):
-        window = (line[i - 1], signal_line[i - 1], line[i], signal_line[i])
-        if any(math.isnan(v) for v in window):
-            continue
-        prev_diff, diff = line[i - 1] - signal_line[i - 1], line[i] - signal_line[i]
-        if prev_diff <= 0 < diff:
-            events.append((i, "bullish"))
-        elif prev_diff >= 0 > diff:
-            events.append((i, "bearish"))
-    return events, line, signal_line
-
-
-def test_macd_crossover_matches_reference():
-    rule = get_rule("macd-crossover", "1.0.0")
-    closes = [100.0 - 0.5 * i for i in range(60)] + [70.0 + 0.9 * j for j in range(1, 61)]
-    bars = make_bars(closes)
-    events = rule.compute(bars, **rule.params)
-
-    expected, line, signal_line = _ref_macd_events(closes, 12, 26, 9)
-    assert [(b.date, d) for (i, d) in expected for b in [bars[i]]] == [
-        (e.date, e.direction) for e in events
-    ]
-    assert expected, "crafted series must produce at least one crossover"
-    first = events[0]
-    i = [b.date for b in bars].index(first.date)
-    assert first.trigger_values["macd"] == pytest.approx(line[i], rel=1e-12)
-    assert first.trigger_values["signal_line"] == pytest.approx(signal_line[i], rel=1e-12)
-    assert first.data_window_end == first.date
-
-
-def test_macd_crossover_flat_series_emits_nothing():
-    rule = get_rule("macd-crossover")
-    assert rule.compute(make_bars([50.0] * 80), **rule.params) == []
-
-
-def test_macd_crossover_insufficient_lookback():
-    rule = get_rule("macd-crossover")
-    closes = [100.0 - 0.5 * i for i in range(40)]
-    # The signal line needs slow+signal-1 bars before a cross can be seen.
-    assert engine.compute_signals({"ZZTEST": make_bars(closes[:34])}, rules=[rule]) == []
-
-
-# --- bollinger-breakout ----------------------------------------------------
-
-
-def test_bollinger_breakout_bullish_and_bearish():
-    rule = get_rule("bollinger-breakout", "1.0.0")
-    flat = [100.0] * 20
-    up = rule.compute(make_bars(flat + [105.0]), **rule.params)
-    assert [(e.date, e.direction) for e in up] == [
-        (config.trading_calendar()[20].isoformat(), "bullish")
-    ]
-    # The band is the trailing inclusive window: the 105 close is part of it,
-    # so the upper band on the breakout day is pulled above 100.
-    ref_upper, _ = ref_bollinger(flat + [105.0], 20, 2.0)
-    assert up[0].trigger_values["close"] == 105.0
-    assert up[0].trigger_values["upper_band"] == pytest.approx(ref_upper[20], rel=1e-12)
-    assert up[0].data_window_end == up[0].date
-
-    down = rule.compute(make_bars(flat + [95.0]), **rule.params)
-    assert [e.direction for e in down] == ["bearish"]
-    _, ref_lower = ref_bollinger(flat + [95.0], 20, 2.0)
-    assert down[0].trigger_values["close"] == 95.0
-    assert down[0].trigger_values["lower_band"] == pytest.approx(ref_lower[20], rel=1e-12)
-
-
-def test_bollinger_breakout_matches_reference():
-    rule = get_rule("bollinger-breakout", "1.0.0")
-    closes = [100.0] * 15 + [103.0, 97.0, 104.0, 96.0, 105.5, 94.0, 102.0] + [100.0] * 10
-    bars = make_bars(closes)
-    events = rule.compute(bars, **rule.params)
-
-    upper, lower = ref_bollinger(closes, 20, 2.0)
-    expected = []
-    for i in range(1, len(closes)):
-        if any(math.isnan(v) for v in (upper[i - 1], lower[i - 1], upper[i], lower[i])):
-            continue
-        if closes[i - 1] <= upper[i - 1] and closes[i] > upper[i]:
-            expected.append((bars[i].date, "bullish"))
-        elif closes[i - 1] >= lower[i - 1] and closes[i] < lower[i]:
-            expected.append((bars[i].date, "bearish"))
-    assert expected, "crafted series must produce at least one band cross"
-    assert [(e.date, e.direction) for e in events] == expected
-
-
-def test_bollinger_breakout_inside_the_band_emits_nothing():
-    rule = get_rule("bollinger-breakout")
-    # Oscillating tightly around the mean: never a cross of a 2-sigma band.
-    closes = [100.0 + (0.5 if i % 2 else -0.5) for i in range(40)]
-    assert rule.compute(make_bars(closes), **rule.params) == []
-
-
-def test_bollinger_breakout_insufficient_lookback():
-    rule = get_rule("bollinger-breakout")
-    assert rule.compute(make_bars([100.0] * 19 + [200.0]), **rule.params) == []
-
-
-# --- bollinger-mean-reversion ----------------------------------------------
-
-
-def test_bollinger_mean_reversion_matches_reference():
-    rule = get_rule("bollinger-mean-reversion", "1.0.0")
-    closes = [100.0] * 15 + [103.0, 97.0, 104.0, 96.0, 105.5, 94.0, 102.0] + [100.0] * 10
-    bars = make_bars(closes)
-    events = rule.compute(bars, **rule.params)
-
-    upper, lower = ref_bollinger(closes, 20, 2.0)
-    expected = []
-    for i in range(1, len(closes)):
-        if any(math.isnan(v) for v in (upper[i - 1], lower[i - 1], upper[i], lower[i])):
-            continue
-        if closes[i - 1] < lower[i - 1] and closes[i] >= lower[i]:
-            expected.append((bars[i].date, "bullish"))
-        elif closes[i - 1] > upper[i - 1] and closes[i] <= upper[i]:
-            expected.append((bars[i].date, "bearish"))
-    assert [(e.date, e.direction) for e in events] == expected
-
-
-def test_bollinger_mean_reversion_fires_on_reentry_only():
-    rule = get_rule("bollinger-mean-reversion", "1.0.0")
-    # Out through the lower band and straight back in: one bullish re-entry.
-    closes = [100.0] * 20 + [90.0, 100.0]
-    events = rule.compute(make_bars(closes), **rule.params)
-    assert [e.direction for e in events] == ["bullish"]
-    assert events[0].date == config.trading_calendar()[21].isoformat()
-    assert events[0].data_window_end == events[0].date
-
-    # A breakout with no re-entry is not this rule's event.
-    assert rule.compute(make_bars([100.0] * 20 + [105.0]), **rule.params) == []
-
-
-def test_bollinger_mean_reversion_insufficient_lookback():
-    rule = get_rule("bollinger-mean-reversion")
-    # 20 bars: the first band is defined at index 19 but a re-entry cross needs
-    # the prior band as well, so nothing can fire.
-    assert rule.compute(make_bars([100.0] * 19 + [50.0]), **rule.params) == []
+    # A 5% jump after a flat run trips the breakout. Which *other* rules also
+    # fire is a property of the catalogue, not of the ordering under test.
+    assert "breakout-20d" in [s.rule_name for s in signals]
+    # Filters describe a state and emit every bar; they must never reach a
+    # table of materialised signals.
+    assert "rsi-zone" not in [s.rule_name for s in signals]

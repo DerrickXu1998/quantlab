@@ -18,17 +18,22 @@ matches the builtins' conventions exactly -- sma(50) -> 51, rsi(14) -> 16.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date as _date
 from typing import Any
 
 import numpy as np
 
-from quantlab import fundamentals as fundamentals_lib
-from quantlab.indicators.builtins import ema as ema_indicator
 from quantlab.indicators.builtins import rolling_max as rolling_max_indicator
 from quantlab.indicators.builtins import rolling_min as rolling_min_indicator
-from quantlab.indicators.builtins import rolling_std as rolling_std_indicator
 from quantlab.indicators.builtins import rsi as rsi_indicator
 from quantlab.indicators.builtins import sma as sma_indicator
+
+# EMA and rolling standard deviation live in `technical`, not `builtins`. This
+# branch added its own copies to `builtins` before `technical` existed; the
+# merge kept the reviewed ones, and registering both raised
+# "duplicate indicator registration: ema" at import.
+from quantlab.indicators.technical import ema as ema_indicator
+from quantlab.indicators.technical import rolling_std as rolling_std_indicator
 from quantlab.signals.registry import SignalEvent, SignalRule
 
 # --- Config vocabularies ------------------------------------------------------
@@ -337,6 +342,68 @@ def _scale_class_crossover(config: dict) -> str:
 # date, so the experiment_signals CHECK (data_window_end <= date) holds by
 # construction.
 
+def _as_of_series(facts: list[dict]) -> list[dict]:
+    """The step series a crossing is detected on: what was knowable, by date.
+
+    Moved here from this branch's `quantlab.fundamentals`, which the merge
+    deleted: that module was a second reader over the fundamentals table, and
+    `quantlab.storage.facts` -- the one the backtest and the screen both go
+    through -- is the reviewed one. What is kept is only the part that module
+    had and the reader does not: a value *per filing date*, which is what a
+    crossing needs, rather than a value on an arbitrary date.
+
+    Facts carrying a `holder` (FCA short positions) are aggregated per holder
+    first -- each holder's latest filing persists until they file again -- then
+    summed. Without holders, the last row of the filing date wins, which is a
+    deterministic choice when one date carries several filings.
+
+    Unifying this with `storage.facts` is worth doing and is not done here: the
+    reader answers "the figure in force on date D" and this answers "every date
+    the figure changed", and collapsing the two is a design question, not a
+    merge.
+    """
+    per_holder = any(fact.get("holder") for fact in facts)
+    points: list[dict] = []
+    if per_holder:
+        latest_by_holder: dict[str, float] = {}
+        for day in sorted({fact["filed_at"] for fact in facts}):
+            for fact in facts:
+                if fact["filed_at"] == day:
+                    latest_by_holder[fact["holder"]] = fact["value"]
+            points.append({"date": day, "value": sum(latest_by_holder.values())})
+    else:
+        for day in sorted({fact["filed_at"] for fact in facts}):
+            day_facts = [fact for fact in facts if fact["filed_at"] == day]
+            points.append({"date": day, "value": day_facts[-1]["value"]})
+    return points
+
+
+def _yoy_growth(points: list[dict]) -> list[dict]:
+    """Year-over-year change of a step series: value(d) / value(d-1y) - 1.
+
+    The base is the series' as-of value one year earlier -- a step lookup back
+    through the filings, not a calendar guess. A point with no base a year back,
+    or a zero base, is dropped rather than answered with a fabricated number.
+    """
+    out: list[dict] = []
+    for point in points:
+        day = _date.fromisoformat(point["date"])
+        try:
+            target = day.replace(year=day.year - 1)
+        except ValueError:  # 29 Feb has no counterpart in a common year.
+            target = day.replace(year=day.year - 1, day=28)
+        base = None
+        for candidate in points:
+            if candidate["date"] <= target.isoformat():
+                base = candidate["value"]
+            else:
+                break
+        if not base:
+            continue
+        out.append({"date": point["date"], "value": point["value"] / base - 1.0})
+    return out
+
+
 FUNDAMENTAL_TRANSFORMS: tuple[str, ...] = ("level", "yoy_growth")
 FUNDAMENTAL_COMPARATORS: tuple[str, ...] = ("crosses_above", "crosses_below")
 
@@ -349,9 +416,9 @@ def _compute_fundamental_condition(
             "fundamental-condition needs PIT facts; the engine supplies them "
             "to rules whose inputs are bars+fundamentals"
         )
-    points = fundamentals_lib.as_of_series(facts)
+    points = _as_of_series(facts)
     if config.get("transform", "level") == "yoy_growth":
-        points = fundamentals_lib.yoy_growth(points)
+        points = _yoy_growth(points)
     threshold = float(config["threshold"])
     comparator = config["comparator"]
     bullish_on = config["bullish_on"]

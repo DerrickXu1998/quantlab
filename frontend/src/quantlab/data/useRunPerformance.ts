@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { getRunPerformance, type RunPerformance } from '../../api/client';
+import { getRunPerformance } from '../../api/client';
+import type { RunPerformanceV2 } from '../../api/types';
 
 export type PerformanceState =
   | { status: 'idle' }
   | { status: 'loading' }
-  | { status: 'ready'; performance: RunPerformance }
+  | { status: 'ready'; performance: RunPerformanceV2 }
   | { status: 'error'; message: string };
 
 /**

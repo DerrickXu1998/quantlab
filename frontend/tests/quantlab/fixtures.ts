@@ -6,9 +6,6 @@ export const model: Model = {
   lookback_days: 50,
   scale_class: 'price_scaled',
   direction_semantics: 'bullish when fast crosses above slow',
-  origin: 'builtin',
-  custom_rule_id: null,
-  template: null,
   parameters: [
     {
       name: 'fast',

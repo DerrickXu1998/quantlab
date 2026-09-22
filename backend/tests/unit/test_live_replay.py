@@ -108,7 +108,9 @@ def test_live_summary_reconciles_with_batch_replay(bars_by_symbol):
         "winning_trades",
         "losing_trades",
     ):
-        assert getattr(live_summary, field) == pytest.approx(getattr(batch_summary, field)), field
+        assert getattr(live_summary, field) == pytest.approx(
+            getattr(batch_summary, field)
+        ), field
 
 
 def test_live_equity_curve_matches_batch_point_for_point(bars_by_symbol):
@@ -127,9 +129,8 @@ def test_recompute_never_reemits_a_signal(bars_by_symbol):
     fired = [(e.symbol, e.date) for e in events if isinstance(e, ReplaySignal)]
     assert fired, "the fixture must fire signals"
     assert len(fired) == len(set(fired)), "duplicate signal events"
-    batch = {
-        (e.symbol, e.date) for e in _batch_events(bars_by_symbol) if isinstance(e, ReplaySignal)
-    }
+    batch = {(e.symbol, e.date) for e in _batch_events(bars_by_symbol)
+             if isinstance(e, ReplaySignal)}
     assert set(fired) == batch
 
 
@@ -152,7 +153,9 @@ def test_bars_outside_the_window_and_off_selection_are_ignored(bars_by_symbol):
     extra = dict(bars_by_symbol)
     extra["ZZWAVE"] = generate_universe()["ZZWAVE"]
     events = list(
-        live.live_replay_events("sma-crossover", None, list(SYMBOLS), START, END, _stream(extra))
+        live.live_replay_events(
+            "sma-crossover", None, list(SYMBOLS), START, END, _stream(extra)
+        )
     )
     symbols_seen = {s for e in events if isinstance(e, ReplaySignal) for s in [e.symbol]}
     closes_seen = {s for e in events if isinstance(e, ReplayBar) for s in e.closes}
@@ -164,25 +167,19 @@ def test_duplicate_bars_from_a_republish_are_deduplicated(bars_by_symbol):
     once = _live_events(bars_by_symbol)
     twice = list(
         live.live_replay_events(
-            "sma-crossover",
-            None,
-            list(SYMBOLS),
-            START,
-            END,
+            "sma-crossover", None, list(SYMBOLS), START, END,
             _stream(bars_by_symbol, with_end=False) + _stream(bars_by_symbol),
         )
     )
-    assert [replay_engine.to_dict(e) for e in once] == [replay_engine.to_dict(e) for e in twice]
+    assert [replay_engine.to_dict(e) for e in once] == [
+        replay_engine.to_dict(e) for e in twice
+    ]
 
 
 def test_stream_without_end_message_still_summarises(bars_by_symbol):
     events = list(
         live.live_replay_events(
-            "sma-crossover",
-            None,
-            list(SYMBOLS),
-            START,
-            END,
+            "sma-crossover", None, list(SYMBOLS), START, END,
             _stream(bars_by_symbol, with_end=False),
         )
     )
@@ -193,11 +190,7 @@ def test_overrides_flow_to_the_rule(bars_by_symbol):
     overrides = {"fast": 5, "slow": 15}
     live_summary = list(
         live.live_replay_events(
-            "sma-crossover",
-            overrides,
-            list(SYMBOLS),
-            START,
-            END,
+            "sma-crossover", overrides, list(SYMBOLS), START, END,
             _stream(bars_by_symbol),
         )
     )[-1]
