@@ -14,7 +14,7 @@ import { UserMenu } from '../auth/UserMenu';
 import { DataDisclaimer } from '../components/DataDisclaimer';
 import { Button } from '../components/ui/button';
 import { StatusBadge } from '../components/ui/status-badge';
-import { SignalsPage } from '../pages/SignalsPage';
+import { ResearchPage } from '../pages/ResearchPage';
 import { GrainOverlay } from '../quantlab/chrome/GrainOverlay';
 import { useWatchlist } from '../quantlab/data/useWatchlist';
 import { FeedProvider, useFeedStatus } from '../quantlab/feed/FeedProvider';
@@ -138,13 +138,15 @@ export function AppShell() {
             </div>
           </header>
 
-          {/* Conditional, never `hidden`: a display:none Dockview measures 0x0
-              and corrupts its layout. layoutStorage restores it on return. */}
+          {/* One destination mounted at a time. This was previously a
+              comment about Dockview corrupting its layout when measured at
+              0x0; that constraint left with the dock (docs/RESEARCH.md §1d),
+              and nothing here needs to be kept alive off-screen any more. */}
           {route.destination === 'overview' ? (
             <OverviewView />
           ) : route.destination === 'research' ? (
             <div className="min-h-0 flex-1">
-              <SignalsPage />
+              <ResearchPage />
             </div>
           ) : route.destination === 'strategies' ? (
             <StrategyLabView instruments={instruments} />

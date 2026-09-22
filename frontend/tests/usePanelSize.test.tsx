@@ -1,7 +1,7 @@
 import { act, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { PanelApiProvider, usePanelSize } from '../src/components/usePanelSize';
-import { createFakePanelApi } from './mocks/dockview-react';
+import { createFakePanelApi } from './mocks/panel-api';
 
 function Probe() {
   const { width, height, isVisible } = usePanelSize();

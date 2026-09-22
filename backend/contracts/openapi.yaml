@@ -850,6 +850,185 @@ paths:
               schema:
                 $ref: "#/components/schemas/StrategyTemplateList"
 
+  /instruments/{symbol}/fundamentals:
+    get:
+      tags: [research]
+      operationId: getFundamentals
+      summary: One instrument's filed accounts, as they stood on a date
+      description: >
+        Resolved through the same reader the backtest uses, so this screen and
+        a run cannot disagree about what was knowable. Rows are keyed on
+        `filed_at`, never `period_end` -- see docs/FUNDAMENTALS.md.
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[A-Z0-9][A-Z0-9._-]{0,19}$"
+        - name: as_of
+          in: query
+          required: false
+          description: Defaults to today. Nothing filed after it is returned.
+          schema:
+            type: string
+            format: date
+        - name: concepts
+          in: query
+          required: false
+          description: Comma-separated. An unknown concept is a 422, not an empty answer.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The facts in force on the as-of date, one per concept
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FundamentalFact"
+        "404":
+          description: Unknown symbol
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /instruments/{symbol}/overview:
+    get:
+      tags: [research]
+      operationId: getCompanyOverview
+      summary: Everything filed about one name, as of a date
+      description: >
+        A composition of reads that already existed and were reachable only by
+        clicking a signal row. Bars, facts and signal counts are all bounded by
+        `as_of`, so the page cannot show a signal from after the date it claims
+        to answer.
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[A-Z0-9][A-Z0-9._-]{0,19}$"
+        - name: as_of
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: The company as it stood
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanyOverview"
+        "404":
+          description: Unknown symbol
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /fundamentals/coverage:
+    get:
+      tags: [research]
+      operationId: getFundamentalsCoverage
+      summary: Which instruments and concepts have filings at all
+      description: >
+        Coverage is not uniform -- 580 of 644 names have any facts, and within
+        them gross profit reaches 237 against revenue's 376. A screen that does
+        not say so reads as "few qualified" when the truth is "most were never
+        measured".
+      responses:
+        "200":
+          description: What exists, before anything is run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FundamentalsCoverage"
+
+  /universes:
+    get:
+      tags: [research]
+      operationId: listUniverses
+      summary: The named lists a screen may be run over
+      responses:
+        "200":
+          description: One row per snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UniverseList"
+
+  /screen:
+    get:
+      tags: [research]
+      operationId: screen
+      summary: Narrow a universe by ratios built from filed accounts
+      description: >
+        `universe` is required rather than defaulting to everything, because
+        `fundamentals_pit_idx` leads with `instrument_id`: unbounded the query
+        falls to a sequential scan at 6,700ms against 836ms bounded. Ratios are
+        computed by the same helpers the fundamental rules use, so a screen and
+        a backtest cannot disagree.
+      parameters:
+        - name: universe
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: as_of
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: metrics
+          in: query
+          required: false
+          description: Comma-separated subset; fewer metrics is proportionally faster.
+          schema:
+            type: string
+        - name: constraints
+          in: query
+          required: false
+          description: >
+            `metric:min:max` comma-separated, an empty bound meaning unbounded
+            (`pe::20,roe:0.15:`). A GET so a screen stays linkable.
+          schema:
+            type: string
+        - name: sort_by
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/ScreenMetric"
+        - name: descending
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: The ranked names, with per-metric coverage and both exclusion counts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScreenResult"
+        "404":
+          description: No snapshot of that universe on or before the as-of date
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
 
 components:
   securitySchemes:
@@ -1947,3 +2126,254 @@ components:
         total_slippage:
           type: number
           default: 0
+
+    # --- Research (docs/RESEARCH.md) ---------------------------------------
+
+    FundamentalFact:
+      type: object
+      required: [concept, value, period_end, filed_at, days_stale]
+      properties:
+        concept:
+          type: string
+        value:
+          type: number
+        period_start:
+          type: string
+          format: date
+          nullable: true
+        period_end:
+          type: string
+          format: date
+        filed_at:
+          type: string
+          format: date
+          description: >
+            The date this figure became public, and the only column that makes
+            a look-ahead visible. A restatement filed later is a different row.
+        days_stale:
+          type: integer
+          description: Age on the as-of date. Rules stop honouring a figure past 455.
+        scope:
+          type: string
+          nullable: true
+          description: >
+            `instant` or `duration`. A balance-sheet figure is an instant and a
+            P&L figure spans a period; mixing them puts a quarterly revenue in
+            an annual P/E, wrong by four times.
+        forward_dated:
+          type: boolean
+          description: Period ends after the as-of date though filed before it. Rare, and surfaced rather than hidden.
+        in_force:
+          type: boolean
+          description: The row the point-in-time rule selects for this concept.
+
+    ConceptCoverage:
+      type: object
+      required: [concept, instruments]
+      properties:
+        concept:
+          type: string
+        instruments:
+          type: integer
+          description: How many names have at least one filing of it.
+        first_filed:
+          type: string
+          format: date
+          nullable: true
+        last_filed:
+          type: string
+          format: date
+          nullable: true
+        symbols:
+          type: array
+          items:
+            type: string
+
+    FundamentalsCoverage:
+      type: object
+      required: [instruments_total, instruments_with_facts, concepts]
+      properties:
+        instruments_total:
+          type: integer
+        instruments_with_facts:
+          type: integer
+          description: >
+            64 of 644 names have none. A fundamental filter over those *cannot*
+            trade rather than failing to find trades, and the two are
+            indistinguishable in a result.
+        concepts:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConceptCoverage"
+        symbols_with_facts:
+          type: array
+          items:
+            type: string
+        symbols_without_facts:
+          type: array
+          items:
+            type: string
+
+    CompanySignalCount:
+      type: object
+      required: [rule_name, count]
+      properties:
+        rule_name:
+          type: string
+        count:
+          type: integer
+        last_date:
+          type: string
+          format: date
+          nullable: true
+        last_direction:
+          $ref: "#/components/schemas/Direction"
+
+    CompanyOverview:
+      type: object
+      required: [symbol, name, exchange, currency, sector, as_of, facts, concepts_available, concepts_missing, signals, signal_total]
+      properties:
+        symbol:
+          type: string
+        name:
+          type: string
+          description: Blank for many warehouse rows; falls back to the symbol rather than being invented.
+        exchange:
+          type: string
+        currency:
+          type: string
+        sector:
+          type: string
+          description: >
+            Blank for 607 of 644 names, and returned blank. An invented sector
+            would license a peer group that does not exist.
+        as_of:
+          type: string
+          format: date
+        first_bar:
+          type: string
+          format: date
+          nullable: true
+        last_bar:
+          type: string
+          format: date
+          nullable: true
+        last_close:
+          type: number
+          nullable: true
+          description: Taken on or before the as-of date -- the one number every ratio divides by.
+        facts:
+          type: array
+          items:
+            $ref: "#/components/schemas/FundamentalFact"
+        concepts_available:
+          type: array
+          items:
+            type: string
+        concepts_missing:
+          type: array
+          items:
+            type: string
+          description: >
+            Never filed, as opposed to merely absent on this date. Carried
+            explicitly because the two produce the same gap on the page and are
+            not the same fact.
+        signals:
+          type: array
+          items:
+            $ref: "#/components/schemas/CompanySignalCount"
+        signal_total:
+          type: integer
+
+    ScreenMetric:
+      type: string
+      enum: [pe, pb, roe, leverage, net_margin, gross_margin, current_ratio]
+
+    ScreenMetricCoverage:
+      type: object
+      required: [metric, measured, universe, requires]
+      properties:
+        metric:
+          $ref: "#/components/schemas/ScreenMetric"
+        measured:
+          type: integer
+        universe:
+          type: integer
+        requires:
+          type: array
+          items:
+            type: string
+          description: The filed concepts the ratio is built from.
+
+    ScreenRow:
+      type: object
+      required: [symbol, name, values]
+      properties:
+        symbol:
+          type: string
+        name:
+          type: string
+        values:
+          type: object
+          additionalProperties:
+            type: number
+            nullable: true
+          description: >
+            Null where the inputs were not filed, or where a denominator was
+            zero or negative. Unknown is never a zero: negative equity must not
+            read as cheap and pass a value filter.
+
+    ScreenResult:
+      type: object
+      required: [as_of, universe, universe_size, rows, coverage, excluded_by_constraint, excluded_unmeasured]
+      properties:
+        as_of:
+          type: string
+          format: date
+        universe:
+          type: string
+        universe_size:
+          type: integer
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScreenRow"
+        coverage:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScreenMetricCoverage"
+        sort_by:
+          $ref: "#/components/schemas/ScreenMetric"
+        excluded_by_constraint:
+          type: integer
+          description: Measured, and failed a bound. This is a finding.
+        excluded_unmeasured:
+          type: integer
+          description: >
+            A constrained ratio could not be computed from what was filed.
+            Counted apart from the above, because collapsing them is what makes
+            a coverage hole look like a result.
+
+    Universe:
+      type: object
+      required: [name, as_of, size]
+      properties:
+        name:
+          type: string
+        as_of:
+          type: string
+          format: date
+        size:
+          type: integer
+          description: Counted from members rather than trusting a stored count.
+
+    UniverseList:
+      type: object
+      required: [total, items]
+      properties:
+        total:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Universe"

@@ -1,4 +1,13 @@
-import type { Health, Model, ParamSpec, Run, RunDetail, RunPerformance, Trade } from './client';
+import type {
+  Direction,
+  Health,
+  Model,
+  ParamSpec,
+  Run,
+  RunDetail,
+  RunPerformance,
+  Trade,
+} from './client';
 
 /**
  * Hand-written types for the surfaces added by `docs/CONTRACT_V2.md`.
@@ -488,6 +497,21 @@ export interface FundamentalFact {
   /** The filing this row came from — what makes a restatement identifiable. */
   accession?: string | null;
   /**
+   * Instant or duration — which one decides how the figure may be used.
+   *
+   * A balance-sheet figure is an instant and a P&L figure spans a period, and
+   * mixing them is how a quarterly revenue ends up in an annual P/E, wrong by
+   * four times (docs/FUNDAMENTALS.md §2).
+   */
+  scope?: string | null;
+  /**
+   * The row's period ends after the as-of date, though it was filed before it.
+   *
+   * Legitimate and rare — a filing can carry a forward-looking period — but it
+   * has to be visible rather than silently averaged in with the rest.
+   */
+  forward_dated?: boolean;
+  /**
    * The row the PIT rule selects for this concept on the as-of date.
    *
    * Sent by the server when it knows; when it is absent the inspector falls
@@ -562,4 +586,101 @@ export function asCatalogModel(model: RawCatalogModel): CatalogModel {
 /** Merge a partial execution config onto the contract's declared defaults. */
 export function withExecutionDefaults(partial?: Partial<ExecutionConfig> | null): ExecutionConfig {
   return { ...DEFAULT_EXECUTION, ...(partial ?? {}) };
+}
+
+// --- Research: the company, and the universe (docs/RESEARCH.md) -------------
+
+/** One rule's firing history against a single name. */
+export interface CompanySignalCount {
+  rule_name: string;
+  count: number;
+  last_date: string | null;
+  last_direction: Direction | null;
+}
+
+/**
+ * `GET /instruments/{symbol}/overview`: everything filed about one name.
+ *
+ * The object the destination was missing (docs/RESEARCH.md §1c). It is a
+ * composition rather than a new source: prices, point-in-time facts and signal
+ * counts each already exist, and were reachable only by stumbling onto a
+ * signal row that happened to name the company.
+ *
+ * `concepts_missing` is carried explicitly rather than left to be derived from
+ * a short `facts` array. A name with no `gross_profit` and a name whose
+ * `gross_profit` has not been filed since 2019 are different facts, and only
+ * the first is a coverage hole.
+ */
+export interface CompanyOverview {
+  symbol: string;
+  name: string;
+  exchange: string;
+  currency: string;
+  /** Blank for 607 of 644 catalogued names — render only when non-empty. */
+  sector: string;
+  /** The date the facts below were resolved as of. */
+  as_of: string;
+  first_bar: string | null;
+  last_bar: string | null;
+  last_close: number | null;
+  /** Already point-in-time resolved by the server; do not re-select. */
+  facts: FundamentalFact[];
+  concepts_available: string[];
+  concepts_missing: string[];
+  signals: CompanySignalCount[];
+  signal_total: number;
+}
+
+/** The ratios a screen can constrain, each derived from filed concepts. */
+export const SCREEN_METRICS = [
+  'pe',
+  'pb',
+  'roe',
+  'leverage',
+  'net_margin',
+  'gross_margin',
+  'current_ratio',
+] as const;
+
+export type ScreenMetric = (typeof SCREEN_METRICS)[number];
+
+export interface ScreenConstraint {
+  metric: ScreenMetric;
+  min?: number | null;
+  max?: number | null;
+}
+
+/**
+ * How much of the universe a metric could actually be computed for.
+ *
+ * Sent per metric because coverage is not uniform: gross margin is filed by
+ * 237 names against revenue's 376 (docs/RESEARCH.md §2). A screen that
+ * silently returned the difference would read as "few companies qualified"
+ * when the truth is "most were never measured".
+ */
+export interface ScreenMetricCoverage {
+  metric: ScreenMetric;
+  measured: number;
+  universe: number;
+  requires: string[];
+}
+
+export interface ScreenRow {
+  symbol: string;
+  name: string;
+  /** Null where the inputs were not filed — distinct from a zero. */
+  values: Partial<Record<ScreenMetric, number | null>>;
+}
+
+export interface ScreenResult {
+  as_of: string;
+  universe: string;
+  universe_size: number;
+  rows: ScreenRow[];
+  coverage: ScreenMetricCoverage[];
+  sort_by: ScreenMetric | null;
+  /** Names dropped for failing a constraint, as opposed to being unmeasured. */
+  excluded_by_constraint: number;
+  /** Names dropped because a constrained metric could not be computed. */
+  excluded_unmeasured: number;
 }

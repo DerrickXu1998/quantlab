@@ -6,7 +6,6 @@ import { ModelList } from '../src/components/ModelList';
 import { RunConfigForm } from '../src/components/RunConfigForm';
 import { RunResultsView } from '../src/components/RunResultsView';
 import { RunsProvider, useRuns } from '../src/runs/RunsContext';
-import { WorkspaceProvider, useWorkspace } from '../src/workspace/WorkspaceContext';
 import { makeInstrument } from './fixtures';
 
 vi.mock('../src/api/client', async (importOriginal) => {
@@ -92,7 +91,8 @@ function makeRun(overrides: Partial<apiClient.RunDetail> = {}): apiClient.RunDet
 function Harness({ results = false }: { results?: boolean }) {
   const { modelEntries, modelsStatus, selectedModel, selectModel, activeRun, inFlight, start, cancel } =
     useRuns();
-  const { instruments } = useWorkspace();
+
+  const instruments = [makeInstrument()];
 
   if (modelsStatus !== 'ready') return null;
   return (
@@ -119,11 +119,7 @@ function Harness({ results = false }: { results?: boolean }) {
 }
 
 function renderWorkbench(ui: React.ReactNode) {
-  return render(
-    <WorkspaceProvider>
-      <RunsProvider>{ui}</RunsProvider>
-    </WorkspaceProvider>,
-  );
+  return render(<RunsProvider>{ui}</RunsProvider>);
 }
 
 beforeEach(() => {

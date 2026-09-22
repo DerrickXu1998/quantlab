@@ -414,6 +414,159 @@ class ExecutionSummaryModel(BaseModel):
     contradictions: int = 0
 
 
+# --- Research: the company, the universe, the screen (docs/RESEARCH.md) -----
+
+
+class FundamentalFact(BaseModel):
+    """One filed number, with everything needed to judge whether to trust it.
+
+    ``filed_at`` and ``days_stale`` are not decoration. They are the only
+    columns that reveal a look-ahead: a naive join returns Caterpillar's
+    quarter ending 2024-06-30 from a filing dated 2026-03-26, and nothing else
+    in the row says so (docs/FUNDAMENTALS.md §2).
+    """
+
+    concept: str
+    value: float
+    period_start: str | None = None
+    period_end: str
+    filed_at: str
+    days_stale: int
+    #: Which period length this figure describes. A quarter's revenue and a
+    #: year's are both "revenue", and a ratio built from the wrong one is off
+    #: by roughly four.
+    scope: Literal["instant", "quarter", "interim", "annual"] = "instant"
+    #: ``filed_at < period_end``: 710 rows in the warehouse carry a filing date
+    #: before the period they label. Surfaced rather than dropped -- discarding
+    #: data for looking strange is how a dataset ends up clean and wrong.
+    forward_dated: bool = False
+    #: The row the point-in-time rule selects for this concept on the as-of
+    #: date, so the inspector does not have to re-derive a choice already made.
+    in_force: bool = True
+
+
+class ConceptCoverage(BaseModel):
+    concept: str
+    instruments: int
+    first_filed: str | None = None
+    last_filed: str | None = None
+    #: Which names have it. Enumerated so a coverage warning can be
+    #: concept-exact rather than falling back to "has no fundamentals at all".
+    symbols: list[str] = []
+
+
+class FundamentalsCoverage(BaseModel):
+    """What exists, before anything is run.
+
+    64 of 644 instruments have no filings. A strategy with a fundamental filter
+    over those names does not fail to find trades, it *cannot* trade, and the
+    two are indistinguishable in a result -- so they are distinguished here,
+    before the run (docs/FUNDAMENTALS.md §5.1).
+    """
+
+    instruments_total: int
+    instruments_with_facts: int
+    concepts: list[ConceptCoverage]
+    symbols_with_facts: list[str] = []
+    symbols_without_facts: list[str] = []
+
+
+class CompanySignalCount(BaseModel):
+    rule_name: str
+    count: int
+    last_date: str | None = None
+    last_direction: Literal["bullish", "bearish"] | None = None
+
+
+class CompanyOverview(BaseModel):
+    """Everything filed about one name, as of a date.
+
+    ``concepts_missing`` is carried rather than left to be inferred from a
+    short ``facts`` list: a name that has never filed gross profit and one
+    whose gross profit has not been refiled since 2019 produce the same absence
+    on the page and are not the same fact.
+    """
+
+    symbol: str
+    name: str
+    exchange: str
+    currency: str
+    #: Blank on 607 of 644 catalogued names, and returned blank rather than
+    #: invented -- a fabricated sector would license a peer comparison the
+    #: catalogue cannot support (docs/RESEARCH.md §2).
+    sector: str
+    as_of: str
+    first_bar: str | None = None
+    last_bar: str | None = None
+    last_close: float | None = None
+    facts: list[FundamentalFact] = []
+    concepts_available: list[str] = []
+    concepts_missing: list[str] = []
+    signals: list[CompanySignalCount] = []
+    signal_total: int = 0
+
+
+ScreenMetric = Literal[
+    "pe", "pb", "roe", "leverage", "net_margin", "gross_margin", "current_ratio"
+]
+"""The ratios a screen can constrain, each derived from filed concepts.
+
+The vocabulary lives here because the request has to validate against it;
+which concepts each one needs, and how it is computed, live beside the rules
+whose arithmetic it borrows (quantlab.storage.warehouse). A contract test holds
+the two together.
+"""
+
+
+class ScreenMetricCoverage(BaseModel):
+    """How much of the universe a metric could actually be computed for.
+
+    Per metric, because coverage is not uniform: gross profit is filed by 237
+    names against revenue's 376. A screen that silently returned the difference
+    would read as "few companies qualified" when the truth is "most were never
+    measured" (docs/RESEARCH.md §2).
+    """
+
+    metric: ScreenMetric
+    measured: int
+    universe: int
+    requires: list[str]
+
+
+class ScreenRow(BaseModel):
+    symbol: str
+    name: str
+    #: Null where the inputs were not filed, or where a denominator was not
+    #: positive -- distinct from a zero, and never sorted as one.
+    values: dict[str, float | None] = {}
+
+
+class ScreenResult(BaseModel):
+    as_of: str
+    universe: str
+    universe_size: int
+    rows: list[ScreenRow] = []
+    coverage: list[ScreenMetricCoverage] = []
+    sort_by: ScreenMetric | None = None
+    #: Dropped for failing a constraint, as opposed to being unmeasured. The
+    #: split is the whole point: one is a fact about companies, the other about
+    #: the warehouse.
+    excluded_by_constraint: int = 0
+    excluded_unmeasured: int = 0
+
+
+class UniverseSummary(BaseModel):
+    name: str
+    #: The snapshot's own capture date, not the date that was asked for.
+    as_of: str
+    size: int
+
+
+class UniverseList(BaseModel):
+    total: int
+    items: list[UniverseSummary]
+
+
 # RunRequest and Run reference StrategyRequest, ExecutionConfigModel and
 # ExecutionSummaryModel, which are defined below them. Rebuilding here resolves
 # those forward references now rather than on first request.

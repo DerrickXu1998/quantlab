@@ -4,6 +4,7 @@ import type {
   AuthSession,
   AuthUser,
   Credentials,
+  CompanyOverview,
   ExecutionConfig,
   FundamentalFact,
   FundamentalsCoverage,
@@ -13,6 +14,9 @@ import type {
   RunPerformanceV2,
   RunListV2,
   RunV2,
+  ScreenConstraint,
+  ScreenMetric,
+  ScreenResult,
   Strategy,
   StrategyList,
   StrategyRunRequest,
@@ -318,6 +322,62 @@ export async function getFundamentals(symbol: string, asOf: string): Promise<Fun
  */
 export function getFundamentalsCoverage(): Promise<FundamentalsCoverage> {
   return request<FundamentalsCoverage>('/fundamentals/coverage');
+}
+
+// --- Research (docs/RESEARCH.md) -------------------------------------------
+
+/**
+ * Everything filed about one name, as of a date.
+ *
+ * One request rather than the four it composes. The company page needs price
+ * bounds, the point-in-time accounts, coverage and signal history to render at
+ * all, and issuing those separately would paint the panel in four stages, each
+ * with its own failure — a page that is half-wrong for a moment is worse than
+ * one that is briefly empty.
+ */
+export function getCompanyOverview(symbol: string, asOf?: string): Promise<CompanyOverview> {
+  return request<CompanyOverview>(
+    `/instruments/${encodeURIComponent(symbol)}/overview`,
+    asOf ? { as_of: asOf } : {},
+  );
+}
+
+/**
+ * Narrow a universe by filed ratios.
+ *
+ * `universe` is required by the index, not by taste: `fundamentals_pit_idx`
+ * leads with `instrument_id`, so an unbounded screen falls to a sequential
+ * scan and takes 6.7s against 836ms bounded (docs/RESEARCH.md §2). Screening
+ * within a named list is also what the work actually is.
+ */
+export function screen(params: {
+  universe: string;
+  constraints?: ScreenConstraint[];
+  metrics?: ScreenMetric[];
+  asOf?: string;
+  sortBy?: ScreenMetric;
+  descending?: boolean;
+  limit?: number;
+}): Promise<ScreenResult> {
+  const query: Record<string, string> = { universe: params.universe };
+  if (params.asOf) query.as_of = params.asOf;
+  if (params.sortBy) query.sort_by = params.sortBy;
+  if (params.descending !== undefined) query.descending = String(params.descending);
+  if (params.limit !== undefined) query.limit = String(params.limit);
+  if (params.metrics?.length) query.metrics = params.metrics.join(',');
+  // Constraints go over as `metric:min:max`, empty bound meaning unbounded, so
+  // the whole screen stays a GET and therefore stays linkable and cacheable.
+  if (params.constraints?.length) {
+    query.constraints = params.constraints
+      .map((c) => `${c.metric}:${c.min ?? ''}:${c.max ?? ''}`)
+      .join(',');
+  }
+  return request<ScreenResult>('/screen', query);
+}
+
+/** The universes a screen may be run over. */
+export function listUniverses(): Promise<{ items: { name: string; as_of: string; size: number }[] }> {
+  return request<{ items: { name: string; as_of: string; size: number }[] }>('/universes');
 }
 
 export type { ExecutionConfig };
