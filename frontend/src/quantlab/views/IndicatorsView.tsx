@@ -80,7 +80,10 @@ function ToggleChip({
       type="button"
       aria-pressed={active}
       onClick={onToggle}
-      className={`pointer-events-auto flex items-center gap-1.5 rounded-sm border px-2 py-1 transition-colors ${
+      // These sit over the chart, so they stay as small as a chip can be on
+      // desktop; on a phone they are the only way to turn an overlay on, and a
+      // 24px chip is not reliably hittable.
+      className={`pointer-events-auto flex h-11 items-center gap-1.5 rounded-sm border px-2.5 transition-colors lg:h-auto lg:px-2 lg:py-1 ${
         active
           ? 'border-primary/50 bg-primary/10 text-primary'
           : 'border-border bg-card text-foreground hover:bg-accent/40'

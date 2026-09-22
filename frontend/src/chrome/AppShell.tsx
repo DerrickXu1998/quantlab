@@ -26,7 +26,9 @@ import { ReplayView } from '../quantlab/views/ReplayView';
 import { StrategyLabView } from '../quantlab/views/StrategyLabView';
 import { ThemeToggle } from '../theme/ThemeToggle';
 import { DatasetBadge } from '../workbench/DatasetBadge';
+import { cn } from '../lib/utils';
 import { navigate, replaceRoute, useRoute, type Destination } from './router';
+import { useIsDesktop } from './useMediaQuery';
 
 const NAV: { id: Destination; label: string; icon: LucideIcon; simulated?: string }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -84,6 +86,9 @@ function FeedStatus() {
 export function AppShell() {
   const route = useRoute();
   const { instruments, seeds, error } = useWatchlist();
+  // Rendered once, in one place or the other. See useMediaQuery: two
+  // copies hidden by CSS would be two nodes in the accessibility tree.
+  const isDesktop = useIsDesktop();
 
   // Legacy hashes (`#/`, `#/lab`, anything unknown) are rewritten to the
   // canonical destination hash, without adding a history entry.
@@ -98,11 +103,24 @@ export function AppShell() {
       {/* Above the grain, which is the whole point of the grain. */}
       <div className="relative z-10 flex min-h-0 flex-1 flex-col">
         <FeedProvider seeds={seeds}>
-          <header className="flex shrink-0 items-center justify-between gap-6 border-b border-border px-4 py-2.5">
-            <div className="flex items-center gap-6">
-              <span className="font-display text-sm tracking-[-0.02em]">QuantLab</span>
+          {/* The header is the whole app's width floor, so it is where the
+              phone layout is won or lost: at 390px the desktop row measured
+              1,190px of content, and every destination inherited that sideways
+              scroll.
 
-              <nav aria-label="Destinations" className="flex items-center gap-1">
+              Three things give way, in order of how little they cost: the
+              destination labels (the icon and an aria-label carry the name),
+              the clock (a phone has one), and the feed and dataset disclosures
+              -- moved to the footer on small screens rather than dropped,
+              because they are what say whether the numbers are real. Above
+              `lg` every one of them returns and the row is what it was. */}
+          <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2 lg:gap-6 lg:px-4 lg:py-2.5">
+            <div className="flex min-w-0 items-center gap-2 lg:gap-6">
+              <span className="hidden font-display text-sm tracking-[-0.02em] sm:inline">
+                QuantLab
+              </span>
+
+              <nav aria-label="Destinations" className="flex items-center gap-0.5 lg:gap-1">
                 {NAV.map((item) => (
                   <Button
                     key={item.id}
@@ -110,17 +128,32 @@ export function AppShell() {
                     variant="ghost"
                     size="sm"
                     aria-current={route.destination === item.id ? 'page' : undefined}
+                    // The label is hidden below `lg`, so the name has to come
+                    // from here. It carries the simulated marker too: an
+                    // aria-label overrides the element's contents, and without
+                    // this the `sim` badge would drop out of the accessible
+                    // name that previously included it.
+                    aria-label={item.simulated ? `${item.label} (simulated)` : item.label}
+                    title={item.simulated ?? item.label}
                     onClick={() => navigate(item.id)}
-                    className={
+                    className={cn(
+                      // 44px of touch target below `lg` -- the floor a finger
+                      // hits reliably -- and the 28px desktop row back at `lg`,
+                      // where the pointer is a mouse.
+                      'h-11 w-11 justify-center px-0 lg:h-7 lg:w-auto lg:justify-start lg:px-2.5',
                       route.destination === item.id
                         ? 'bg-primary/10 text-primary hover:text-primary'
-                        : undefined
-                    }
+                        : undefined,
+                    )}
                   >
                     <item.icon size={20} strokeWidth={1.5} aria-hidden="true" />
-                    {item.label}
+                    <span className="hidden lg:inline">{item.label}</span>
                     {item.simulated ? (
-                      <StatusBadge tone="simulated" title={item.simulated}>
+                      <StatusBadge
+                        tone="simulated"
+                        title={item.simulated}
+                        className="hidden lg:inline-flex"
+                      >
                         sim
                       </StatusBadge>
                     ) : null}
@@ -129,10 +162,14 @@ export function AppShell() {
               </nav>
             </div>
 
-            <div className="flex items-center gap-4">
-              <FeedStatus />
-              <Clock />
-              <DatasetBadge />
+            <div className="flex shrink-0 items-center gap-2 lg:gap-4">
+              {isDesktop ? (
+                <>
+                  <FeedStatus />
+                  <Clock />
+                  <DatasetBadge />
+                </>
+              ) : null}
               <ThemeToggle />
               <UserMenu />
             </div>
@@ -162,6 +199,18 @@ export function AppShell() {
 
           <footer className="shrink-0">
             <TickerTape />
+            {/* Where the header's disclosures go on a phone. They are not
+                decoration: `sim` and the dataset badge are the difference
+                between a demo number and a traded one, so they stay on screen
+                at every width -- just at the bottom, where the header has no
+                room. Hidden at `lg`, where they are back in the header and
+                showing them twice would be noise. */}
+            {isDesktop ? null : (
+              <div className="flex items-center justify-center gap-3 border-t border-border px-3 py-1.5">
+                <FeedStatus />
+                <DatasetBadge />
+              </div>
+            )}
             <div className="border-t border-border px-4 py-1.5 text-center text-[11px] text-muted-foreground">
               <DataDisclaimer />
             </div>

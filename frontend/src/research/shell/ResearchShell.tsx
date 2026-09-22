@@ -65,7 +65,7 @@ function ModeSwitcher({
   onChange: (mode: ResearchMode) => void;
 }) {
   return (
-    <div role="tablist" aria-label="Research mode" className="flex items-center gap-1">
+    <div role="tablist" aria-label="Research mode" className="flex flex-wrap items-center gap-1">
       {RESEARCH_MODES.map((id) => {
         const definition = MODE_DEFINITIONS[id];
         const Icon = definition.icon;
@@ -80,7 +80,8 @@ function ModeSwitcher({
             id={`research-tab-${id}`}
             onClick={() => onChange(id)}
             className={cn(
-              'inline-flex items-center gap-2 rounded-sm border px-3 py-1.5',
+              // 44px of target on a phone, the original dense row at `lg`.
+              'inline-flex h-11 items-center gap-2 rounded-sm border px-3 lg:h-auto lg:py-1.5',
               'font-mono text-[11px] uppercase tracking-[0.12em] transition-colors',
               'focus-visible:outline-none focus-visible:border-primary',
               active
@@ -121,7 +122,7 @@ export function ResearchShell({ mode, onModeChange, actions, children }: Researc
     <FillColumn className="h-full">
       <header className="shrink-0 border-b border-border px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-4">
+          <div className="flex min-w-0 flex-wrap items-center gap-2 lg:gap-4">
             <h1 className="font-display text-sm uppercase tracking-[0.18em] text-muted-foreground">
               Research
             </h1>

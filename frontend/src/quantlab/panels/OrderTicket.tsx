@@ -35,7 +35,10 @@ function Toggle<T extends string>({
           type="button"
           aria-pressed={value === option}
           onClick={() => onChange(option)}
-          className={`px-2 py-1.5 font-mono text-[11px] uppercase tracking-[0.12em] transition-colors ${
+          // BUY/SELL and market/limit are the two choices on this screen a
+          // mis-tap actually costs something for, so they get the full 44px on
+          // touch even though the ticket is compact everywhere else.
+          className={`h-11 px-2 font-mono text-[11px] uppercase tracking-[0.12em] transition-colors lg:h-auto lg:py-1.5 ${
             value === option
               ? option === 'SELL'
                 ? // SELL is a side, not a loss — muted, not red.
