@@ -154,6 +154,29 @@ CREATE TABLE IF NOT EXISTS strategies (
 );
 
 CREATE INDEX IF NOT EXISTS idx_strategies_owner ON strategies (owner_id, name);
+
+-- Custom signal rules: a fixed template id plus a validated config.
+--
+-- `user_id` NULL means unscoped -- a rule created while auth is off, visible
+-- to everyone. Slug uniqueness is enforced in the store rather than by a
+-- UNIQUE index, because SQLite treats NULLs as distinct and the unscoped rows
+-- are exactly the ones that would collide.
+--
+-- `user_id` is TEXT to match `users.id`, which is a uuid here; this branch
+-- originally declared it INTEGER against its own identity table, and that
+-- table did not survive the merge.
+CREATE TABLE IF NOT EXISTS custom_rules (
+    rule_id    TEXT PRIMARY KEY,
+    user_id    TEXT REFERENCES users (id) ON DELETE CASCADE,
+    name       TEXT NOT NULL,
+    slug       TEXT NOT NULL,
+    template   TEXT NOT NULL,
+    config     TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_custom_rules_owner ON custom_rules (user_id);
 """
 
 #: Columns added to tables that predate them.

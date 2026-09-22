@@ -61,3 +61,20 @@ class SelectionTooLargeError(ExperimentError):
         super().__init__(
             f"selection of {requested} instrument-days exceeds the limit of {limit}"
         )
+
+
+class DatasetUnsupportedError(ExperimentError):
+    """The resolved rule needs data the active dataset does not hold.
+
+    A fundamental-condition rule against the synthetic demo is the case this
+    exists for: the demo has no filings, so every gate would read shut and the
+    run would look like a strategy that simply never fired. A refusal names the
+    cause; an empty result hides it.
+    """
+
+    def __init__(self, requirement: str, dataset: str) -> None:
+        self.requirement = requirement
+        self.dataset = dataset
+        super().__init__(
+            f"model requires {requirement}, which the {dataset} dataset does not have"
+        )

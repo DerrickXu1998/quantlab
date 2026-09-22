@@ -174,6 +174,15 @@ class SignalRule:
     #: them so a user can be told which of their instruments will never trade
     #: before they run rather than after (docs/FUNDAMENTALS.md §5.1).
     requires_facts: tuple[str, ...] = ()
+    #: What the compute function is handed: "bars", or "bars+fundamentals".
+    #:
+    #: Coarser than `requires_facts` and kept alongside it rather than derived
+    #: from it. A template-built rule names its concept in its *config* rather
+    #: than in the registration, so there is nothing to put in `requires_facts`
+    #: at import time -- but the engine still has to know to fetch facts at all.
+    #: Defaulted, so every rule registered before templates existed is
+    #: unchanged.
+    inputs: str = "bars"
 
     @property
     def needs_facts(self) -> bool:
