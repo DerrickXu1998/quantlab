@@ -13,8 +13,10 @@ services:
     volumes:
       - quantlab-chdata:/var/lib/clickhouse
     ports:
-      - "8123:8123"   # HTTP, what clickhouse-connect uses
-      - "9000:9000"   # native protocol, for clickhouse-client
+      # Loopback-only: credentials are local-development defaults, so the
+      # databases must not be reachable from other hosts on the network.
+      - "127.0.0.1:8123:8123"   # HTTP, what clickhouse-connect uses
+      - "127.0.0.1:9000:9000"   # native protocol, for clickhouse-client
     ulimits:
       # ClickHouse opens a lot of files; the Docker default is too low and it
       # degrades quietly rather than failing loudly.
@@ -47,8 +49,9 @@ services:
       - quantlab-pgdata:/var/lib/postgresql/data
     ports:
       # Exposed so a notebook or psql on the host can reach the same database
-      # the stack uses. Credentials are local-development only.
-      - "5432:5432"
+      # the stack uses. Credentials are local-development only, so the
+      # binding is loopback-only to keep them off the network.
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U quantlab -d quantlab"]
       interval: 5s
@@ -118,7 +121,9 @@ services:
   # UI with no network access; the real data path is postgres + ingest.
   # ---------------------------------------------------------------------------
   seed:
-    build: ./backend
+    build:
+      context: ./backend
+      target: dev   # shares the backend service's image layers; see above
     command: ["python", "-m", "quantlab.seed"]
     profiles: ["demo"]
     environment:
@@ -161,7 +166,9 @@ services:
       - --advertise-kafka-addr
       - PLAINTEXT://redpanda:9092,OUTSIDE://localhost:19092
     ports:
-      - "19092:19092"   # Kafka API for host tools; in-compose clients use redpanda:9092
+      # Loopback-only: PLAINTEXT Kafka with no auth, so host tools can reach
+      # it but other machines on the network cannot.
+      - "127.0.0.1:19092:19092"   # Kafka API for host tools; in-compose clients use redpanda:9092
     volumes:
       - quantlab-kafka:/var/lib/redpanda/data
     healthcheck:
@@ -174,7 +181,12 @@ services:
     restart: unless-stopped
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      # The dev stage carries the test suite and its extras so `make test`
+      # can run pytest in this image. CI and prod build the Dockerfile's
+      # default stage, which is the hardened runtime (no dev deps, non-root).
+      target: dev
     command: ["uvicorn", "quantlab.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       # With both URLs set the API serves real ingested history. Unset them

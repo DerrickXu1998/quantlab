@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM python:3.12-slim
+FROM python:3.12-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -8,13 +8,26 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Install the project plus dev extras (pytest, pyyaml, ...) so the same image
-# can serve the API and run the test suite (`python -m pytest -q` from /app).
 COPY pyproject.toml ./
 COPY src ./src
+RUN pip install --no-cache-dir .
+
+# Test/CI image: the runtime plus the suite and its dev extras, so the same
+# build context can run pytest from /app (`make test`). The dev compose file
+# builds this target explicitly; it is never deployed.
+FROM base AS dev
 COPY tests ./tests
 COPY contracts ./contracts
 RUN pip install --no-cache-dir ".[dev]"
+
+# Serving image: runtime dependencies only, and the process runs as an
+# unprivileged user. This is the final stage, so `docker build .` -- and CI,
+# which names no target -- gets the hardened image by default.
+FROM base
+RUN useradd --system --uid 10001 quantlab \
+    && mkdir -p /data \
+    && chown quantlab:quantlab /data
+USER quantlab
 
 VOLUME ["/data"]
 

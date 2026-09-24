@@ -195,8 +195,9 @@ identical to one that was configured".
 
 `429` after too many failed attempts for one email, per the contract's status
 code table. That is credential-stuffing defence for a single account.
+Registration is throttled separately, per client IP — see §3.
 
-It is not a general rate limit, and the contract specifies no other. See §5.
+Per-user quotas beyond that (runs, requests) remain open. See §5.
 
 ---
 
@@ -220,6 +221,22 @@ It is not a general rate limit, and the contract specifies no other. See §5.
 - **No key material in CI.** GitHub Actions authenticates to GCP by OIDC through
   Workload Identity Federation, and reaches the VM over an IAP SSH tunnel. There
   is no long-lived service-account key to leak.
+- **The serving image is runtime-only and unprivileged.** The backend
+  Dockerfile's default stage installs no dev dependencies and runs as a
+  non-root user; the test-capable `dev` stage is built only by the local
+  compose file. The dev compose also binds ClickHouse, Postgres and Redpanda
+  to `127.0.0.1`, matching the prod posture.
+- **Interactive API docs are off in production posture.** `/docs`, `/redoc`
+  and `/openapi.json` are served only when auth is disabled (the local demo)
+  or `QUANTLAB_API_DOCS=on` is set explicitly, so a deployed API does not
+  publish its full surface to unauthenticated callers.
+- **Replay streams are bounded.** Both SSE endpoints require auth, cap pacing
+  and event counts, end after 15 minutes, and each user may hold at most
+  three concurrent streams (`429` with `Retry-After` past that) — one account
+  cannot pin every threadpool worker.
+- **Registration is rate-limited** to 10 per hour per client IP, alongside
+  the per-email login limiter. Deployments behind a proxy need trusted-proxy
+  config for client IPs to be meaningful.
 - **Structured logging** across ingestion and computation (Constitution VI).
   This is observability, not audit — see §5.
 
@@ -322,9 +339,10 @@ is the point of the document.
   execute synchronously in the request. One authenticated user with a loop
   saturates the VM. Needed: a per-user concurrent-run limit, a request rate
   limit, and a total instrument-days budget over a rolling window.
-- **No account lockout or registration throttle.** Login is rate-limited per
-  email; registration is not rate-limited at all, so the user table can be
-  filled by anyone who can reach the endpoint.
+- **No account lockout.** Login is rate-limited per email and registration is
+  throttled to 10/hour per client IP, but there is no account-level lockout
+  after sustained failures, and the per-IP registration limit is only as good
+  as the attacker's address pool.
 - **No backup encryption or tested restore.** Not addressed anywhere.
 - **Dependency scanning is not wired into CI.** No `pip-audit`, no Dependabot
   configuration in the repository.
