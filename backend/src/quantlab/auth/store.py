@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 import sqlite3
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -84,10 +85,21 @@ class SqliteUserStore:
 
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = str(db_path)
+        self._bootstrapped = False
+        self._bootstrap_lock = threading.Lock()
 
     def _connect(self) -> sqlite3.Connection:
         conn = db.connect(self.db_path)
-        db.bootstrap(conn)
+        if not self._bootstrapped:
+            # This store is one app-wide instance called from threadpool
+            # workers (once per authenticated request via resolve_session), so
+            # the once-only DDL sweep is guarded rather than repeated. If
+            # bootstrap raises the flag stays false and the next connect
+            # retries.
+            with self._bootstrap_lock:
+                if not self._bootstrapped:
+                    db.bootstrap(conn)
+                    self._bootstrapped = True
         return conn
 
     # -- accounts ----------------------------------------------------------

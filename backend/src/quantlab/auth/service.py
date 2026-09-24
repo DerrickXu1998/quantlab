@@ -56,6 +56,13 @@ LOCAL_USER = User(
 MAX_FAILED_ATTEMPTS = 8
 LOCKOUT_WINDOW_SECONDS = 15 * 60
 
+#: Registration is unlimited-account-creation otherwise. The limit is keyed on
+#: the client IP rather than the email, because the thing being protected is
+#: the account table, not any one address. Process-local, like the login
+#: tracker -- the same multi-worker limitation, recorded in docs/SECURITY.md.
+REGISTRATION_LIMIT = 10
+REGISTRATION_WINDOW_SECONDS = 60 * 60
+
 #: A hash of a password nobody has, verified against when the email is unknown
 #: so that path costs what a real one does.
 #:
@@ -81,10 +88,10 @@ class AuthError(Exception):
 
 
 class RateLimited(Exception):
-    """Too many failed attempts against this address."""
+    """Too many attempts against this key (address or client IP)."""
 
-    def __init__(self, retry_after: int) -> None:
-        super().__init__(f"too many failed sign-in attempts; try again in {retry_after}s")
+    def __init__(self, retry_after: int, *, what: str = "failed sign-in attempts") -> None:
+        super().__init__(f"too many {what}; try again in {retry_after}s")
         self.retry_after = retry_after
 
 
@@ -106,6 +113,10 @@ class _FailureTracker:
         attempts = self._attempts[address]
         while attempts and now - attempts[0] > LOCKOUT_WINDOW_SECONDS:
             attempts.popleft()
+        if not attempts:
+            # An emptied deque left in the defaultdict is a memory leak: a
+            # spray of unique addresses would grow this dict without bound.
+            del self._attempts[address]
         return attempts
 
     def check(self, address: str) -> None:
@@ -119,7 +130,10 @@ class _FailureTracker:
     def record_failure(self, address: str) -> None:
         now = time.monotonic()
         with self._lock:
-            self._prune(address, now).append(now)
+            attempts = self._prune(address, now)
+            attempts.append(now)
+            # _prune evicts an emptied entry; re-attach the deque it returned.
+            self._attempts[address] = attempts
 
     def clear(self, address: str) -> None:
         with self._lock:
@@ -131,14 +145,52 @@ class _FailureTracker:
             self._attempts.clear()
 
 
+class _RegistrationLimiter:
+    """Recent registrations per client IP, in memory.
+
+    Same sliding-window shape as :class:`_FailureTracker`; the entry for a key
+    is evicted as soon as its window empties, so a spray of unique IPs cannot
+    grow the dict without bound.
+    """
+
+    def __init__(self) -> None:
+        self._hits: dict[str, deque[float]] = {}
+        self._lock = threading.Lock()
+
+    def check_and_record(self, client_ip: str) -> None:
+        now = time.monotonic()
+        with self._lock:
+            hits = self._hits.get(client_ip)
+            if hits is not None:
+                while hits and now - hits[0] > REGISTRATION_WINDOW_SECONDS:
+                    hits.popleft()
+                if not hits:
+                    del self._hits[client_ip]
+                    hits = None
+            if hits is None:
+                hits = self._hits[client_ip] = deque()
+            if len(hits) >= REGISTRATION_LIMIT:
+                retry_after = int(REGISTRATION_WINDOW_SECONDS - (now - hits[0])) + 1
+                raise RateLimited(retry_after, what="registration attempts")
+            hits.append(now)
+
+
 class AuthService:
     """Everything the API layer is allowed to ask of identity."""
 
     def __init__(self, store: SqliteUserStore) -> None:
         self.store = store
         self._failures = _FailureTracker()
+        self._registrations = _RegistrationLimiter()
 
     # -- registration ------------------------------------------------------
+
+    def check_registration_rate(self, client_ip: str) -> None:
+        """Refuse a registration burst from one client before any work is done.
+
+        Raises :class:`RateLimited`; the API turns it into a 429.
+        """
+        self._registrations.check_and_record(client_ip or "unknown")
 
     def register(self, email: str, password: str) -> Session:
         address = normalise_email(email)

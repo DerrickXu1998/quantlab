@@ -136,6 +136,11 @@ def verify_password(password: str, encoded: str) -> bool:
     Never raises on a bad stored hash: a corrupt row must read as "wrong
     password", not as a 500 that tells an attacker the row exists.
     """
+    if len(normalise(password)) > MAX_PASSWORD_LENGTH:
+        # Registration refuses these; hashing one anyway is a free CPU burn
+        # for whoever sent it. Internal callers have no schema in front of
+        # them, so the guard lives here too.
+        return False
     try:
         algorithm, raw_rounds, salt_b64, digest_b64 = encoded.split("$")
         if algorithm != ALGORITHM:

@@ -104,6 +104,23 @@ def instrument_exists(conn: sqlite3.Connection, symbol: str) -> bool:
     return row is not None
 
 
+def validate_symbols(conn: sqlite3.Connection, symbols: list[str]) -> list[str]:
+    """The requested symbols the catalog does not know, in request order.
+
+    SQLite twin of ``warehouse.validate_symbols``: one IN (...) lookup instead
+    of materialising every instrument with its bar and signal counts.
+    """
+    if not symbols:
+        return []
+    placeholders = ",".join("?" for _ in symbols)
+    rows = conn.execute(
+        f"SELECT symbol FROM instruments WHERE symbol IN ({placeholders})",
+        list(symbols),
+    ).fetchall()
+    known = {row[0] for row in rows}
+    return [symbol for symbol in symbols if symbol not in known]
+
+
 def list_instruments(conn: sqlite3.Connection) -> dict:
     rows = conn.execute(
         """

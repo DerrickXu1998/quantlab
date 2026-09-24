@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
+
+from quantlab.auth.passwords import MAX_PASSWORD_LENGTH
 
 Dataset = Literal["sqlite", "warehouse"]
 """Which store answered. Two runs from different datasets are never directly
@@ -299,7 +301,10 @@ class ReplaySummary(BaseModel):
 
 class Credentials(BaseModel):
     email: str
-    password: str
+    # The same ceiling as the registration policy's denial-of-service guard:
+    # PBKDF2 over a megabyte-long "password" is a free CPU burn for an
+    # attacker, and login never needs what registration would refuse.
+    password: str = Field(max_length=MAX_PASSWORD_LENGTH)
 
 
 class UserOut(BaseModel):
@@ -412,6 +417,61 @@ class ExecutionSummaryModel(BaseModel):
     #: Dates where the entry logic said both "long" and "short", and so said
     #: nothing. Neither side was taken.
     contradictions: int = 0
+
+
+# --- Custom signal rules (feature 008) -----------------------------------------
+
+
+class CustomRuleRequest(BaseModel):
+    """Create: template + config, both validated against the template registry."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=200)
+    template: str
+    config: dict[str, Any]
+
+
+class CustomRuleUpdateRequest(BaseModel):
+    """Patch: name and/or config. The template is immutable -- changing it
+    changes what the rule IS, which is a new rule, not an edit."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    config: dict[str, Any] | None = None
+
+
+class CustomRule(BaseModel):
+    rule_id: str
+    name: str
+    slug: str
+    template: str
+    config: dict[str, Any]
+    lookback_days: int
+    created_at: str
+    updated_at: str
+
+
+class CustomRuleList(BaseModel):
+    total: int
+    items: list[CustomRule]
+
+
+class SignalTemplate(BaseModel):
+    """A fixed rule shape, with its config vocabulary for form generation."""
+
+    id: str
+    version: str
+    description: str
+    inputs: Literal["bars", "bars+fundamentals"]
+    available_on_dataset: bool
+    config_fields: dict[str, Any]
+
+
+class SignalTemplateList(BaseModel):
+    total: int
+    items: list[SignalTemplate]
 
 
 # --- Research: the company, the universe, the screen (docs/RESEARCH.md) -----

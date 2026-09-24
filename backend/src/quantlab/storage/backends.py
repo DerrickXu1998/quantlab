@@ -27,6 +27,7 @@ class StorageBackend(Protocol):
 
     def health(self) -> tuple[bool, int]: ...
     def instrument_exists(self, symbol: str) -> bool: ...
+    def validate_symbols(self, symbols: list[str]) -> list[str]: ...
     def list_instruments(self) -> dict: ...
     def get_prices(self, symbol: str, start: str | None, end: str | None) -> dict: ...
     def list_signals(self, **kwargs) -> dict: ...
@@ -92,6 +93,10 @@ class SqliteBackend:
     def instrument_exists(self, symbol: str) -> bool:
         with db.connect(self.db_path) as conn:
             return repository.instrument_exists(conn, symbol)
+
+    def validate_symbols(self, symbols: list[str]) -> list[str]:
+        with db.connect(self.db_path) as conn:
+            return repository.validate_symbols(conn, symbols)
 
     def list_instruments(self) -> dict:
         with db.connect(self.db_path) as conn:
@@ -281,6 +286,9 @@ class WarehouseBackend:
 
     def instrument_exists(self, symbol: str) -> bool:
         return warehouse.instrument_exists(self.wh, symbol)
+
+    def validate_symbols(self, symbols: list[str]) -> list[str]:
+        return warehouse.validate_symbols(self.wh, symbols)
 
     def list_instruments(self) -> dict:
         return warehouse.list_instruments(self.wh)

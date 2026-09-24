@@ -591,3 +591,37 @@ def test_iter_days_and_simulate_agree_because_there_is_only_one_loop():
 
     assert days[-1].equity == pytest.approx(batch.equity[-1].value)
     assert simulator.trades() == batch.trades
+
+
+def test_ingest_extends_atr_and_volatility_bit_identically_to_the_batch_precompute():
+    """Half constructor, half ingest: the incrementally maintained ATR and
+    volatility series are bit-identical to the batch precompute, and the run
+    they drive -- equity curve and trades -- is exactly the same run."""
+    import numpy as np
+
+    series = _synthetic(11, 200)
+    config = ExecutionConfig(
+        position_sizing="volatility_target",
+        sizing_value=0.10,
+        atr_stop_multiple=2.0,
+    )
+    decisions = []
+    for i in range(20, 195, 10):
+        decisions.append(decision(f"d{i:04d}", "both", "bullish"))
+        decisions.append(decision(f"d{i + 5:04d}", "both", "bearish"))
+
+    batch = ExecutionSimulator(["AAA"], {"AAA": series}, config)
+    streamed = ExecutionSimulator(["AAA"], {"AAA": series[:100]}, config)
+    for bar in series[100:]:
+        streamed.ingest("AAA", bar)
+
+    assert np.array_equal(streamed._atr["AAA"], batch._atr["AAA"], equal_nan=True)
+    assert np.array_equal(streamed._vol["AAA"], batch._vol["AAA"], equal_nan=True)
+
+    batch_days = list(batch.iter_days(decisions))
+    streamed_days = list(streamed.iter_days(decisions))
+    assert [
+        (day.date, day.equity, day.cash, day.realized_pnl, day.fills) for day in streamed_days
+    ] == [(day.date, day.equity, day.cash, day.realized_pnl, day.fills) for day in batch_days]
+    assert streamed.trades() == batch.trades()
+    assert batch.closed_trades, "the fixture must actually trade"

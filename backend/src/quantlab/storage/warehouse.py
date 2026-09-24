@@ -187,6 +187,25 @@ def instrument_exists(wh: Warehouse, symbol: str) -> bool:
     return row is not None
 
 
+def validate_symbols(wh: Warehouse, symbols: Sequence[str]) -> list[str]:
+    """The requested symbols the catalog does not know, in request order.
+
+    One indexed lookup against ``instruments``. Run creation used to answer
+    this through :func:`list_instruments`, which joins the whole catalog to a
+    full GROUP BY over the bar store -- several seconds of ClickHouse work to
+    check a handful of tickers, paid on every run request.
+    """
+    wanted = list(symbols)
+    if not wanted:
+        return []
+    with wh.catalog() as conn:
+        rows = conn.execute(
+            "SELECT symbol FROM instruments WHERE symbol = ANY(%s)", (wanted,)
+        ).fetchall()
+    known = {row[0] for row in rows}
+    return [symbol for symbol in wanted if symbol not in known]
+
+
 def list_instruments(wh: Warehouse) -> dict:
     """Catalog identity joined to ClickHouse bar counts.
 
@@ -375,7 +394,12 @@ class Bar:
 def iter_symbol_bars(
     wh: Warehouse, symbols: Sequence[str] | None = None, frequency: str = "1d"
 ) -> Iterator[tuple[str, int, list[Bar]]]:
-    """Yield (symbol, instrument_id, bars) for signal materialisation."""
+    """Yield (symbol, instrument_id, bars) for signal materialisation.
+
+    One bar-store query for the whole selection -- the load_bars_for pattern --
+    rather than one per instrument: over the full catalog that is the
+    difference between one round trip and several hundred.
+    """
     query = "SELECT instrument_id, symbol FROM instruments"
     params: list[Any] = []
     if symbols:
@@ -390,28 +414,36 @@ def iter_symbol_bars(
         return
 
     with wh.bars() as client:
-        for instrument_id, symbol in instruments:
-            rows = client.query(
-                f"""
-                SELECT ts, open, high, low, close, volume
-                  FROM {BARS_VIEW}
-                 WHERE instrument_id = %(iid)s AND frequency = %(frequency)s
-                 ORDER BY ts ASC
-                """,
-                parameters={"iid": int(instrument_id), "frequency": frequency},
-            ).result_rows
-            bars = [
-                Bar(
-                    date=ts.date().isoformat(),
-                    open=float(o),
-                    high=float(h),
-                    low=float(lo),
-                    close=float(c),
-                    volume=int(v),
-                )
-                for ts, o, h, lo, c, v in rows
-            ]
-            yield symbol, int(instrument_id), bars
+        rows = client.query(
+            f"""
+            SELECT instrument_id, ts, open, high, low, close, volume
+              FROM {BARS_VIEW}
+             WHERE instrument_id IN %(ids)s AND frequency = %(frequency)s
+             ORDER BY instrument_id, ts ASC
+            """,
+            parameters={
+                "ids": tuple(int(instrument_id) for instrument_id, _ in instruments),
+                "frequency": frequency,
+            },
+        ).result_rows
+
+    grouped: dict[int, list[Bar]] = {}
+    for instrument_id, ts, o, h, lo, c, v in rows:
+        grouped.setdefault(int(instrument_id), []).append(
+            Bar(
+                date=ts.date().isoformat(),
+                open=float(o),
+                high=float(h),
+                low=float(lo),
+                close=float(c),
+                volume=int(v),
+            )
+        )
+
+    for instrument_id, symbol in instruments:
+        # Every catalogued instrument is yielded, with an empty list when it
+        # has no bars -- the materialiser depends on seeing it either way.
+        yield symbol, int(instrument_id), grouped.get(int(instrument_id), [])
 
 
 # ---------------------------------------------------------------------------

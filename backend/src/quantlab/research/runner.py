@@ -234,8 +234,7 @@ def run_experiment(
     if selection_size > MAX_SELECTION_INSTRUMENT_DAYS:
         raise errors.SelectionTooLargeError(selection_size, MAX_SELECTION_INSTRUMENT_DAYS)
 
-    known = {item["symbol"] for item in backend.list_instruments()["items"]}
-    unknown = [symbol for symbol in requested_symbols if symbol not in known]
+    unknown = backend.validate_symbols(requested_symbols)
     if unknown:
         raise errors.UnknownSymbolError(unknown)
 

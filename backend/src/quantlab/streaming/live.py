@@ -4,8 +4,12 @@ The streaming counterpart of ``replay.engine.replay_events``. A publisher
 (library-side ``quantlab.streaming.publish_replay``) has already turned a
 warehouse window into a chronological bar stream on a Kafka topic; here the
 backend consumes that stream, re-runs the rule's ``compute`` on each symbol's
-growing window as every bar arrives, and trades the new signals through the
-same ``PortfolioSimulator``.
+history as every bar arrives, and trades the new signals through the
+same ``PortfolioSimulator``. Rules that declare a ``windowed_lookback`` -- a
+mathematically bounded window -- are handed only that tail of the history,
+keeping the per-day recompute O(lookback) rather than O(history); recursive
+rules still see the whole growing window, because truncating an EMA or RSI
+would change its values.
 
 The key invariant -- live == batch -- rests on Constitution VII: the rules are
 causal, and the truncation sweep proves ``compute`` on a truncated history is
@@ -90,6 +94,14 @@ def live_replay_events(
     seen_bars: dict[str, set[str]] = {symbol: set() for symbol in symbols}
     fired: set[tuple[str, str]] = set()  # (symbol, signal date)
     curve: list[performance.EquityPoint] = []
+    # Rules with a mathematically bounded window (declared on the rule) need
+    # only their tail of the history, not the whole growing window -- that
+    # turns the per-day recompute from O(history) into O(lookback). Recursive
+    # rules declare no bound and keep the full window: front-truncating an
+    # EMA or RSI would change its values, not just its length.
+    tail_days = (
+        rule.windowed_lookback(effective) if rule.windowed_lookback is not None else None
+    )
 
     def process_day(day: str, todays: dict[str, Bar]) -> Iterator[ReplayEvent]:
         """One in-window date: bar, then new signals, their fills, one equity
@@ -103,6 +115,13 @@ def live_replay_events(
             # Engine parity: a rule stays silent until its lookback exists.
             if len(window) < rule.lookback_days:
                 continue
+            # Truncate only past the day the untruncated compute became
+            # possible (len == lookback_days, the `continue` above grows the
+            # window one bar at a time). That day's full-window compute emits
+            # every retroactive in-window signal and records them in `fired`,
+            # so from the next bar on the tail holds nothing new.
+            if tail_days is not None and len(window) > max(tail_days, rule.lookback_days):
+                window = window[-tail_days:]
             for event in rule.compute(window, **effective):
                 key = (symbol, event.date)
                 if key in fired:

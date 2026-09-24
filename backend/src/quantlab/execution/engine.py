@@ -24,6 +24,7 @@ bar.
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -162,6 +163,68 @@ class _PendingOrder:
     signal_date: str
 
 
+@dataclass
+class _AtrState:
+    """Running Wilder ATR for one instrument, extended in O(1) per bar.
+
+    Mirrors :func:`quantlab.indicators.technical.atr` operation for operation:
+    the seed is the mean of TR[1..period] (TR[0] is a partial bar and never
+    enters the average), then the recurrence. Replaying the constructor's bars
+    through :meth:`observe` lands on exactly the value the batch precompute
+    ends with, so an ingested bar continues the series bit-identically.
+    """
+
+    period: int
+    prev_close: float | None = None
+    #: TR[1..] until the seed fires; dropped afterwards.
+    seed_ranges: list[float] = field(default_factory=list)
+    count: int = 0
+    value: float | None = None  # ATR at the latest bar; None while undefined
+
+    def observe(self, high: float, low: float, close: float) -> float:
+        index = self.count
+        self.count += 1
+        if index == 0:
+            self.prev_close = close
+            return np.nan
+        tr = max(high - low, max(abs(high - self.prev_close), abs(low - self.prev_close)))
+        self.prev_close = close
+        if index < self.period:
+            self.seed_ranges.append(tr)
+            return np.nan
+        if index == self.period:
+            self.seed_ranges.append(tr)
+            self.value = float(np.asarray(self.seed_ranges, dtype=float).mean())
+            self.seed_ranges = []
+        else:
+            self.value = (self.value * (self.period - 1) + tr) / self.period
+        return self.value
+
+
+@dataclass
+class _VolState:
+    """Running close-to-close returns for the volatility estimate.
+
+    Keeps the trailing ``window`` returns; one population std per bar replaces
+    reslicing and re-averaging the whole history.
+    """
+
+    window: int
+    prev_close: float | None = None
+    returns: deque = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.returns = deque(maxlen=self.window)
+
+    def observe(self, close: float) -> float:
+        if self.prev_close is not None:
+            self.returns.append((close - self.prev_close) / self.prev_close)
+        self.prev_close = close
+        if len(self.returns) < self.window:
+            return np.nan
+        return float(np.asarray(self.returns, dtype=float).std()) * (TRADING_DAYS_PER_YEAR**0.5)
+
+
 class ExecutionSimulator:
     """Runs one strategy's decisions over one selection's bars."""
 
@@ -211,6 +274,27 @@ class ExecutionSimulator:
         self._atr = self._precompute_atr()
         self._vol = self._precompute_volatility()
 
+        # Incremental state so `ingest` can extend both series in O(1) a bar
+        # instead of recomputing them over the whole history. Gated on the
+        # same truthiness `ingest` tests, evaluated once here: the dicts only
+        # ever gain entries, so a gate that starts false stays false (a
+        # simulator constructed with no bars at all never maintains ATR,
+        # exactly as the recompute this replaces behaved), and one that starts
+        # true stays true.
+        self._atr_state: dict[str, _AtrState] = {}
+        self._vol_state: dict[str, _VolState] = {}
+        if self._atr or self._vol:
+            if self.config.atr_stop_multiple is not None:
+                self._atr_state = {
+                    symbol: self._seed_atr_state(bars)
+                    for symbol, bars in self.bars_by_symbol.items()
+                }
+            if self.config.position_sizing == "volatility_target":
+                self._vol_state = {
+                    symbol: self._seed_vol_state(bars)
+                    for symbol, bars in self.bars_by_symbol.items()
+                }
+
         # Bar lookup by date, and each symbol's own bar index on that date --
         # "how many sessions has this been held" must count the instrument's
         # own sessions, not calendar dates on which some other name traded.
@@ -254,12 +338,31 @@ class ExecutionSimulator:
             values = np.full(closes.shape, np.nan)
             if len(closes) > window:
                 returns = np.diff(closes) / closes[:-1]
-                for i in range(window, len(closes)):
-                    values[i] = float(returns[i - window : i].std()) * (
-                        TRADING_DAYS_PER_YEAR**0.5
-                    )
+                # Population std (ddof=0), the rolling-std idiom; row k of the
+                # view is returns[k : k + window], the slice bar k + window
+                # used to loop over.
+                values[window:] = np.lib.stride_tricks.sliding_window_view(
+                    returns, window
+                ).std(axis=1) * (TRADING_DAYS_PER_YEAR**0.5)
             out[symbol] = values
         return out
+
+    def _seed_atr_state(self, bars: list[Any]) -> _AtrState:
+        """Replay the constructor's bars into an incremental ATR state.
+
+        The recurrence is the batch precompute's arithmetic step for step, so
+        the replayed state continues the precomputed array bit-identically.
+        """
+        state = _AtrState(period=self.config.atr_period)
+        for bar in bars:
+            state.observe(float(bar.high), float(bar.low), float(bar.close))
+        return state
+
+    def _seed_vol_state(self, bars: list[Any]) -> _VolState:
+        state = _VolState(window=self.config.atr_period)
+        for bar in bars:
+            state.observe(float(bar.close))
+        return state
 
     # -- cash and book -----------------------------------------------------
 
@@ -582,13 +685,24 @@ class ExecutionSimulator:
         series.append(bar)
         self._bar_on.setdefault(bar.date, {})[symbol] = bar
         self._index_on.setdefault(bar.date, {})[symbol] = index
-        if self._atr or self._vol:
-            # Only configs with an ATR stop or volatility sizing pay this, and
-            # they pay it per bar. Recomputing a whole series per arrival is
-            # quadratic; acceptable for a replay of a single window, and the
-            # default config recomputes nothing at all.
-            self._atr = self._precompute_atr()
-            self._vol = self._precompute_volatility()
+        # Extend the ATR/vol series in O(1) rather than recomputing them over
+        # the whole history per bar, which was quadratic. The state dicts are
+        # empty unless the constructor's gate passed, so configs without an
+        # ATR stop or volatility sizing -- and the all-empty-constructor ATR
+        # corner -- keep paying nothing, as before.
+        atr_state = self._atr_state.get(symbol)
+        if atr_state is not None:
+            atr = atr_state.observe(float(bar.high), float(bar.low), float(bar.close))
+            existing = self._atr.get(symbol)
+            # A symbol empty at construction has no array yet; the batch
+            # precompute only adds one once the symbol has bars.
+            self._atr[symbol] = (
+                np.array([atr]) if existing is None else np.append(existing, atr)
+            )
+        vol_state = self._vol_state.get(symbol)
+        if vol_state is not None:
+            vol = vol_state.observe(float(bar.close))
+            self._vol[symbol] = np.append(self._vol[symbol], vol)
 
     def step_day(self, date: str, decisions_today: list[Decision]) -> DayState:
         """Process exactly one date and return the book at its close.

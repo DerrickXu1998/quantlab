@@ -183,6 +183,14 @@ class SignalRule:
     #: Defaulted, so every rule registered before templates existed is
     #: unchanged.
     inputs: str = "bars"
+    #: Bounded-history rules only: maps the effective parameters to the number
+    #: of trailing bars one ``compute`` call actually needs (e.g. SMA(slow)
+    #: plus the previous value for a crossover). Rules whose indicators are
+    #: recursive (EMA/RSI/MACD/ADX) must leave this None -- front-truncating a
+    #: recursive series changes its values, not just its length. The live
+    #: replay uses it to compute over a fixed-size tail instead of the whole
+    #: growing window; None keeps the whole-window behaviour.
+    windowed_lookback: Callable[[dict], int] | None = None
 
     @property
     def needs_facts(self) -> bool:
@@ -233,6 +241,7 @@ def register_signal_rule(
     summary: str = "",
     roles: tuple[str, ...] = ("entry", "exit"),
     requires_facts: tuple[str, ...] = (),
+    windowed_lookback: Callable[[dict], int] | None = None,
 ) -> Callable:
     if lookback_days < 1:
         raise ValueError("lookback_days must be >= 1")
@@ -297,6 +306,7 @@ def register_signal_rule(
             summary=summary or (fn.__doc__ or "").strip().split("\n")[0],
             roles=tuple(roles),
             requires_facts=tuple(requires_facts),
+            windowed_lookback=windowed_lookback,
         )
         return fn
 

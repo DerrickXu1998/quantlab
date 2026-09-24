@@ -16,12 +16,18 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import threading
 import uuid
+from collections.abc import Iterable
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from quantlab.storage import db
+
+if TYPE_CHECKING:
+    from quantlab.storage import warehouse
 
 
 def utcnow() -> str:
@@ -44,6 +50,10 @@ class CustomRuleStore(Protocol):
     ) -> dict: ...
 
     def get_rule(self, rule_id: str, user_id: int | None = None) -> dict | None: ...
+
+    def get_rules(
+        self, rule_ids: Iterable[str], owner: int | None = None
+    ) -> dict[str, dict]: ...
 
     def list_rules(self, user_id: int | None = None) -> dict: ...
 
@@ -158,6 +168,29 @@ class SqliteCustomRuleStore:
             ).fetchone()
         return _row_to_rule(row, config_as_json=True) if row else None
 
+    def get_rules(
+        self, rule_ids: Iterable[str], owner: int | None = None
+    ) -> dict[str, dict]:
+        """Several rules in one query, keyed by rule id.
+
+        Batch twin of :meth:`get_rule` for the list_runs path, which would
+        otherwise issue one query per distinct rule on the page. Same scoping:
+        the caller's own rules plus unscoped ones, or everything when ``owner``
+        is None.
+        """
+        ids = list(dict.fromkeys(rule_ids))
+        if not ids:
+            return {}
+        scope, params = self._scope(owner)
+        placeholders = ",".join("?" for _ in ids)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT {self._COLUMNS} FROM custom_rules "
+                f"WHERE rule_id IN ({placeholders}){scope}",
+                (*ids, *params),
+            ).fetchall()
+        return {row[0]: _row_to_rule(row, config_as_json=True) for row in rows}
+
     def list_rules(self, user_id: int | None = None) -> dict:
         with self._connect() as conn:
             scope, params = self._scope(user_id)
@@ -230,23 +263,71 @@ class PostgresCustomRuleStore:
 
     _COLUMNS = "rule_id, user_id, name, slug, template, config, created_at, updated_at"
 
-    def __init__(self, dsn: str = "") -> None:
+    def __init__(self, dsn: str = "", wh: warehouse.Warehouse | None = None) -> None:
         self._dsn = dsn
+        self._wh = wh
+        self._pool = None
+        self._lock = threading.Lock()
 
-    def _connect(self):
-        try:
-            import psycopg
-        except ModuleNotFoundError as exc:  # pragma: no cover - import guard
-            raise RuntimeError(
-                "psycopg is not installed. Install the warehouse extras:\n"
-                "    pip install 'quantlab[store]'"
-            ) from exc
+    def _resolve_dsn(self) -> str:
         import os
 
-        dsn = self._dsn or os.environ.get(
-            "QUANTLAB_DB_URL", "postgresql://quantlab:quantlab@localhost:5432/quantlab"
-        )
-        return psycopg.connect(dsn)
+        dsn = self._dsn or os.environ.get("QUANTLAB_DB_URL", "")
+        if not dsn:
+            raise RuntimeError(
+                "no Postgres DSN for the custom-rule store: pass dsn=... or set "
+                "QUANTLAB_DB_URL (there is deliberately no built-in default -- "
+                "silently falling back to hardcoded credentials would look "
+                "configured while pointing at whoever owns that database)"
+            )
+        return dsn
+
+    def _ensure_pool(self):
+        # Mirrors Warehouse._ensure_catalog_pool exactly; used only when no
+        # warehouse was handed in, i.e. tests and tooling without an app.
+        if self._pool is None:
+            with self._lock:
+                if self._pool is None:
+                    try:
+                        from psycopg_pool import ConnectionPool
+                    except ModuleNotFoundError as exc:  # pragma: no cover - import guard
+                        raise RuntimeError(
+                            "psycopg is not installed. Install the warehouse extras:\n"
+                            "    pip install 'quantlab[store]'"
+                        ) from exc
+                    from quantlab.storage.pool import pool_config
+
+                    config = pool_config()
+                    self._pool = ConnectionPool(
+                        self._resolve_dsn(),
+                        min_size=0,
+                        max_size=config.pg_max,
+                        timeout=config.timeout,
+                        check=ConnectionPool.check_connection,
+                        open=False,
+                    )
+                    self._pool.open()
+        return self._pool
+
+    @contextmanager
+    def _connect(self):
+        """A catalog connection: the warehouse's pool when attached, else ours."""
+        if self._wh is not None:
+            with self._wh.catalog() as conn:
+                yield conn
+            return
+        with self._ensure_pool().connection() as conn:
+            yield conn
+
+    def close(self) -> None:
+        """Release this store's own pool. Idempotent.
+
+        A borrowed warehouse pool is the warehouse's to close, not ours.
+        """
+        with self._lock:
+            if self._pool is not None:
+                self._pool.close()
+                self._pool = None
 
     @staticmethod
     def _scope(user_id: int | None) -> tuple[str, list]:
@@ -309,6 +390,31 @@ class PostgresCustomRuleStore:
         rule["created_at"] = row[6].isoformat()
         rule["updated_at"] = row[7].isoformat()
         return rule
+
+    def get_rules(
+        self, rule_ids: Iterable[str], owner: int | None = None
+    ) -> dict[str, dict]:
+        """Several rules in one query, keyed by rule id.
+
+        Batch twin of :meth:`get_rule`; same scoping (own plus unscoped rules,
+        or everything when ``owner`` is None).
+        """
+        ids = list(dict.fromkeys(rule_ids))
+        if not ids:
+            return {}
+        scope, params = self._scope(owner)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT {self._COLUMNS} FROM custom_rules WHERE rule_id = ANY(%s){scope}",
+                (ids, *params),
+            ).fetchall()
+        out: dict[str, dict] = {}
+        for row in rows:
+            rule = _row_to_rule(row, config_as_json=False)
+            rule["created_at"] = row[6].isoformat()
+            rule["updated_at"] = row[7].isoformat()
+            out[row[0]] = rule
+        return out
 
     def list_rules(self, user_id: int | None = None) -> dict:
         scope, params = self._scope(user_id)
@@ -377,12 +483,18 @@ class PostgresCustomRuleStore:
         return changed > 0
 
 
-def select_custom_rule_store(db_path: str | Path | None = None) -> CustomRuleStore:
-    """Mirror ``select_backend``: the warehouse when configured, else the demo."""
+def select_custom_rule_store(
+    db_path: str | Path | None = None, wh: warehouse.Warehouse | None = None
+) -> CustomRuleStore:
+    """Mirror ``select_backend``: the warehouse when configured, else the demo.
+
+    ``wh`` lets the app hand over its already-pooled warehouse so custom-rule
+    queries share the catalog pool instead of opening a second one.
+    """
     from quantlab.storage import warehouse
 
     if warehouse.configured():
-        return PostgresCustomRuleStore()
+        return PostgresCustomRuleStore(wh=wh)
     return SqliteCustomRuleStore(db_path or "/data/quantlab.db")
 
 

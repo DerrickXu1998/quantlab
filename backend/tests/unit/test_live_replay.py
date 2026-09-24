@@ -9,6 +9,8 @@ batch replay summary.
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from quantlab.replay import engine as replay_engine
@@ -207,6 +209,81 @@ def test_validation_is_eager_and_typed(bars_by_symbol):
         live.live_replay_events("sma-crossover", {"fast": 1}, list(SYMBOLS), START, END, stream)
     with pytest.raises(errors.InvalidWindowError):
         live.live_replay_events("sma-crossover", None, list(SYMBOLS), END, START, stream)
+
+
+# --- Windowed compute: the per-day recompute stays O(lookback) -----------------
+
+
+def test_bounded_rules_compute_over_a_fixed_tail_not_the_growing_window(
+    monkeypatch, bars_by_symbol
+):
+    """A rule that declares a windowed lookback is handed at most its tail of
+    the history, and the run is still the batch run."""
+    rule = signal_registry.get_rule("sma-crossover")
+    assert rule.windowed_lookback is not None
+    window_lengths: list[int] = []
+    real_resolve = live.resolve_rule
+
+    def recording_resolve(model_name, overrides):
+        resolved, effective = real_resolve(model_name, overrides)
+        compute = resolved.compute
+
+        def recording_compute(bars, **kwargs):
+            window_lengths.append(len(bars))
+            return compute(bars, **kwargs)
+
+        return dataclasses.replace(resolved, compute=recording_compute), effective
+
+    monkeypatch.setattr(live, "resolve_rule", recording_resolve)
+    live_summary = _live_events(bars_by_symbol)[-1]
+    batch_summary = _batch_events(bars_by_symbol)[-1]
+
+    assert len(window_lengths) > 100, "the fixture must recompute per day per symbol"
+    assert max(window_lengths) <= rule.lookback_days + 1
+    for field in (
+        "days",
+        "final_equity",
+        "total_return",
+        "sharpe_ratio",
+        "max_drawdown",
+        "win_rate",
+        "trade_count",
+    ):
+        assert getattr(live_summary, field) == pytest.approx(
+            getattr(batch_summary, field)
+        ), field
+
+
+def test_short_warmup_still_emits_the_batch_signal_dates(bars_by_symbol):
+    """Warm-up shorter than the lookback: the first compute day must run over
+    the whole window, or the retroactive in-window signals a batch run emits
+    would be truncated away."""
+    warmup = 10
+    truncated = {}
+    for symbol in SYMBOLS:
+        series = bars_by_symbol[symbol]
+        first_in_window = next(i for i, bar in enumerate(series) if bar.date >= START)
+        truncated[symbol] = series[first_in_window - warmup :]
+    # tail = slow + 1 = 9 < lookback_days = 51, the case the guard exists for.
+    overrides = {"fast": 3, "slow": 8}
+
+    live_signals = [
+        (e.symbol, e.date, e.direction)
+        for e in live.live_replay_events(
+            "sma-crossover", overrides, list(SYMBOLS), START, END, _stream(truncated)
+        )
+        if isinstance(e, ReplaySignal)
+    ]
+
+    rule = signal_registry.get_rule("sma-crossover")
+    computed = compute_signals(truncated, rules=[rule], overrides=overrides)
+    batch_signals = {
+        (s.symbol, s.date, s.direction) for s in computed if START <= s.date <= END
+    }
+
+    assert live_signals, "the fixture must fire in-window signals"
+    assert len(live_signals) == len(set(live_signals)), "duplicate signal events"
+    assert set(live_signals) == batch_signals
 
 
 # --- The bus adapter, without a broker ----------------------------------------

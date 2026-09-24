@@ -20,12 +20,16 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from quantlab import auth
 from quantlab.api import routes
 from quantlab.logging import get_logger
-from quantlab.storage import backends, experiments, strategies
+from quantlab.storage import backends, custom_rules, experiments, strategies
 
 DEFAULT_DB_PATH = "/data/quantlab.db"
 
 #: Comma-separated browser origins allowed to call this API.
 CORS_ENV = "QUANTLAB_CORS_ORIGINS"
+
+#: Explicit override for the interactive docs (``on``/``off``). Unset, the
+#: docs follow the deployment posture -- see ``resolve_api_docs_enabled``.
+API_DOCS_ENV = "QUANTLAB_API_DOCS"
 
 logger = get_logger(__name__)
 
@@ -49,6 +53,21 @@ def resolve_cors_origins() -> list[str]:
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
+def resolve_api_docs_enabled() -> bool:
+    """Whether to serve /docs and /openapi.json.
+
+    The interactive docs publish the full API surface -- every route, every
+    parameter -- to anyone who can reach the host, so the default follows the
+    deployment posture: a deployment that requires auth is treated as
+    production and keeps them off; the no-auth demo keeps them on.
+    QUANTLAB_API_DOCS=on/off overrides either way.
+    """
+    raw = os.environ.get(API_DOCS_ENV, "").strip().lower()
+    if raw:
+        return raw in ("1", "true", "on", "yes")
+    return not auth.auth_required()
+
+
 def create_app(db_path: str | Path | None = None, backend=None) -> FastAPI:
     """Build the API app.
 
@@ -56,15 +75,27 @@ def create_app(db_path: str | Path | None = None, backend=None) -> FastAPI:
     QUANTLAB_DB_URL and QUANTLAB_CH_URL are set, otherwise the synthetic
     SQLite dataset. Tests may inject one explicitly.
     """
-    app = FastAPI(title="QuantLab Signal Viewer API", version="0.1.0")
+    docs_enabled = resolve_api_docs_enabled()
+    app = FastAPI(
+        title="QuantLab Signal Viewer API",
+        version="0.1.0",
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
+    )
     app.state.db_path = str(db_path) if db_path is not None else resolve_db_path()
     app.state.backend = backend or backends.select_backend(app.state.db_path)
     # Mirrors select_backend: the warehouse when configured, else the demo.
-    app.state.experiments = experiments.select_experiment_store(app.state.db_path)
+    # Hand the store the warehouse itself (when the backend has one) so
+    # experiment queries borrow its catalog pool rather than opening a second.
+    wh = getattr(app.state.backend, "wh", None)
+    app.state.experiments = experiments.select_experiment_store(app.state.db_path, wh=wh)
     # Identity and saved strategies. Both live with the demo database rather
     # than the bar store: they are small, mutable, and want foreign keys.
     app.state.auth = auth.AuthService(auth.select_user_store(app.state.db_path))
     app.state.strategies = strategies.select_strategy_store(app.state.db_path)
+    # Template-based custom rules (feature 008): the same seam as experiments.
+    app.state.custom_rules = custom_rules.select_custom_rule_store(app.state.db_path, wh=wh)
     app.include_router(routes.router, prefix="/api/v1")
 
     origins = resolve_cors_origins()
@@ -102,7 +133,14 @@ def create_app(db_path: str | Path | None = None, backend=None) -> FastAPI:
 
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
-        return JSONResponse(status_code=exc.status_code, content={"detail": str(exc.detail)})
+        # Forward exc.headers: without this the rebuilt response silently drops
+        # headers the raise site set -- Retry-After on a 429, WWW-Authenticate
+        # on a 401 -- and clients lose the information they need to back off.
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": str(exc.detail)},
+            headers=exc.headers,
+        )
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(
@@ -132,6 +170,22 @@ def create_app(db_path: str | Path | None = None, backend=None) -> FastAPI:
                 "detail": (
                     "QUANTLAB_AUTH_REQUIRED is false: every request is attributed "
                     "to the built-in local account and no data is private"
+                )
+            },
+        )
+    active_iterations = auth.passwords.iterations()
+    if active_iterations < auth.passwords.DEFAULT_ITERATIONS:
+        # Loud for the same reason: an operator who sets
+        # QUANTLAB_PBKDF2_ITERATIONS below the default is trading real hashing
+        # cost for speed, and a silent log line would not say so.
+        logger.warning(
+            "pbkdf2_iterations_below_default",
+            extra={
+                "detail": (
+                    f"QUANTLAB_PBKDF2_ITERATIONS is {active_iterations}, below the "
+                    f"default {auth.passwords.DEFAULT_ITERATIONS}: password hashing "
+                    "is cheaper to attack than intended (fine for tests and local "
+                    "development, wrong for production)"
                 )
             },
         )

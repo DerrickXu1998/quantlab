@@ -30,6 +30,9 @@ from quantlab.signals.registry import ParamSpec, SignalEvent, register_signal_ru
         ),
     },
     lookback_days=51,  # SMA(slow) must be defined at both T-1 and T
+    # SMA is a bounded window, not a recursion: the last slow + 1 bars fully
+    # determine every value a crossover check can read.
+    windowed_lookback=lambda p: p["slow"] + 1,
     scale_class="scale_free",
     direction_semantics=(
         "bullish: SMA(fast) crossed above SMA(slow) on the signal date; "
@@ -133,6 +136,9 @@ def rsi_threshold(
         ),
     },
     lookback_days=21,  # day T plus 20 prior sessions
+    # The breakout level reads only the prior `window` bars, so the trailing
+    # window + 1 bars are all a compute needs.
+    windowed_lookback=lambda p: p["window"] + 1,
     scale_class="price_scaled",
     direction_semantics=(
         "bullish: close exceeded the max high of the prior `window` sessions; "
@@ -141,29 +147,35 @@ def rsi_threshold(
 )
 def breakout_20d(bars, window: int = 20) -> list[SignalEvent]:
     events: list[SignalEvent] = []
+    if len(bars) <= window:
+        return events
+    highs = np.array([bar.high for bar in bars], dtype=float)
+    lows = np.array([bar.low for bar in bars], dtype=float)
+    # Row k is bars[k : k + window], the prior window of bar k + window.
+    prior_max_highs = np.lib.stride_tricks.sliding_window_view(highs, window).max(axis=1)
+    prior_min_lows = np.lib.stride_tricks.sliding_window_view(lows, window).min(axis=1)
     for i in range(window, len(bars)):
-        prior = bars[i - window : i]
         bar = bars[i]
-        if bar.close > (prior_max_high := max(b.high for b in prior)):
+        if bar.close > (prior_max_high := float(prior_max_highs[i - window])):
             events.append(
                 SignalEvent(
                     date=bar.date,
                     direction="bullish",
                     trigger_values={
                         "close": float(bar.close),
-                        "prior_max_high": float(prior_max_high),
+                        "prior_max_high": prior_max_high,
                     },
                     data_window_end=bar.date,
                 )
             )
-        elif bar.close < (prior_min_low := min(b.low for b in prior)):
+        elif bar.close < (prior_min_low := float(prior_min_lows[i - window])):
             events.append(
                 SignalEvent(
                     date=bar.date,
                     direction="bearish",
                     trigger_values={
                         "close": float(bar.close),
-                        "prior_min_low": float(prior_min_low),
+                        "prior_min_low": prior_min_low,
                     },
                     data_window_end=bar.date,
                 )

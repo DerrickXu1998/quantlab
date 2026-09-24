@@ -9,6 +9,7 @@ synthetic SQLite demo, chosen once at startup.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from dataclasses import asdict
 from datetime import date
@@ -24,6 +25,7 @@ from quantlab.replay import engine as replay_engine
 from quantlab.research import errors as research_errors
 from quantlab.research import performance, runner
 from quantlab.signals import registry as signal_registry
+from quantlab.signals import templates as signal_templates
 from quantlab.storage import facts as fact_defs
 from quantlab.strategy import StrategySpec, StrategyValidationError, templates
 from quantlab.streaming import bus as streaming_bus
@@ -35,6 +37,64 @@ router = APIRouter()
 # exchange suffix (AAPL.US, HSBA.LON) and some venues use digits or hyphens
 # (BRK-B.US, 0700.HK). The old ^[A-Z]{2,8}$ fitted only the synthetic universe.
 SYMBOL_PATTERN = r"^[A-Z0-9][A-Z0-9._\-]{0,19}$"
+
+#: A single SSE replay may not run longer than this. Each open stream iterates
+#: its generator in a threadpool worker (and the live stream also holds a Kafka
+#: consumer), so an unbounded stream is a worker-exhaustion vector: on reaching
+#: the cap the stream ends with the same `truncated` frame `max_events` uses.
+_STREAM_WALL_CLOCK_SECONDS = 15 * 60
+
+#: Concurrent replay streams one user may hold. Every open stream pins a
+#: threadpool worker (and the live variant a Kafka consumer) for its whole
+#: lifetime, so without a cap one account can starve the API for everyone
+#: else just by opening streams in a loop.
+_STREAM_SLOTS_PER_USER = 3
+
+
+class _StreamSlots:
+    """Per-user count of open replay streams, in memory, per app instance."""
+
+    def __init__(self) -> None:
+        self._counts: dict[str, int] = {}
+        self._lock = threading.Lock()
+
+    def acquire(self, user_id: str) -> bool:
+        with self._lock:
+            held = self._counts.get(user_id, 0)
+            if held >= _STREAM_SLOTS_PER_USER:
+                return False
+            self._counts[user_id] = held + 1
+            return True
+
+    def release(self, user_id: str) -> None:
+        with self._lock:
+            held = self._counts.get(user_id, 0)
+            if held <= 1:
+                # Drop the key rather than leaving a zero: user ids are
+                # unbounded, so the dict must not grow per user ever seen.
+                self._counts.pop(user_id, None)
+            else:
+                self._counts[user_id] = held - 1
+
+
+def _stream_slots(request: Request) -> _StreamSlots:
+    # Per app, on its state -- like the seeded cache below, a module-level
+    # instance would leak counts between the apps tests create.
+    slots = getattr(request.app.state, "_stream_slots", None)
+    if slots is None:
+        slots = request.app.state._stream_slots = _StreamSlots()
+    return slots
+
+
+def _acquire_stream_slot(request: Request, user) -> _StreamSlots:
+    slots = _stream_slots(request)
+    if not slots.acquire(user.id):
+        raise HTTPException(
+            status_code=429,
+            detail="too many concurrent replay streams; wait for one to finish",
+            headers={"Retry-After": "5"},
+        )
+    return slots
 
 
 def backend(request: Request):
@@ -52,14 +112,36 @@ def strategies_store(request: Request):
     return request.app.state.strategies
 
 
+def custom_rules_store(request: Request):
+    """Where template-based custom rules are kept (feature 008). Every method
+    takes an owner, exactly like strategies."""
+    return request.app.state.custom_rules
+
+
 def auth_service(request: Request):
     return request.app.state.auth
 
 
+#: How long a "seeded" answer may be reused. health() on the warehouse runs a
+#: full ClickHouse count plus a Postgres count, so asking it per data request
+#: is the dominant cost of every guarded route; a few seconds of staleness on
+#: a 503-vs-serve decision is invisible next to an ingest cycle.
+_SEEDED_CACHE_TTL_SECONDS = 10.0
+
+
 def require_seeded(request: Request) -> None:
     """Guard for data routes: 503 until there is data to serve (FR-003)."""
-    has_data, _ = backend(request).health()
-    if not has_data:
+    now = time.monotonic()
+    # Cached per app, on its state: app instances have different backends (a
+    # test seeds a private database per case), so a module-level cache would
+    # leak one app's answer into another's. A racy double-refresh costs one
+    # extra health() call -- benign next to a lock.
+    cache = getattr(request.app.state, "_seeded_cache", None)
+    if cache is None or cache[0] <= now:
+        has_data, _ = backend(request).health()
+        cache = (now + _SEEDED_CACHE_TTL_SECONDS, has_data)
+        request.app.state._seeded_cache = cache
+    if not cache[1]:
         raise HTTPException(status_code=503, detail="database is not seeded yet")
 
 
@@ -429,6 +511,32 @@ def list_models() -> dict:
     return {"total": len(rules), "items": [_model_to_schema(rule) for rule in rules]}
 
 
+@router.get(
+    "/signal-templates",
+    response_model=schemas.SignalTemplateList,
+    tags=["models"],
+    operation_id="listSignalTemplates",
+)
+def list_signal_templates(request: Request) -> dict:
+    """The template catalog, assembled from the registry at request time:
+    registering a template changes this response with no code change."""
+    dataset = backend(request).name
+    items = [
+        {
+            "id": template.id,
+            "version": template.version,
+            "description": template.description,
+            "inputs": template.inputs,
+            # Templates reading fundamentals need the warehouse; bars-only
+            # templates run on either dataset.
+            "available_on_dataset": template.inputs == "bars" or dataset == "warehouse",
+            "config_fields": template.config_fields,
+        }
+        for template in signal_templates.list_templates()
+    ]
+    return {"total": len(items), "items": items}
+
+
 def _is_registered(model_name: str, model_version: str) -> bool:
     try:
         signal_registry.get_rule(model_name, model_version)
@@ -437,10 +545,22 @@ def _is_registered(model_name: str, model_version: str) -> bool:
     return True
 
 
-def _run_response(run: dict, dataset: str = "sqlite") -> dict:
+def _run_response(
+    run: dict,
+    dataset: str = "sqlite",
+    resolved_rules: dict[str, dict] | None = None,
+) -> dict:
     run = dict(run)
     run.pop("owner_id", None)  # internal; the caller is the owner by construction
-    run["model_available"] = _is_registered(run["model_name"], run["model_version"])
+    snapshot = run.get("custom_rule")
+    if snapshot is not None and resolved_rules is not None:
+        # A custom-rule run is reproducible from its snapshot, but
+        # "model_available" answers "could I run this rule again": false once
+        # the rule is deleted (or owned by someone else). Batch-resolved by
+        # the caller (list_runs): one query for the whole page.
+        run["model_available"] = snapshot["rule_id"] in resolved_rules
+    else:
+        run["model_available"] = _is_registered(run["model_name"], run["model_version"])
     run.setdefault("dataset", dataset)
     # A run recorded against a different dataset stays readable but cannot be
     # reproduced as recorded.
@@ -542,7 +662,22 @@ def list_runs(request: Request, user: CurrentUser, saved_only: bool = False) -> 
         saved_only=saved_only, owner_id=owner_scope(user)
     )
     active = backend(request).name
-    return {"total": result["total"], "items": [_run_response(r, active) for r in result["items"]]}
+    # One query for every custom rule the page references; a per-run get_rule
+    # is an N+1 against the catalog.
+    rule_ids = sorted(
+        {r["custom_rule"]["rule_id"] for r in result["items"] if r.get("custom_rule")}
+    )
+    resolved = (
+        custom_rules_store(request).get_rules(rule_ids, owner_scope(user))
+        if rule_ids
+        else {}
+    )
+    return {
+        "total": result["total"],
+        "items": [
+            _run_response(r, active, resolved_rules=resolved) for r in result["items"]
+        ],
+    }
 
 
 @router.get(
@@ -626,6 +761,139 @@ def delete_run(request: Request, run_id: str, user: CurrentUser) -> None:
         raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
 
 
+# --- Custom signal rules (feature 008) -----------------------------------------
+#
+# Thin handlers over the CustomRuleStore seam; template validation lives in
+# quantlab.signals.templates. Scoping mirrors strategies: every call is made
+# with the caller's owner id, and another user's rule reads as absent, never
+# forbidden -- a 403 would confirm the row exists.
+
+
+def _rule_response(record: dict) -> dict:
+    """Attach the lookback the config implies, derived from its template.
+
+    Computed rather than stored: what a config needs follows the template's
+    definition, and a stored copy would go stale when the template does.
+    """
+    template = signal_templates.get_template(record["template"])
+    body = dict(record)
+    body.pop("owner_id", None)  # internal; the caller is the owner by construction
+    return {**body, "lookback_days": template.lookback_days(record["config"])}
+
+
+def _rule_owner(user) -> str | None:
+    """The owner id a rule call is made with.
+
+    ``owner_scope(user)`` plain: with auth on, the caller's id, so another
+    user's rule reads as absent. With auth off, None -- the unscoped rows the
+    store reserves for single-user mode (``custom_rules.user_id`` is a real
+    foreign key to ``users``, so the built-in local account's id would not
+    even insert; NULL is the branch's convention for demo-mode rows).
+    """
+    return owner_scope(user)
+
+
+def _get_scoped_rule(request: Request, rule_id: str, user) -> dict:
+    record = custom_rules_store(request).get_rule(rule_id, _rule_owner(user))
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"unknown custom rule: {rule_id}")
+    return record
+
+
+def _validate_rule_config(template_id: str, config: dict):
+    """The template, or the HTTP failure naming why the config was refused."""
+    try:
+        template = signal_templates.get_template(template_id)
+    except KeyError:
+        raise HTTPException(
+            status_code=404, detail=f"unknown template: {template_id}"
+        ) from None
+    try:
+        template.validate(config)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return template
+
+
+@router.post(
+    "/rules",
+    response_model=schemas.CustomRule,
+    status_code=201,
+    tags=["rules"],
+    operation_id="createCustomRule",
+)
+def create_custom_rule(
+    request: Request, body: schemas.CustomRuleRequest, user: CurrentUser
+) -> dict:
+    template = _validate_rule_config(body.template, body.config)
+    record = custom_rules_store(request).create_rule(
+        _rule_owner(user), body.name, template.id, body.config
+    )
+    return _rule_response(record)
+
+
+@router.get(
+    "/rules",
+    response_model=schemas.CustomRuleList,
+    tags=["rules"],
+    operation_id="listCustomRules",
+)
+def list_custom_rules(request: Request, user: CurrentUser) -> dict:
+    result = custom_rules_store(request).list_rules(_rule_owner(user))
+    return {"total": result["total"], "items": [_rule_response(r) for r in result["items"]]}
+
+
+@router.get(
+    "/rules/{rule_id}",
+    response_model=schemas.CustomRule,
+    tags=["rules"],
+    operation_id="getCustomRule",
+)
+def get_custom_rule(request: Request, rule_id: str, user: CurrentUser) -> dict:
+    return _rule_response(_get_scoped_rule(request, rule_id, user))
+
+
+@router.patch(
+    "/rules/{rule_id}",
+    response_model=schemas.CustomRule,
+    tags=["rules"],
+    operation_id="updateCustomRule",
+)
+def update_custom_rule(
+    request: Request,
+    rule_id: str,
+    body: schemas.CustomRuleUpdateRequest,
+    user: CurrentUser,
+) -> dict:
+    record = _get_scoped_rule(request, rule_id, user)
+    if body.name is None and body.config is None:
+        raise HTTPException(
+            status_code=422, detail="nothing to update: send name and/or config"
+        )
+    if body.config is not None:
+        # The template is immutable: changing what a rule IS makes a new rule.
+        # Runs that already used it keep their definition snapshot; edits apply
+        # to future runs only.
+        _validate_rule_config(record["template"], body.config)
+    updated = custom_rules_store(request).update_rule(
+        rule_id, _rule_owner(user), name=body.name, config=body.config
+    )
+    return _rule_response(updated)
+
+
+@router.delete(
+    "/rules/{rule_id}",
+    status_code=204,
+    tags=["rules"],
+    operation_id="deleteCustomRule",
+)
+def delete_custom_rule(request: Request, rule_id: str, user: CurrentUser) -> None:
+    # Deleting a rule never touches the runs that used it: their snapshot
+    # keeps them readable, and model_available flips to false.
+    if not custom_rules_store(request).delete_rule(rule_id, _rule_owner(user)):
+        raise HTTPException(status_code=404, detail=f"unknown custom rule: {rule_id}")
+
+
 # --- Historical replay ------------------------------------------------------
 #
 # Thin handlers again: the engine lives in quantlab.replay so it is testable
@@ -655,29 +923,40 @@ def stream_run_replay(
     request: Request,
     run_id: str,
     user: CurrentUser,
-    interval_ms: Annotated[int, Query(ge=0, le=10_000)] = 0,
-    max_events: Annotated[int, Query(ge=1, le=5_000_000)] = 250_000,
+    interval_ms: Annotated[int, Query(ge=0, le=1_000)] = 0,
+    max_events: Annotated[int, Query(ge=1, le=250_000)] = 250_000,
     step: Annotated[int, Query(ge=1)] = 1,
 ) -> StreamingResponse:
     run = _replayable_run(request, run_id, user)
     signals, bars = replay_engine.load_replay_inputs(backend(request), experiments(request), run)
+    # Acquired only after validation above: a request that raises before the
+    # response exists must not leak a slot its generator would never release.
+    slots = _acquire_stream_slot(request, user)
 
     def frames():
         emitted = 0
-        truncated = False
+        truncated = None
+        deadline = time.monotonic() + _STREAM_WALL_CLOCK_SECONDS
         # A sync generator: StreamingResponse iterates it in a threadpool, so
         # the optional pacing sleep never blocks the event loop.
-        for event in replay_engine.replay_events(run, signals, bars, step=step):
-            if emitted >= max_events:
-                truncated = True
-                break
-            yield f"data: {json.dumps(replay_engine.to_dict(event))}\n\n"
-            emitted += 1
-            if interval_ms and isinstance(event, replay_engine.ReplayEquity):
-                time.sleep(interval_ms / 1000)
+        try:
+            for event in replay_engine.replay_events(run, signals, bars, step=step):
+                if emitted >= max_events:
+                    truncated = f"max_events={max_events} reached before the summary"
+                    break
+                if time.monotonic() >= deadline:
+                    # A stream that outlives the cap pins a threadpool worker;
+                    # end it like any other truncation.
+                    truncated = "stream wall-clock limit reached before the summary"
+                    break
+                yield f"data: {json.dumps(replay_engine.to_dict(event))}\n\n"
+                emitted += 1
+                if interval_ms and isinstance(event, replay_engine.ReplayEquity):
+                    time.sleep(interval_ms / 1000)
+        finally:
+            slots.release(user.id)
         if truncated:
-            detail = f"max_events={max_events} reached before the summary"
-            yield f"data: {json.dumps({'event': 'truncated', 'detail': detail})}\n\n"
+            yield f"data: {json.dumps({'event': 'truncated', 'detail': truncated})}\n\n"
 
     return StreamingResponse(
         frames(),
@@ -713,13 +992,15 @@ def get_run_replay_summary(request: Request, run_id: str, user: CurrentUser) -> 
     operation_id="streamLiveReplay",
 )
 def stream_live_replay(
+    request: Request,
+    user: CurrentUser,
     model: str = "sma-crossover",
     symbols: Annotated[str, Query(description="Comma-separated canonical symbols")] = "",
     start: date | None = None,
     end: date | None = None,
     params: Annotated[str | None, Query(description="JSON object of parameter overrides")] = None,
     initial_cash: Annotated[float, Query(gt=0)] = performance.INITIAL_CAPITAL,
-    max_events: Annotated[int, Query(ge=1, le=5_000_000)] = 250_000,
+    max_events: Annotated[int, Query(ge=1, le=250_000)] = 250_000,
 ) -> StreamingResponse:
     if not streaming_bus.configured():
         raise HTTPException(
@@ -752,6 +1033,9 @@ def stream_live_replay(
     except research_errors.ParameterValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    # Acquired before the broker connect below: a request that fails earlier
+    # (validation) never held a slot, and a failed connect releases its own.
+    slots = _acquire_stream_slot(request, user)
     stream = streaming_bus.KafkaBarStream(
         streaming_bus.brokers(),
         streaming_bus.topic(),
@@ -762,6 +1046,7 @@ def stream_live_replay(
     try:
         stream.open()
     except streaming_bus.BusUnavailable as exc:
+        slots.release(user.id)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     events = streaming_live.live_replay_events(
@@ -771,21 +1056,27 @@ def stream_live_replay(
 
     def frames():
         emitted = 0
-        truncated = False
+        truncated = None
+        deadline = time.monotonic() + _STREAM_WALL_CLOCK_SECONDS
         # A sync generator: StreamingResponse iterates it in a threadpool, so
         # blocking on the Kafka consumer never stalls the event loop.
         try:
             for event in events:
                 if emitted >= max_events:
-                    truncated = True
+                    truncated = f"max_events={max_events} reached before the summary"
+                    break
+                if time.monotonic() >= deadline:
+                    # Holding a worker and a consumer open indefinitely is a
+                    # resource-exhaustion vector; end it like a truncation.
+                    truncated = "stream wall-clock limit reached before the summary"
                     break
                 yield f"data: {json.dumps(replay_engine.to_dict(event))}\n\n"
                 emitted += 1
         finally:
             stream.close()
+            slots.release(user.id)
         if truncated:
-            detail = f"max_events={max_events} reached before the summary"
-            yield f"data: {json.dumps({'event': 'truncated', 'detail': detail})}\n\n"
+            yield f"data: {json.dumps({'event': 'truncated', 'detail': truncated})}\n\n"
 
     return StreamingResponse(
         frames(),
@@ -810,8 +1101,22 @@ def stream_live_replay(
     operation_id="register",
 )
 def register(request: Request, body: schemas.Credentials) -> dict:
+    service = auth_service(request)
     try:
-        session = auth_service(request).register(body.email, body.password)
+        # request.client is the direct peer: a deployment behind a proxy must
+        # configure trusted-proxy handling (e.g. uvicorn --proxy-headers) for
+        # this to be the real client address rather than the proxy's.
+        service.check_registration_rate(
+            request.client.host if request.client else "unknown"
+        )
+    except auth_lib.RateLimited as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=str(exc),
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+    try:
+        session = service.register(body.email, body.password)
     except auth_lib.EmailAlreadyRegistered as exc:
         # A 409 here does disclose that an address is registered. That is
         # unavoidable for a self-service signup form -- refusing to say so

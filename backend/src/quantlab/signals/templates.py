@@ -17,8 +17,11 @@ matches the builtins' conventions exactly -- sma(50) -> 51, rsi(14) -> 16.
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from dataclasses import dataclass
 from datetime import date as _date
+from itertools import groupby
+from operator import itemgetter
 from typing import Any
 
 import numpy as np
@@ -364,17 +367,20 @@ def _as_of_series(facts: list[dict]) -> list[dict]:
     """
     per_holder = any(fact.get("holder") for fact in facts)
     points: list[dict] = []
+    # Facts arrive ascending by filed_at; the sort is stable, so within a day
+    # the input order survives and "last row of the filing date wins" keeps its
+    # meaning. groupby then walks each day exactly once, replacing the old
+    # per-day rescan of the whole list.
+    ordered = sorted(facts, key=itemgetter("filed_at"))
     if per_holder:
         latest_by_holder: dict[str, float] = {}
-        for day in sorted({fact["filed_at"] for fact in facts}):
-            for fact in facts:
-                if fact["filed_at"] == day:
-                    latest_by_holder[fact["holder"]] = fact["value"]
+        for day, day_facts in groupby(ordered, key=itemgetter("filed_at")):
+            for fact in day_facts:
+                latest_by_holder[fact["holder"]] = fact["value"]
             points.append({"date": day, "value": sum(latest_by_holder.values())})
     else:
-        for day in sorted({fact["filed_at"] for fact in facts}):
-            day_facts = [fact for fact in facts if fact["filed_at"] == day]
-            points.append({"date": day, "value": day_facts[-1]["value"]})
+        for day, day_facts in groupby(ordered, key=itemgetter("filed_at")):
+            points.append({"date": day, "value": list(day_facts)[-1]["value"]})
     return points
 
 
@@ -385,6 +391,7 @@ def _yoy_growth(points: list[dict]) -> list[dict]:
     through the filings, not a calendar guess. A point with no base a year back,
     or a zero base, is dropped rather than answered with a fabricated number.
     """
+    dates = [point["date"] for point in points]
     out: list[dict] = []
     for point in points:
         day = _date.fromisoformat(point["date"])
@@ -392,12 +399,12 @@ def _yoy_growth(points: list[dict]) -> list[dict]:
             target = day.replace(year=day.year - 1)
         except ValueError:  # 29 Feb has no counterpart in a common year.
             target = day.replace(year=day.year - 1, day=28)
-        base = None
-        for candidate in points:
-            if candidate["date"] <= target.isoformat():
-                base = candidate["value"]
-            else:
-                break
+        # Last entry on or before the target -- the overwrite-then-break scan
+        # the linear version did, in O(log n).
+        idx = bisect_right(dates, target.isoformat())
+        if idx == 0:
+            continue
+        base = points[idx - 1]["value"]
         if not base:
             continue
         out.append({"date": point["date"], "value": point["value"] / base - 1.0})
