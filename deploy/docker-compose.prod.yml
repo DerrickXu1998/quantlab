@@ -190,6 +190,24 @@ services:
     logging: *logging
     restart: "no"
 
+  # One-shot, as root: hand /data to the image's non-root `quantlab` user.
+  #
+  # The Dockerfile's `chown /data` only reaches a volume that is created
+  # empty from the image. quantlab-data predates the image going non-root, so
+  # its database was still owned by root: the backend could read it -- so a
+  # wrong password still got a clean 401 -- but not write it, and every
+  # *successful* sign-in died with "attempt to write a readonly database" when
+  # it stored the session. Re-asserting ownership on every deploy costs a
+  # second and makes the volume's history irrelevant.
+  data-perms:
+    image: ${QUANTLAB_BACKEND_IMAGE:?set QUANTLAB_BACKEND_IMAGE in .env}
+    user: "0:0"
+    entrypoint: ["chown", "-R", "quantlab:quantlab", "/data"]
+    volumes:
+      - quantlab-data:/data
+    logging: *logging
+    restart: "no"
+
   backend:
     image: ${QUANTLAB_BACKEND_IMAGE:?set QUANTLAB_BACKEND_IMAGE in .env}
     # Two workers for two vCPUs. The image's default CMD runs a single one,
@@ -220,6 +238,8 @@ services:
       clickhouse:
         condition: service_healthy
       migrate:
+        condition: service_completed_successfully
+      data-perms:
         condition: service_completed_successfully
     healthcheck:
       test:

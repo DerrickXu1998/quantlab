@@ -89,6 +89,14 @@ function messageFor(error: unknown, mode: Mode): string {
     if (error.status === 422) return error.message || 'That password does not meet the policy.';
     if (error.status === 429) return 'Too many attempts for that email. Wait a minute and retry.';
     if (error.status === 0) return error.message;
+    // Not the user's fault, and not something retyping the password fixes:
+    // say so, rather than showing "internal server error" next to a form
+    // that invites another attempt.
+    if (error.status >= 500) {
+      return mode === 'login'
+        ? 'The server failed while signing you in. This is not your password; try again shortly.'
+        : 'The server failed while creating the account. Try again shortly.';
+    }
     return error.message;
   }
   return mode === 'login' ? 'Could not sign in.' : 'Could not create the account.';

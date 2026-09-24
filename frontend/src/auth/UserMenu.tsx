@@ -45,10 +45,14 @@ export function UserMenu() {
         size="sm"
         aria-haspopup="menu"
         aria-expanded={open}
+        // The email is hidden below 1,440px so the header's full row fits a
+        // 1,280px laptop, so the name has to come from here.
+        aria-label={`Account: ${auth.user.email}`}
+        title={auth.user.email}
         onClick={() => setOpen((current) => !current)}
       >
         <UserRound size={16} strokeWidth={1.5} aria-hidden="true" />
-        <span className="max-w-[16ch] truncate normal-case tracking-normal">
+        <span className="hidden max-w-[16ch] truncate normal-case tracking-normal min-[1440px]:inline">
           {auth.user.email}
         </span>
       </Button>

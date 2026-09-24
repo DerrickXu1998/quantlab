@@ -170,6 +170,23 @@ describe('LoginScreen', () => {
     expect(screen.getByRole('button', { name: /^sign in$/i })).toBeEnabled();
   });
 
+  it('says a 500 is the server, not the password', async () => {
+    // What production did when the session store was read-only: the password
+    // was right, and retyping it could never have helped.
+    login.mockRejectedValue(new ApiError(500, 'internal server error'));
+    const person = userEvent.setup();
+    render(<LoginScreen />);
+
+    await person.type(screen.getByLabelText(/email/i), 'quant@example.com');
+    await person.type(screen.getByLabelText(/password/i), 'correct-password');
+    await person.click(screen.getByRole('button', { name: /^sign in$/i }));
+
+    const error = await screen.findByTestId('auth-error');
+    expect(error).toHaveTextContent(/server failed/i);
+    expect(error).toHaveTextContent(/not your password/i);
+    expect(error).not.toHaveTextContent(/incorrect/i);
+  });
+
   it('points an already-registered email at the sign-in tab instead of a status code', async () => {
     register.mockRejectedValue(new ApiError(409, 'conflict'));
     const person = userEvent.setup();
