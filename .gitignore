@@ -39,3 +39,6 @@ quantlab-data/
 
 # Agent-managed git worktrees: a full nested checkout, never part of a commit.
 .claude/worktrees/
+
+# local ingest output (run_ingest.sh batches, universe snapshots, logs)
+artifacts/

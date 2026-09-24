@@ -14,6 +14,14 @@ function Booting({ label }: { label: string }) {
 }
 
 /**
+ * Local-dev escape hatch: `VITE_AUTH_BYPASS=true npm run dev` skips the login
+ * screen, for checking UI against a backend with no auth (or an older image
+ * that predates it). `import.meta.env.DEV` is false in `vite build`, so the
+ * whole branch is dead code in production however the variable is set.
+ */
+const DEV_AUTH_BYPASS = import.meta.env.DEV && import.meta.env.VITE_AUTH_BYPASS === 'true';
+
+/**
  * Whether the app is reachable without signing in, and what to show if not.
  *
  * `QUANTLAB_AUTH_REQUIRED=false` is a supported mode, not a hack — it is what
@@ -36,6 +44,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const dataset = useDataset();
   const { status } = useAuth();
 
+  if (DEV_AUTH_BYPASS) return <>{children}</>;
   if (dataset.status === 'loading') return <Booting label="Contacting the API…" />;
 
   const authRequired = dataset.status === 'ready' && dataset.health.auth_required !== false;

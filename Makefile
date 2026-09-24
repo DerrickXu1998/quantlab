@@ -23,7 +23,7 @@ START   ?= 2015-01-01
 END     ?=
 PROVIDERS ?= yahoo stooq
 
-.PHONY: help up down build seed logs shell docker-shell test smoke check-warehouse hash dump-hash gen-api \
+.PHONY: help up dev down build seed logs shell docker-shell test smoke check-warehouse hash dump-hash gen-api \
 	check-contract sync-contract migrate ingest seed-warehouse ingest-macro ingest-fred map-identifiers \
 	map-sec-tickers map-ch-companies ingest-sec-fundamentals ingest-ch-fundamentals universe-snapshot coverage signals \
 	ingest-finra-shorts ingest-fca-shorts \
@@ -35,6 +35,9 @@ help: ## Show available targets
 
 up: ## Build and start the full stack (seed -> backend -> frontend) with preflight checks
 	bash scripts/up.sh
+
+dev: ## Local dev: Docker backend + hot-reloading frontend on :5173 (AUTH_BYPASS=1 skips login)
+	bash scripts/dev.sh
 
 down: ## Stop and remove containers, KEEPING ingested data
 	$(COMPOSE) down

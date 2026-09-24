@@ -33,6 +33,7 @@ Then open the UI at **http://localhost:8080**. The API is served at
 | Target          | What it does                                                              |
 | --------------- | ------------------------------------------------------------------------- |
 | `make up`       | Preflight checks (Docker reachable, ports 8000/8080 free of foreign processes), then build + start seed → backend → frontend; waits for the backend healthcheck. Idempotent |
+| `make dev`      | Local development: rebuild + start the backend in Docker (same preflight and health wait as `make up`), then run the Vite dev server on **http://localhost:5173** (or the next free port; it prints the URL) with hot reload and `/api` proxied to :8000. Needs Node on the host. `AUTH_BYPASS=1 make dev` skips the login screen. Ctrl-C stops the frontend; `make down` stops the backend |
 | `make down`     | Stop and remove all containers and the `quantlab-data` volume             |
 | `make smoke`    | End-to-end check: backend healthy, DB seeded, every starter rule fired, UI returns 200 |
 | `make test`     | Run backend pytest (unit + contract + look-ahead) and frontend vitest inside containers |

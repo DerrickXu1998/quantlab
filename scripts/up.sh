@@ -82,7 +82,11 @@ echo "Stack is up. UI: http://localhost:8080  API: http://localhost:8000"
 # The warehouse starts empty: ingest reaches the network, so it is never part
 # of `up`. Until it runs, the API reports seeded=false and the UI has nothing
 # to draw.
-if ! "${COMPOSE[@]}" run --rm -T ingest coverage 2>/dev/null | grep -q "total bars"; then
+# Captured first rather than piped: `grep -q` exits at the first match, the
+# writer then dies of SIGPIPE, and under `pipefail` that failure made a full
+# warehouse report as empty.
+coverage="$("${COMPOSE[@]}" run --rm -T ingest coverage 2>/dev/null || true)"
+if ! grep -q "total bars" <<<"$coverage"; then
 	cat <<'NOTE'
 
 The data warehouse is empty. Load some history:
