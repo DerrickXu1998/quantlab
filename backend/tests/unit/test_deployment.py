@@ -122,3 +122,47 @@ def test_the_preflight_a_browser_actually_sends_succeeds(monkeypatch):
     assert response.status_code == 200
     assert response.headers.get("access-control-allow-origin") == "https://quantlab.vercel.app"
     assert "POST" in response.headers.get("access-control-allow-methods", "")
+
+
+def test_an_unhandled_error_reaches_a_cross_origin_page_as_a_500(monkeypatch):
+    """Starlette answers an uncaught exception from outside the CORS layer, so
+    the 500 carried no Access-Control-Allow-Origin, the browser hid it, and
+    the SPA reported "Backend unreachable" for what was a server bug. This is
+    how a read-only database on sign-in presented in production."""
+    client = _client(monkeypatch, "https://quantlab.vercel.app")
+
+    @client.app.get("/api/v1/_test_boom")
+    def boom() -> None:
+        raise RuntimeError("attempt to write a readonly database")
+
+    response = client.get("/api/v1/_test_boom", headers={"Origin": "https://quantlab.vercel.app"})
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "internal server error"}
+    assert response.headers.get("access-control-allow-origin") == "https://quantlab.vercel.app"
+    # The exception text stays in the server log, not in the response.
+    assert "readonly" not in response.text
+
+
+# --- The data volume -------------------------------------------------------
+
+PROD_COMPOSE = Path(__file__).resolve().parents[3] / "deploy" / "docker-compose.prod.yml"
+
+
+@pytest.mark.skipif(not PROD_COMPOSE.is_file(), reason="deploy/ is not inside the built image")
+def test_prod_hands_the_data_volume_to_the_non_root_user_before_the_backend_starts():
+    """The image runs as `quantlab`, but a volume created before it did keeps
+    root-owned files that the Dockerfile's chown never reaches. The backend can
+    then read the database and not write it, and every successful sign-in fails
+    storing its session."""
+    yaml = pytest.importorskip("yaml")
+    services = yaml.safe_load(PROD_COMPOSE.read_text())["services"]
+
+    perms = services["data-perms"]
+    assert perms["user"] == "0:0"
+    assert perms["entrypoint"] == ["chown", "-R", "quantlab:quantlab", "/data"]
+    assert perms["image"] == services["backend"]["image"]
+    assert "quantlab-data:/data" in perms["volumes"]
+    assert services["backend"]["depends_on"]["data-perms"] == {
+        "condition": "service_completed_successfully"
+    }

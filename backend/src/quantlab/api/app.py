@@ -98,6 +98,26 @@ def create_app(db_path: str | Path | None = None, backend=None) -> FastAPI:
     app.state.custom_rules = custom_rules.select_custom_rule_store(app.state.db_path, wh=wh)
     app.include_router(routes.router, prefix="/api/v1")
 
+    @app.middleware("http")
+    async def unhandled_errors_as_json(request: Request, call_next):
+        """Turn an unhandled exception into a 500 *inside* the CORS layer.
+
+        Starlette answers an uncaught exception from ServerErrorMiddleware, which
+        sits outside every user middleware -- CORS included. So a cross-origin
+        500 went out with no Access-Control-Allow-Origin, the browser withheld
+        it from the page, and the SPA could only report "Backend unreachable":
+        a server bug disguised as a network fault. Registered before
+        CORSMiddleware, so CORS wraps it and the error reaches the page as one.
+        """
+        try:
+            return await call_next(request)
+        except Exception:
+            logger.exception(
+                "unhandled_error",
+                extra={"method": request.method, "path": request.url.path},
+            )
+            return JSONResponse(status_code=500, content={"detail": "internal server error"})
+
     origins = resolve_cors_origins()
     if origins:
         app.add_middleware(
