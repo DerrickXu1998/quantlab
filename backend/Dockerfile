@@ -21,8 +21,9 @@ COPY contracts ./contracts
 RUN pip install --no-cache-dir ".[dev]"
 
 # Serving image: runtime dependencies only, and the process runs as an
-# unprivileged user. This is the final stage, so `docker build .` -- and CI,
-# which names no target -- gets the hardened image by default.
+# unprivileged user. This is the default target, so `docker build .` and the
+# deploy workflow get the hardened image. CI builds with `--target dev` to run
+# pytest instead.
 FROM base
 RUN useradd --system --uid 10001 quantlab \
     && mkdir -p /data \

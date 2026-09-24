@@ -47,6 +47,10 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ./backend
+          # The default stage is the hardened serving image with no test suite.
+          # pytest runs from the `dev` target, which layers the tests and the
+          # [dev] extras on the same base.
+          target: dev
           load: true
           tags: quantlab-backend:ci
           cache-from: type=gha,scope=backend

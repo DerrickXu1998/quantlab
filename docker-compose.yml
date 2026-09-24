@@ -184,8 +184,9 @@ services:
     build:
       context: ./backend
       # The dev stage carries the test suite and its extras so `make test`
-      # can run pytest in this image. CI and prod build the Dockerfile's
-      # default stage, which is the hardened runtime (no dev deps, non-root).
+      # can run pytest in this image. CI builds this target too; prod builds
+      # the Dockerfile's default stage, which is the hardened runtime (no dev
+      # deps, non-root).
       target: dev
     command: ["uvicorn", "quantlab.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
