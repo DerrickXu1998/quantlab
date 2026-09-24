@@ -7,6 +7,14 @@ import { cn } from '../lib/utils';
 import { useTheme } from '../theme/ThemeProvider';
 import type { Destination } from './router';
 
+/**
+ * The shared buttons drop to mouse size at `lg`, but this menu also appears
+ * above `lg` whenever the full row does not fit -- an iPad in landscape among
+ * them, and that is a finger. Every control
+ * in it stays a 44px target at every width it appears at.
+ */
+const TOUCH = 'lg:h-11 lg:min-w-11';
+
 export interface NavItem {
   id: Destination;
   label: string;
@@ -19,9 +27,9 @@ export interface NavItem {
  *
  * Six destination icons plus the theme toggle and the account button still
  * measured wider than a 390px row wants, and icons with no labels made you
- * guess which one was which. So below `lg` they all move into this menu, where
- * each one has room for its label. The desktop row is not affected: the shell
- * renders this only when `useIsDesktop()` is false.
+ * guess which one was which. So wherever the full row does not fit -- phones,
+ * tablets, a narrowed browser window (see useRowFits) -- they all move into
+ * this menu, where each one has room for its label.
  */
 export function MobileHeader({
   items,
@@ -33,6 +41,13 @@ export function MobileHeader({
   onNavigate: (id: Destination) => void;
 }) {
   const [open, setOpen] = useState(false);
+  // Where the header ends, read when the menu opens. Measured rather than
+  // assumed: the header is 53px with touch-size buttons and shorter at `lg`,
+  // where the buttons return to mouse size, and a hard-coded offset left the
+  // backdrop overlapping the header on one side of that line or gapping on the
+  // other.
+  const [headerBottom, setHeaderBottom] = useState(0);
+  const header = useRef<HTMLElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const currentItem = items.find((item) => item.id === current);
@@ -53,7 +68,10 @@ export function MobileHeader({
   }, [open]);
 
   return (
-    <header className="relative z-30 flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-1">
+    <header
+      ref={header}
+      className="relative z-30 flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-1"
+    >
       <div className="flex min-w-0 items-baseline gap-2">
         <span className="font-display text-sm tracking-[-0.02em]">QuantLab</span>
         {currentItem ? (
@@ -71,7 +89,11 @@ export function MobileHeader({
         aria-label={open ? 'Close menu' : 'Open menu'}
         aria-expanded={open}
         aria-controls="mobile-menu"
-        onClick={() => setOpen((value) => !value)}
+        className={TOUCH}
+        onClick={() => {
+          setHeaderBottom(header.current?.getBoundingClientRect().bottom ?? 0);
+          setOpen((value) => !value);
+        }}
       >
         {open ? (
           <X size={20} strokeWidth={1.5} aria-hidden="true" />
@@ -83,18 +105,22 @@ export function MobileHeader({
       {open ? (
         <>
           {/* Covers the page below the header: a tap outside the menu closes it,
-              instead of landing on a control you can't see. 53px is the
-              header: a 44px button, 4px of padding either side, 1px border. */}
+              instead of landing on a control you can't see. */}
           <div
             aria-hidden="true"
             data-testid="mobile-menu-backdrop"
-            className="fixed inset-x-0 bottom-0 top-[53px] bg-background/70"
+            className="fixed inset-x-0 bottom-0 bg-background/70"
+            style={{ top: headerBottom }}
             onClick={() => setOpen(false)}
           />
           <div
             ref={panel}
             id="mobile-menu"
-            className="absolute inset-x-0 top-full max-h-[calc(100dvh-53px)] animate-panel-in overflow-y-auto border-b border-border bg-background"
+            // Full width on a phone; on a tablet a full-width list of six
+            // short labels is mostly empty space, so it drops from the
+            // button instead.
+            className="absolute inset-x-0 top-full animate-panel-in overflow-y-auto border-b border-border bg-background sm:left-auto sm:w-80 sm:border-l"
+            style={{ maxHeight: `calc(100dvh - ${headerBottom}px)` }}
           >
             <nav aria-label="Destinations" className="flex flex-col p-2">
               {items.map((item) => {
@@ -113,6 +139,7 @@ export function MobileHeader({
                     }}
                     className={cn(
                       'w-full justify-start gap-3 px-3',
+                      TOUCH,
                       active ? 'bg-primary/10 text-primary hover:text-primary' : undefined,
                     )}
                   >
@@ -152,7 +179,7 @@ function ThemeRow() {
       type="button"
       variant="ghost"
       onClick={toggleTheme}
-      className="w-full justify-start gap-3 px-3"
+      className={cn('w-full justify-start gap-3 px-3', TOUCH)}
     >
       <Icon size={20} strokeWidth={1.5} aria-hidden="true" />
       {isDark ? 'Switch to light mode' : 'Switch to dark mode'}
@@ -177,7 +204,7 @@ function AccountRow({ onSignedOut }: { onSignedOut: () => void }) {
       <Button
         type="button"
         variant="outline"
-        className="w-full"
+        className={cn('w-full', TOUCH)}
         disabled={busy}
         onClick={async () => {
           setBusy(true);

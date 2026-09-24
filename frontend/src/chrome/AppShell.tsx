@@ -29,6 +29,7 @@ import { cn } from '../lib/utils';
 import { MobileHeader, type NavItem } from './MobileMenu';
 import { navigate, replaceRoute, useRoute } from './router';
 import { useIsDesktop } from './useMediaQuery';
+import { useRowFits } from './useRowFits';
 
 const NAV: NavItem[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -88,7 +89,9 @@ export function AppShell() {
   const { instruments, seeds, error } = useWatchlist();
   // Rendered once, in one place or the other. See useMediaQuery: two
   // copies hidden by CSS would be two nodes in the accessibility tree.
-  const isDesktop = useIsDesktop();
+  // The full header row where it fits, the hamburger wherever it does not:
+  // measured, not a breakpoint (see useRowFits).
+  const { rowRef, fits: isDesktop } = useRowFits(useIsDesktop());
 
   // Legacy hashes (`#/`, `#/lab`, anything unknown) are rewritten to the
   // canonical destination hash, without adding a history entry.
@@ -106,16 +109,19 @@ export function AppShell() {
           {/* The header is the whole app's width floor, so it is where the
               phone layout is won or lost: at 390px the desktop row measured
               1,190px of content, and every destination inherited that sideways
-              scroll. Below `lg` the whole row is replaced by MobileHeader --
-              the brand, the current page and a menu button -- and the feed and
-              dataset disclosures move to the footer rather than being dropped,
-              because they are what say whether the numbers are real. Above
-              `lg` the row is what it was. */}
+              scroll. Wherever the full row does not fit -- a phone, a tablet,
+              a narrowed browser window -- it is replaced by MobileHeader: the
+              brand, the current page and a menu button. The feed and dataset
+              disclosures move to the footer rather than being dropped, because
+              they are what say whether the numbers are real. */}
           {isDesktop ? null : (
             <MobileHeader items={NAV} current={route.destination} onNavigate={navigate} />
           )}
           {isDesktop ? (
-            <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2 lg:gap-6 lg:px-4 lg:py-2.5">
+            <header
+              ref={rowRef}
+              className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2 lg:gap-6 lg:px-4 lg:py-2.5"
+            >
               <div className="flex min-w-0 items-center gap-2 lg:gap-6">
                 <span className="hidden font-display text-sm tracking-[-0.02em] sm:inline">
                   QuantLab
