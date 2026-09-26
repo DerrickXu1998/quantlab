@@ -14,16 +14,16 @@ function PositionRow({ position }: { position: Position }) {
     <tr className="border-t border-border">
       <td className="px-3 py-1.5 font-mono text-[11px]">{position.symbol}</td>
       <td className="px-3 py-1.5 text-right">
-        <Numeric value={position.qty} format="integer" className="text-[11px]" />
+        <Numeric value={position.qty} format="integer" className="text-xs" />
       </td>
       <td className="px-3 py-1.5 text-right">
-        <Numeric value={position.avgCost} className="text-[11px]" />
+        <Numeric value={position.avgCost} className="text-xs" />
       </td>
       <td className="px-3 py-1.5 text-right">
-        <FlashNumber value={live} format="price" className="text-[11px]" />
+        <FlashNumber value={live} format="price" className="text-xs" />
       </td>
       <td className="px-3 py-1.5 text-right">
-        <FlashNumber value={unrealized} format="signedPrice" tone="signed" className="text-[11px]" />
+        <FlashNumber value={unrealized} format="signedPrice" tone="signed" className="text-xs" />
       </td>
     </tr>
   );
@@ -53,7 +53,7 @@ export function ExecutionPositions({ positions }: { positions: Position[] }) {
   return (
     <table data-testid="execution-positions" className="w-full">
       <thead className="sticky top-0 z-10 bg-card">
-        <tr className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+        <tr className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
           <th className="px-3 py-1.5 text-left font-normal">Symbol</th>
           <th className="px-3 py-1.5 text-right font-normal">Qty</th>
           <th className="px-3 py-1.5 text-right font-normal">Avg cost</th>

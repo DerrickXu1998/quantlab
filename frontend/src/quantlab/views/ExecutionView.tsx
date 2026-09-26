@@ -93,7 +93,7 @@ export function ExecutionView({
               value={tick?.price}
               format="price"
               tone="accent"
-              className="text-[11px]"
+              className="text-xs"
             />
           }
         >

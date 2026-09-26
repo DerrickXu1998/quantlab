@@ -44,18 +44,18 @@ function Row({
         </span>
         <span className="flex shrink-0 items-center gap-2">
           <Sparkline values={tick?.history ?? []} rising={rising} />
-          <FlashNumber value={tick?.price} format="price" className="text-[11px]" />
+          <FlashNumber value={tick?.price} format="price" className="text-xs" />
         </span>
       </span>
       <span className="flex w-full items-baseline justify-between gap-2">
-        <span className="min-w-0 truncate text-[10px] text-muted-foreground">
+        <span className="min-w-0 truncate text-xs text-muted-foreground">
           {instrument.name}
         </span>
         <Numeric
           value={tick?.changePct}
           format="signedPercent"
           tone="signed"
-          className="shrink-0 text-[10px]"
+          className="shrink-0 text-xs"
         />
       </span>
     </button>

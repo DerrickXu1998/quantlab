@@ -37,7 +37,7 @@ function FirstRun() {
               <p className="flex items-center gap-2 text-xs">
                 Know your data <DatasetBadge />
               </p>
-              <p className="mt-1 text-[11px] text-muted-foreground">
+              <p className="mt-1 text-xs text-muted-foreground">
                 Everything the app shows traces back to this source.
               </p>
             </div>
@@ -48,7 +48,7 @@ function FirstRun() {
               <Button type="button" size="sm" onClick={() => navigate('strategies')}>
                 Run your first backtest
               </Button>
-              <p className="mt-1 text-[11px] text-muted-foreground">
+              <p className="mt-1 text-xs text-muted-foreground">
                 Strategies opens with the first registered model preselected.
               </p>
             </div>
@@ -59,7 +59,7 @@ function FirstRun() {
               <Button type="button" size="sm" variant="outline" onClick={() => navigate('research')}>
                 Explore stored signals
               </Button>
-              <p className="mt-1 text-[11px] text-muted-foreground">
+              <p className="mt-1 text-xs text-muted-foreground">
                 {signalCount !== null ? (
                   <>
                     <Numeric value={signalCount} format="integer" /> stored signals from the seeded
@@ -169,14 +169,14 @@ export function OverviewView() {
                     <Numeric
                       value={performance.performance.equity.length}
                       format="integer"
-                      className="text-[11px]"
+                      className="text-xs"
                     />
                   </Chip>
                   <Chip label="Trades">
                     <Numeric
                       value={performance.performance.metrics.trade_count}
                       format="integer"
-                      className="text-[11px]"
+                      className="text-xs"
                     />
                   </Chip>
                   <Chip label="Book">
@@ -184,7 +184,7 @@ export function OverviewView() {
                       value={performance.performance.initial_capital}
                       format="currency"
                       tone="muted"
-                      className="text-[11px]"
+                      className="text-xs"
                     />
                   </Chip>
                 </FloatingChips>

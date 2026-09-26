@@ -68,7 +68,7 @@ export function SignalFilters({ instruments, ruleNames, value, onChange }: Signa
       </Label>
 
       <fieldset className="direction-toggle rounded-sm border border-border px-3 py-2">
-        <legend className="px-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+        <legend className="px-1 font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
           Direction
         </legend>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-foreground">

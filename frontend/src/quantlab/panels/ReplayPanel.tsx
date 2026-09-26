@@ -57,7 +57,7 @@ function progressPercent(current: string | null, run: Run): number | null {
 function BookStat({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+      <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
         {label}
       </span>
       <span className="text-sm">{children}</span>
@@ -135,7 +135,7 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
     >
       <Panel title="Replay" fill scroll bodyClassName="flex flex-col gap-4 p-3">
         <label className="flex flex-col gap-1.5">
-          <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+          <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
             Run
           </span>
           <select
@@ -156,7 +156,7 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
           className="flex flex-col gap-1.5"
           title="Applies from the next play; a running stream keeps its pace."
         >
-          <legend className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+          <legend className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
             Speed
           </legend>
           {/* One control, not two: the group wraps as a unit rather than
@@ -233,11 +233,11 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
             >
               <div className="h-full bg-primary" style={{ width: `${percent ?? 0}%` }} />
             </div>
-            <p className="font-mono text-[10px] text-muted-foreground">
+            <p className="font-mono text-[11px] text-muted-foreground">
               {state.currentDate ?? '—'} of {run.start_date} → {run.end_date}
             </p>
             {state.status === 'paused' ? (
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 Paused freezes the display, not the stream — queued events render together on
                 resume.
               </p>
@@ -264,7 +264,7 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
           <div
             role="alert"
             data-testid="replay-truncated"
-            className="flex shrink-0 gap-2 rounded-sm border border-destructive/40 bg-destructive/5 p-2 text-[11px] text-destructive"
+            className="flex shrink-0 gap-2 rounded-sm border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive"
           >
             <TriangleAlert size={16} strokeWidth={1.5} className="mt-px shrink-0" />
             <span>
@@ -309,7 +309,7 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
             scroll
             bodyClassName="p-0"
             actions={
-              <span className="font-mono text-[10px] text-muted-foreground">
+              <span className="font-mono text-[11px] text-muted-foreground">
                 {state.fills.length > 0 ? `latest ${state.fills.length}` : ''}
               </span>
             }
@@ -319,7 +319,7 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
             ) : (
               <table data-testid="replay-fills" className="w-full">
                 <thead className="sticky top-0 bg-card">
-                  <tr className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                  <tr className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
                     <th className="px-3 py-1.5 text-left font-normal">Date</th>
                     <th className="px-3 py-1.5 text-left font-normal">Symbol</th>
                     <th className="px-3 py-1.5 text-left font-normal">Side</th>
@@ -343,10 +343,10 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
                         </StatusBadge>
                       </td>
                       <td className="px-3 py-1.5 text-right">
-                        <Numeric value={fill.qty} format="price" className="text-[11px]" />
+                        <Numeric value={fill.qty} format="price" className="text-xs" />
                       </td>
                       <td className="px-3 py-1.5 text-right">
-                        <Numeric value={fill.price} format="price" className="text-[11px]" />
+                        <Numeric value={fill.price} format="price" className="text-xs" />
                       </td>
                     </tr>
                   ))}
@@ -361,7 +361,7 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
             ) : (
               <table data-testid="replay-signals" className="w-full">
                 <thead className="sticky top-0 bg-card">
-                  <tr className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                  <tr className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
                     <th className="px-3 py-1.5 text-left font-normal">Date</th>
                     <th className="px-3 py-1.5 text-left font-normal">Symbol</th>
                     <th className="px-3 py-1.5 text-left font-normal">Direction</th>

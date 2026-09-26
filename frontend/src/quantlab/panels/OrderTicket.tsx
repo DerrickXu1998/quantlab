@@ -98,7 +98,7 @@ export function OrderTicket({
       }}
     >
       <label className="flex flex-col gap-1">
-        <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+        <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
           Symbol
         </span>
         <select
@@ -122,7 +122,7 @@ export function OrderTicket({
       />
 
       <label className="flex flex-col gap-1">
-        <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+        <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
           Quantity
         </span>
         <input
@@ -149,7 +149,7 @@ export function OrderTicket({
 
       {type === 'limit' ? (
         <label className="flex flex-col gap-1">
-          <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+          <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
             Limit price
           </span>
           <input
@@ -163,9 +163,9 @@ export function OrderTicket({
         </label>
       ) : null}
 
-      <div className="flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+      <div className="flex items-center justify-between font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
         <span>{type === 'market' ? 'Est. fill' : 'Fill price'}</span>
-        <Numeric value={fillPrice} className="text-[11px] text-foreground" />
+        <Numeric value={fillPrice} className="text-xs text-foreground" />
       </div>
 
       <Button type="submit" disabled={!valid} className="py-2">

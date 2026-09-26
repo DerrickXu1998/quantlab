@@ -89,7 +89,7 @@ function ToggleChip({
           : 'border-border bg-card text-foreground hover:bg-accent/40'
       }`}
     >
-      <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-muted-foreground">
+      <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
         {label}
       </span>
       {children}
@@ -211,7 +211,7 @@ export function IndicatorsView({
                       <FlashNumber
                         value={rsiSeries ? lastValue(rsiSeries) : null}
                         format="ratio"
-                        className="text-[11px]"
+                        className="text-xs"
                       />
                     ) : null}
                   </ToggleChip>
@@ -224,7 +224,7 @@ export function IndicatorsView({
                       <FlashNumber
                         value={macdResult ? lastValue(macdResult.histogram) : null}
                         format="price"
-                        className="text-[11px]"
+                        className="text-xs"
                       />
                     ) : null}
                   </ToggleChip>
@@ -234,7 +234,7 @@ export function IndicatorsView({
                     onToggle={() => toggle('bollinger')}
                   >
                     {active.has('bollinger') ? (
-                      <FlashNumber value={percentB} format="ratio" className="text-[11px]" />
+                      <FlashNumber value={percentB} format="ratio" className="text-xs" />
                     ) : null}
                   </ToggleChip>
                   <ToggleChip
@@ -246,7 +246,7 @@ export function IndicatorsView({
                       <FlashNumber
                         value={vwapSeries ? lastValue(vwapSeries) : null}
                         format="price"
-                        className="text-[11px]"
+                        className="text-xs"
                       />
                     ) : null}
                   </ToggleChip>
@@ -269,7 +269,7 @@ export function IndicatorsView({
                         value={tick?.price}
                         format="price"
                         tone="accent"
-                        className="text-[11px]"
+                        className="text-xs"
                       />
                     )}
                     <Button
@@ -316,7 +316,7 @@ export function IndicatorsView({
                     <FlashNumber
                       value={lastValue(rsiSeries)}
                       format="ratio"
-                      className="text-[11px]"
+                      className="text-xs"
                     />
                   }
                 >
@@ -338,7 +338,7 @@ export function IndicatorsView({
                     <FlashNumber
                       value={lastValue(macdResult.histogram)}
                       format="price"
-                      className="text-[11px]"
+                      className="text-xs"
                     />
                   }
                 >
@@ -352,7 +352,7 @@ export function IndicatorsView({
             ) : null}
 
             {mode === 'ticks' && active.has('vwap') ? (
-              <p className="shrink-0 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+              <p className="shrink-0 font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
                 {SIM_VWAP}
               </p>
             ) : null}

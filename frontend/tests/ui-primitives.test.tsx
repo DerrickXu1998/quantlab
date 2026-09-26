@@ -79,7 +79,7 @@ describe('StatusBadge', () => {
     expect(screen.getByText('Live')).toHaveClass(
       'rounded-sm',
       'font-mono',
-      'text-[10px]',
+      'text-[11px]',
       'uppercase',
       'tracking-[0.12em]',
     );

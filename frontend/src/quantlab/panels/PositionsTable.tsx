@@ -19,17 +19,17 @@ function PositionRow({ trade }: { trade: Trade }) {
         {trade.entry_date}
       </td>
       <td className="px-3 py-1.5 text-right">
-        <Numeric value={trade.entry_price} className="text-[11px]" />
+        <Numeric value={trade.entry_price} className="text-xs" />
       </td>
       <td className="px-3 py-1.5 text-right">
-        <Numeric value={trade.exit_price} className="text-[11px]" />
+        <Numeric value={trade.exit_price} className="text-xs" />
       </td>
       <td className="px-3 py-1.5 text-right">
         <Numeric
           value={trade.return_pct}
           format="signedPercent"
           tone="signed"
-          className="text-[11px]"
+          className="text-xs"
         />
       </td>
       <td className="px-3 py-1.5 text-right">
@@ -37,7 +37,7 @@ function PositionRow({ trade }: { trade: Trade }) {
           value={liveReturn}
           format="signedPercent"
           tone="signed"
-          className="text-[11px]"
+          className="text-xs"
         />
       </td>
     </tr>
@@ -67,7 +67,7 @@ export function PositionsTable({ trades }: { trades: Trade[] }) {
   return (
     <table data-testid="positions-table" className="w-full">
       <thead>
-        <tr className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+        <tr className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
           <th className="px-3 py-1.5 text-left font-normal">Symbol</th>
           <th className="px-3 py-1.5 text-left font-normal">Entry</th>
           <th className="px-3 py-1.5 text-right font-normal">Price</th>

@@ -55,12 +55,12 @@ export function ModelList({
             >
               <span className="flex items-baseline justify-between gap-2">
                 <span className="truncate font-mono text-[12px]">{model.name}</span>
-                <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
                   v{model.version}
                 </span>
               </span>
 
-              <span className="mt-1 block text-[11px] text-muted-foreground">
+              <span className="mt-1 block text-xs text-muted-foreground">
                 {model.direction_semantics}
               </span>
 
@@ -68,20 +68,20 @@ export function ModelList({
                 <LifecycleRow />
               </span>
 
-              <span className="mt-1.5 flex flex-wrap items-center gap-x-3 text-[10px] text-muted-foreground">
+              <span className="mt-1.5 flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
                 <span className="font-mono">
-                  <Numeric value={model.lookback_days} format="integer" className="text-[10px]" />
+                  <Numeric value={model.lookback_days} format="integer" className="text-xs" />
                   d lookback
                 </span>
                 <span className="font-mono">{model.scale_class.replace('_', '-')}</span>
                 <span className="font-mono">
-                  <Numeric value={runs.length} format="integer" className="text-[10px]" />{' '}
+                  <Numeric value={runs.length} format="integer" className="text-xs" />{' '}
                   {runs.length === 1 ? 'run' : 'runs'}
                 </span>
                 {latest ? (
                   <span className="flex items-center gap-1">
                     last
-                    <Numeric value={latest.signal_count} format="integer" className="text-[10px]" />
+                    <Numeric value={latest.signal_count} format="integer" className="text-xs" />
                     sig
                   </span>
                 ) : null}

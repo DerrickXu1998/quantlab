@@ -63,7 +63,7 @@ export function UserMenu() {
           aria-label="Account"
           className="absolute right-0 top-full z-20 mt-1 w-56 border border-border bg-card p-2 shadow-none"
         >
-          <p className="break-all px-1 pb-2 text-[11px] text-muted-foreground">
+          <p className="break-all px-1 pb-2 text-xs text-muted-foreground">
             Signed in as <span className="font-mono text-foreground">{auth.user.email}</span>. Runs
             and strategies are private to this account.
           </p>

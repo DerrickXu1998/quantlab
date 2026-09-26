@@ -24,7 +24,7 @@ export function PortfolioSummary({
 
   return (
     <div data-testid="portfolio-summary" className="px-2 py-10 sm:px-8">
-      <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+      <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
         Book value
       </p>
 
@@ -42,7 +42,7 @@ export function PortfolioSummary({
         />
       </div>
 
-      <div className="mt-6 flex flex-wrap items-center gap-x-6 gap-y-2 text-[11px] text-muted-foreground">
+      <div className="mt-6 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-muted-foreground">
         <span className="flex items-center gap-2">
           <StatusBadge tone="good">{run.model_name}</StatusBadge>
           <span className="font-mono">v{run.model_version}</span>

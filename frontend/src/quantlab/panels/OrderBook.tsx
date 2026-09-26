@@ -52,7 +52,7 @@ export function OrderBook({ book }: { book: OrderBook }) {
             the column header on top of its column instead of stranding it at
             the panel's top edge with the slack in between. */}
         <div className="flex flex-1 flex-col justify-end">
-          <div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+          <div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
             <span>Price</span>
             <span>Size</span>
           </div>
@@ -65,10 +65,10 @@ export function OrderBook({ book }: { book: OrderBook }) {
         </div>
         <div
           data-testid="order-book-spread"
-          className="flex shrink-0 items-center justify-between border-y border-border px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground"
+          className="flex shrink-0 items-center justify-between border-y border-border px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground"
         >
           <span>Spread</span>
-          <Numeric value={book.spread} className="text-[11px]" />
+          <Numeric value={book.spread} className="text-xs" />
         </div>
         <div className="flex flex-1 flex-col divide-y divide-border">
           {book.bids.map((level, index) => (

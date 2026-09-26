@@ -6,12 +6,12 @@ function Item({ symbol }: { symbol: string }) {
   return (
     <span className="flex items-center gap-2 whitespace-nowrap px-4">
       <span className="font-mono text-[11px] text-muted-foreground">{symbol}</span>
-      <Numeric value={tick?.price} format="price" className="text-[11px]" />
+      <Numeric value={tick?.price} format="price" className="text-xs" />
       <Numeric
         value={tick?.changePct}
         format="signedPercent"
         tone="signed"
-        className="text-[10px]"
+        className="text-xs"
       />
     </span>
   );
