@@ -138,6 +138,26 @@ describe('CandlestickChart', () => {
     expect(candles.setData.mock.calls.length).toBeGreaterThan(callsAfterMount);
   });
 
+  it('fits the whole date range into view whenever the data changes', () => {
+    const { rerender } = renderChart({ bars });
+    const [chart] = createdCharts;
+
+    const fitCalls = () =>
+      vi.mocked(chart.timeScale).mock.results.map((r) => r.value.fitContent);
+
+    expect(fitCalls()).toHaveLength(1);
+    expect(fitCalls()[0]).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <ThemeProvider>
+        <CandlestickChart bars={[...bars, makeBar({ date: '2024-03-18', close: 108 })]} />
+      </ThemeProvider>,
+    );
+
+    expect(fitCalls()).toHaveLength(2);
+    expect(fitCalls()[1]).toHaveBeenCalledTimes(1);
+  });
+
   it('removes the chart on unmount', () => {
     const { unmount } = renderChart({ bars });
     const [chart] = createdCharts;
