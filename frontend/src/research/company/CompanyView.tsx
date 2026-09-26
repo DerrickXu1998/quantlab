@@ -1,16 +1,20 @@
 import { Search } from 'lucide-react';
 import { useMemo, useState, type ReactNode } from 'react';
+import type { ChartSignal } from '../../components/CandlestickChart';
 import { EmptyState } from '../../components/ui/empty-state';
 import { FillColumn, ScrollRegion, StatGrid } from '../../components/ui/layout';
 import { StatusBadge } from '../../components/ui/status-badge';
+import { useOptionalRuns } from '../../runs/RunsContext';
 import { useInstrumentFacts } from '../../strategies/useFundamentals';
 import { NOT_APPLICABLE, formatCount, formatPrice } from '../format';
 import { AsFiledPanel } from './AsFiledPanel';
 import { AsOfControl } from './AsOfControl';
 import { CoveragePanel } from './CoveragePanel';
+import { ModelsPanel } from './ModelsPanel';
 import { PricePanel } from './PricePanel';
 import { SignalHistoryPanel } from './SignalHistoryPanel';
 import { SymbolPicker, SymbolPickerRetry } from './SymbolPicker';
+import { markerLabel, useModelOverlays } from './useModelOverlays';
 import {
   todayISO,
   useAsFiledRows,
@@ -82,6 +86,25 @@ export function CompanyView({ symbol, onSelectSymbol, asOf: asOfProp, onAsOfChan
   const missing = company?.concepts_missing ?? [];
   const hasAnyFilings = overview.status === 'ready' ? available.length > 0 : null;
   const currency = company?.currency ?? catalogued?.currency ?? null;
+
+  // Models applied to this ticker. The run store is optional so the view
+  // still renders on its own (tests, embeds); without it there is no panel.
+  const runs = useOptionalRuns();
+  const models = useModelOverlays(symbol, runs?.reloadRuns);
+  const firstBar = prices.data.length > 0 ? prices.data[0].date : null;
+  const chartSignals = useMemo<ChartSignal[]>(
+    () =>
+      models.overlays
+        .filter((overlay) => overlay.visible && overlay.status === 'ready')
+        .flatMap((overlay) =>
+          overlay.signals.map((signal) => ({
+            date: signal.date,
+            direction: signal.direction,
+            label: markerLabel(overlay.model.name),
+          })),
+        ),
+    [models.overlays],
+  );
 
   function reloadCompany() {
     overview.reload();
@@ -164,6 +187,7 @@ export function CompanyView({ symbol, onSelectSymbol, asOf: asOfProp, onAsOfChan
                 message={prices.message}
                 currency={currency}
                 onRetry={prices.reload}
+                signals={chartSignals}
               />
               <AsFiledPanel
                 symbol={symbol}
@@ -176,6 +200,23 @@ export function CompanyView({ symbol, onSelectSymbol, asOf: asOfProp, onAsOfChan
               />
             </div>
             <div className="flex min-w-0 flex-col gap-3">
+              {runs ? (
+                <ModelsPanel
+                  symbol={symbol}
+                  catalog={runs.catalog}
+                  catalogReady={runs.modelsStatus === 'ready'}
+                  start={firstBar}
+                  end={asOf}
+                  overlays={models.overlays}
+                  onApply={(model, parameters) => {
+                    if (firstBar) {
+                      void models.apply({ model, parameters, symbol, start: firstBar, end: asOf });
+                    }
+                  }}
+                  onToggle={models.toggle}
+                  onRemove={models.remove}
+                />
+              ) : null}
               <SignalHistoryPanel
                 symbol={symbol}
                 signals={company?.signals ?? []}
@@ -271,7 +312,7 @@ function Identity({
 function Stat({ label, value, mono = true }: { label: string; value: ReactNode; mono?: boolean }) {
   return (
     <div>
-      <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+      <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
         {label}
       </p>
       <p className={mono ? 'mt-0.5 font-mono text-sm tabular-nums' : 'mt-0.5 text-sm'}>{value}</p>

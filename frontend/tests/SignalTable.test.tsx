@@ -80,7 +80,7 @@ describe('SignalTable re-run handoff', () => {
     window.location.hash = '';
   });
 
-  it('"Re-run" deep-links Strategies with the model and parameters prefilled', async () => {
+  it('"Re-run" deep-links Strategies with the model, its ticker and parameters prefilled', async () => {
     const user = userEvent.setup();
     renderTable();
 
@@ -88,7 +88,7 @@ describe('SignalTable re-run handoff', () => {
     await user.click(screen.getAllByRole('button', { name: /re-run/i })[0]);
 
     expect(window.location.hash).toBe(
-      '#/strategies?model=sma-crossover&version=1.0.0&p_fast=20&p_slow=50',
+      '#/strategies?model=sma-crossover&version=1.0.0&symbol=ZZTRND&p_fast=20&p_slow=50',
     );
   });
 

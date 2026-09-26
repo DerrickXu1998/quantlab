@@ -20,9 +20,19 @@ import { token } from '../lib/token';
 import { useTheme } from '../theme/ThemeProvider';
 import { usePanelSize } from './usePanelSize';
 
+/** A model's signal, drawn on the bar it fired on. */
+export interface ChartSignal {
+  date: string;
+  direction: 'bullish' | 'bearish';
+  /** Short text beside the arrow, so several models can share one chart. */
+  label: string;
+}
+
 interface CandlestickChartProps {
   bars: PriceBar[];
   markerDate?: string;
+  /** Model signals: bullish below the bar pointing up, bearish above pointing down. */
+  signals?: ChartSignal[];
   /**
    * Size from container observation instead of dock-panel events. Only safe
    * outside the dock — see the note at the creation site (FR-009).
@@ -91,7 +101,14 @@ function isVolumePoint(data: unknown): data is { value: number } {
   );
 }
 
-export function CandlestickChart({ bars, markerDate, autoSize = false }: CandlestickChartProps) {
+const NO_SIGNALS: ChartSignal[] = [];
+
+export function CandlestickChart({
+  bars,
+  markerDate,
+  signals = NO_SIGNALS,
+  autoSize = false,
+}: CandlestickChartProps) {
   const { theme } = useTheme();
   const { width, height, isVisible } = usePanelSize();
 
@@ -202,8 +219,24 @@ export function CandlestickChart({ bars, markerDate, autoSize = false }: Candles
           },
         ]
       : [];
+    // Only signals on a bar the chart has: a marker on a date outside the
+    // series makes lightweight-charts throw.
+    const onChart = new Set(bars.map((bar) => bar.date));
+    for (const signal of signals) {
+      if (!onChart.has(signal.date)) continue;
+      const bullish = signal.direction === 'bullish';
+      marker.push({
+        time: signal.date as Time,
+        position: bullish ? 'belowBar' : 'aboveBar',
+        shape: bullish ? 'arrowUp' : 'arrowDown',
+        color: bullish ? colors.up : colors.down,
+        text: signal.label,
+      });
+    }
+    // The plugin wants markers in time order.
+    marker.sort((a, b) => String(a.time).localeCompare(String(b.time)));
     markers.setMarkers(marker);
-  }, [bars, markedBar, theme]);
+  }, [bars, markedBar, signals, theme]);
 
   // Apply the panel's size, but only while the panel is actually visible. A
   // hidden panel reports a box we must not draw to; on the hidden -> visible
@@ -264,6 +297,11 @@ export function CandlestickChart({ bars, markerDate, autoSize = false }: Candles
       {markedBar && (
         <span data-testid="signal-marker" className="sr-only">
           Signal marked on {markedBar.date}
+        </span>
+      )}
+      {signals.length > 0 && (
+        <span data-testid="chart-signal-count" className="sr-only">
+          {signals.length} model signals marked on the chart
         </span>
       )}
       {hover && (

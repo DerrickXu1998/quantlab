@@ -23,7 +23,7 @@ export function CoverageLine({
 
   if (!coverage) {
     return (
-      <p data-testid={`coverage-${metric}`} className="text-[11px] text-muted-foreground">
+      <p data-testid={`coverage-${metric}`} className="text-xs text-muted-foreground">
         {label} — coverage is reported once the screen runs.
       </p>
     );
@@ -34,7 +34,7 @@ export function CoverageLine({
 
   return (
     <div data-testid={`coverage-${metric}`} className="space-y-1">
-      <p className="font-mono text-[10px] tabular-nums tracking-[0.04em] text-muted-foreground">
+      <p className="font-mono text-[11px] tabular-nums tracking-[0.04em] text-muted-foreground">
         {label} — {formatCount(coverage.measured)} of {formatCount(coverage.universe)}{' '}
         names measured
         <span className="ml-1.5 text-foreground">({formatPercent(share, 0)})</span>
@@ -51,7 +51,7 @@ export function CoverageLine({
         />
       </div>
       {requires.length > 0 ? (
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           needs {requires.map(conceptLabel).join(', ').toLowerCase()}
         </p>
       ) : null}
@@ -74,7 +74,7 @@ function Figure({
 }) {
   return (
     <div data-testid={testId}>
-      <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+      <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
         {label}
       </p>
       <p
@@ -84,7 +84,7 @@ function Figure({
       >
         {value}
       </p>
-      <p className="mt-0.5 max-w-[16rem] text-[11px] leading-snug text-muted-foreground">{detail}</p>
+      <p className="mt-0.5 max-w-[16rem] text-xs leading-snug text-muted-foreground">{detail}</p>
     </div>
   );
 }

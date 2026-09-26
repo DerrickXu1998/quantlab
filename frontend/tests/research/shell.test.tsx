@@ -79,7 +79,7 @@ describe('useResearchRoute', () => {
     const before = window.history.length;
     const { result } = renderHook(() => useResearchRoute());
 
-    act(() => result.current.setMode('test'));
+    act(() => result.current.setMode('company'));
     act(() => result.current.setMode('screen'));
 
     expect(window.history.length).toBe(before);
@@ -113,7 +113,7 @@ describe('ResearchShell', () => {
     for (const mode of RESEARCH_MODES) {
       expect(screen.getByRole('tab', { name: MODE_DEFINITIONS[mode].label })).toBeInTheDocument();
     }
-    expect(screen.getByRole('tab', { selected: true })).toHaveAccessibleName('Company');
+    expect(screen.getByRole('tab', { selected: true })).toHaveAccessibleName('Ticker');
   });
 
   it('switches mode on click', async () => {
@@ -124,9 +124,9 @@ describe('ResearchShell', () => {
       </ResearchShell>,
     );
 
-    await userEvent.click(screen.getByRole('tab', { name: 'Test' }));
+    await userEvent.click(screen.getByRole('tab', { name: 'Screen' }));
 
-    expect(onModeChange).toHaveBeenCalledWith('test');
+    expect(onModeChange).toHaveBeenCalledWith('screen');
   });
 
   it('mounts only the active mode', () => {

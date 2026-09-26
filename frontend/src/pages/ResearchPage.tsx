@@ -1,8 +1,9 @@
 import { CompanyView } from '../research/company/CompanyView';
 import { ScreenView } from '../research/screen/ScreenView';
-import { TestView } from '../research/test/TestView';
 import { ResearchShell } from '../research/shell/ResearchShell';
 import { useResearchRoute } from '../research/shell/useResearchRoute';
+import { replaceRoute, useRoute } from '../chrome/router';
+import { useEffect } from 'react';
 
 /**
  * The Research destination.
@@ -20,6 +21,14 @@ import { useResearchRoute } from '../research/shell/useResearchRoute';
  */
 export function ResearchPage() {
   const { mode, symbol, asOf, setMode, setAsOf, selectSymbol } = useResearchRoute();
+  const route = useRoute();
+  const legacyTest = route.destination === 'research' && route.params.get('mode') === 'test';
+
+  // Research's old Test mode ran one rule over many names -- that is a
+  // strategy, so a bookmark to it now lands in Strategies.
+  useEffect(() => {
+    if (legacyTest) replaceRoute('strategies', new URLSearchParams());
+  }, [legacyTest]);
 
   return (
     <ResearchShell mode={mode} onModeChange={setMode}>
@@ -30,10 +39,8 @@ export function ResearchPage() {
           asOf={asOf ?? undefined}
           onAsOfChange={setAsOf}
         />
-      ) : mode === 'screen' ? (
-        <ScreenView onSelectSymbol={(next) => selectSymbol(next)} />
       ) : (
-        <TestView />
+        <ScreenView onSelectSymbol={(next) => selectSymbol(next)} />
       )}
     </ResearchShell>
   );

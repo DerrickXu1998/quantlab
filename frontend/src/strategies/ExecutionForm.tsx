@@ -17,7 +17,7 @@ import { Input, Select } from '../components/ui/field';
  * price, a return or an indicator (Constitution V).
  */
 
-const MICRO = 'font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground';
+const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
 
 const SIZING_LABELS: Record<PositionSizing, string> = {
   equal_weight: 'Equal weight',
@@ -59,7 +59,7 @@ function Section({ title, note, children }: { title: string; note?: string; chil
   return (
     <fieldset className="space-y-3 border-t border-border pt-3">
       <legend className={MICRO}>{title}</legend>
-      {note ? <p className="text-[11px] text-muted-foreground">{note}</p> : null}
+      {note ? <p className="text-xs text-muted-foreground">{note}</p> : null}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">{children}</div>
     </fieldset>
   );
@@ -89,7 +89,7 @@ function Field({
         {children({ id, describedBy })}
         {suffix ? <span className={`${MICRO} shrink-0`}>{suffix}</span> : null}
       </div>
-      <p id={describedBy} className="text-[11px] text-muted-foreground">
+      <p id={describedBy} className="text-xs text-muted-foreground">
         {explainer}
       </p>
     </div>
@@ -503,7 +503,7 @@ export function ResolutionOrder() {
       <summary className={`${MICRO} cursor-pointer`}>
         What happens when two of these fire on the same bar
       </summary>
-      <ol className="mt-2 list-decimal space-y-1 pl-4 text-[11px] text-muted-foreground">
+      <ol className="mt-2 list-decimal space-y-1 pl-4 text-xs text-muted-foreground">
         <li>Mark the bar.</li>
         <li>
           Protective exits, in this order: stop loss → trailing stop → take profit → max holding
@@ -512,7 +512,7 @@ export function ResolutionOrder() {
         <li>Signal exits, once min holding days has elapsed.</li>
         <li>Signal entries, subject to max positions, cooldown, cash and every filter.</li>
       </ol>
-      <p className="mt-2 text-[11px] text-muted-foreground">
+      <p className="mt-2 text-xs text-muted-foreground">
         A stop and a target both inside one bar’s high–low resolve to the <strong>stop</strong>.
         Intraday order is unknowable from a daily bar, and assuming the favourable one is how
         backtests flatter themselves. Stops fill at the stop price; a gap through the level fills at

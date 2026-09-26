@@ -10,7 +10,7 @@ import { conceptCoverage, conceptLabel } from './fundamentals';
 import { canFillRole, componentErrors, describeComponent, roleRefusal } from './strategyModel';
 import type { DraftComponent } from './strategyModel';
 
-const MICRO = 'font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground';
+const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
 
 const ROLE_TONE: Record<StrategyRole, 'active' | 'good' | 'idle'> = {
   entry: 'active',
@@ -57,7 +57,7 @@ export function StrategyComponentEditor({
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="truncate font-mono text-[12px]">{component.rule_name}</p>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">
+          <p className="mt-0.5 text-xs text-muted-foreground">
             {describeComponent(component, model)}
           </p>
         </div>
@@ -78,7 +78,7 @@ export function StrategyComponentEditor({
       </div>
 
       {model === null ? (
-        <p role="alert" className="flex gap-2 text-[11px] text-destructive">
+        <p role="alert" className="flex gap-2 text-xs text-destructive">
           <TriangleAlert size={16} strokeWidth={1.5} className="shrink-0" aria-hidden="true" />
           <span>
             {component.rule_name} is not in the registry any more. The strategy stays readable, but
@@ -137,7 +137,7 @@ export function StrategyComponentEditor({
           </div>
 
           {refusal ? (
-            <p role="alert" className="text-[11px] text-destructive">
+            <p role="alert" className="text-xs text-destructive">
               {refusal}
             </p>
           ) : null}
@@ -227,7 +227,7 @@ export function StrategyComponentEditor({
                   return (
                     <li
                       key={concept}
-                      className="flex flex-wrap items-baseline gap-x-2 text-[11px] text-muted-foreground"
+                      className="flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground"
                     >
                       <span className="font-mono text-foreground">{conceptLabel(concept)}</span>
                       {entry ? (
@@ -244,7 +244,7 @@ export function StrategyComponentEditor({
             </div>
           ) : null}
 
-          <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
             <input
               type="checkbox"
               checked={component.invert}

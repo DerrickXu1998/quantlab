@@ -139,7 +139,7 @@ export function SymbolPicker({
     <div ref={rootRef} className="relative min-w-0 flex-1">
       <label
         htmlFor={`${listId}-input`}
-        className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground"
+        className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground"
       >
         Company
       </label>
@@ -187,7 +187,7 @@ export function SymbolPicker({
         ) : null}
       </div>
 
-      <p className="mt-1 text-[11px] text-muted-foreground">
+      <p className="mt-1 text-xs text-muted-foreground">
         {captionFor(status, message, chosen)}
       </p>
 
@@ -226,7 +226,7 @@ export function SymbolPicker({
             </ul>
           )}
           {matches.length > shown.length ? (
-            <p className="border-t border-border px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+            <p className="border-t border-border px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
               {shown.length} of {matches.length.toLocaleString('en-US')} matches — keep typing
             </p>
           ) : null}

@@ -1,6 +1,6 @@
 import { ChartCandlestick } from 'lucide-react';
 import type { PriceBar } from '../../api/client';
-import { CandlestickChart } from '../../components/CandlestickChart';
+import { CandlestickChart, type ChartSignal } from '../../components/CandlestickChart';
 import { formatCount, formatPrice } from '../format';
 import { Panel, PanelEmpty, PanelState } from './Panel';
 import type { ReadStatus } from './useCompany';
@@ -13,6 +13,8 @@ export interface PricePanelProps {
   message: string | null;
   currency: string | null;
   onRetry: () => void;
+  /** Signals from the models applied in the Models panel. */
+  signals?: ChartSignal[];
 }
 
 /**
@@ -34,6 +36,7 @@ export function PricePanel({
   message,
   currency,
   onRetry,
+  signals,
 }: PricePanelProps) {
   const last = bars.length > 0 ? bars[bars.length - 1] : null;
 
@@ -70,10 +73,18 @@ export function PricePanel({
       ) : (
         <div className="flex min-h-0 flex-1 flex-col gap-2 p-3">
           <div className="min-h-[320px] flex-1">
-            <CandlestickChart bars={bars} autoSize />
+            <CandlestickChart bars={bars} signals={signals} autoSize />
           </div>
-          <p className="shrink-0 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+          <p className="shrink-0 font-mono text-xs uppercase tracking-[0.12em] text-muted-foreground">
             {formatCount(bars.length)} bars · {bars[0].date} → {last?.date}
+            {signals && signals.length > 0 ? (
+              <>
+                {' · '}
+                <span className="text-primary">▲ bullish</span>{' '}
+                <span className="text-destructive">▼ bearish</span> ·{' '}
+                {formatCount(signals.length)} model signals
+              </>
+            ) : null}
           </p>
         </div>
       )}

@@ -102,14 +102,13 @@ describe('the plain-English summary', () => {
   });
 
   it('names the entry, its parameters, and the filter that gates it', () => {
-    const draft = draftWith(
-      componentFor(rsiThreshold, 'entry'),
-      componentFor(adxFilter, 'filter'),
-    );
+    const draft = draftWith(componentFor(rsiThreshold, 'entry'), componentFor(adxFilter, 'filter'));
 
     const sentence = describeStrategy(draft, catalog);
 
-    expect(sentence).toMatch(/Enter when RSI crossing out of its oversold band \(period 14, oversold 30\)/);
+    expect(sentence).toMatch(
+      /Enter when RSI crossing out of its oversold band \(period 14, oversold 30\)/,
+    );
     expect(sentence).toMatch(/while ADX above its threshold.*holds/);
     expect(sentence).toMatch(/Long only/);
   });
@@ -263,7 +262,11 @@ describe('StrategyBuilder', () => {
     const list = await screen.findByTestId('template-list');
     expect(apiClient.listStrategyTemplates).toHaveBeenCalledTimes(1);
     // Server order, server names, server prose.
-    expect(within(list).getAllByRole('listitem').map((row) => row.textContent?.slice(0, 20))).toEqual([
+    expect(
+      within(list)
+        .getAllByRole('listitem')
+        .map((row) => row.textContent?.slice(0, 20)),
+    ).toEqual([
       expect.stringContaining('RSI mean reversion'),
       expect.stringContaining('MACD trend'),
       expect.stringContaining('Donchian'),
@@ -275,7 +278,9 @@ describe('StrategyBuilder', () => {
     const person = await openBuilder();
     await screen.findByTestId('template-list');
 
-    await person.click(screen.getByRole('button', { name: /load the rsi mean reversion template/i }));
+    await person.click(
+      screen.getByRole('button', { name: /load the rsi mean reversion template/i }),
+    );
 
     expect(screen.getByDisplayValue('RSI mean reversion')).toBeInTheDocument();
     expect(screen.getByTestId('strategy-summary')).toHaveTextContent(/Enter when RSI/);
@@ -345,13 +350,15 @@ describe('StrategyBuilder', () => {
   });
 
   it('runs the strategy that is on screen, not the last one that was saved', async () => {
-    vi.mocked(apiClient.createStrategyRun).mockRejectedValue(new apiClient.ApiError(0, 'no backend'));
+    vi.mocked(apiClient.createStrategyRun).mockRejectedValue(
+      new apiClient.ApiError(0, 'no backend'),
+    );
     const person = await openBuilder();
 
     await person.click(addFrom('rsi-threshold', 'Entry'));
     expect(screen.getByRole('button', { name: /run backtest/i })).toBeDisabled();
 
-    await person.selectOptions(screen.getByLabelText('Instruments'), 'ZZTRND');
+    await person.type(screen.getByLabelText(/add tickers/i), 'ZZTRND{Enter}');
     await person.click(screen.getByRole('button', { name: /run backtest/i }));
 
     await waitFor(() => expect(apiClient.createStrategyRun).toHaveBeenCalledTimes(1));
@@ -361,6 +368,24 @@ describe('StrategyBuilder', () => {
     expect(body.strategy?.components).toHaveLength(1);
     // A failure to reach the backend is an explained state, never a blank one.
     expect(await screen.findByTestId('builder-run-error')).toHaveAttribute('role', 'alert');
+  });
+
+  it('adds a handed-over signal as the first entry, with its ticker as the universe', async () => {
+    render(
+      <RunsProvider>
+        <StrategyBuilder
+          instruments={instruments}
+          seed={{ key: 'k', model: 'rsi-threshold', values: { period: '21' }, symbols: ['ZZMEAN'] }}
+        />
+      </RunsProvider>,
+    );
+    await screen.findByTestId('signal-catalogue');
+
+    expect(await screen.findByText(/rsi-threshold added as entry/i)).toBeInTheDocument();
+    expect(screen.getByTestId('universe-count')).toHaveTextContent(/1 ticker/i);
+    expect(
+      within(screen.getByRole('list', { name: /selected tickers/i })).getByText('ZZMEAN'),
+    ).toBeInTheDocument();
   });
 
   it('distinguishes an empty library from one it could not read', async () => {

@@ -15,7 +15,7 @@ import {
 import type { Draft } from './strategyModel';
 import type { FundamentalsStatus } from './useFundamentals';
 
-const MICRO = 'font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground';
+const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
 
 /**
  * What the strategy cannot see, said before the run rather than after it.
@@ -53,7 +53,7 @@ export function CoverageWarning({
   status: FundamentalsStatus;
   message: string | null;
   onReload: () => void;
-  /** Opens the point-in-time inspector on a name that cannot trade. */
+  /** Opens a name that cannot trade in Research, showing what it had filed by then. */
   onInspect: (symbol: string) => void;
 }) {
   const components = useMemo(
@@ -112,7 +112,7 @@ export function CoverageWarning({
         ) : null}
       </div>
 
-      <p className="text-[11px] text-muted-foreground">
+      <p className="text-xs text-muted-foreground">
         {components.length === 1 ? 'This component reads' : 'These components read'}{' '}
         <span className="text-foreground">{conceptList || 'filed fundamentals'}</span>. A name with
         no filing has no ratio, so its gate is shut — never "cheap".
@@ -175,15 +175,15 @@ export function CoverageWarning({
                 <button
                   type="button"
                   onClick={() => onInspect(symbol)}
-                  title={`Open ${symbol} in the point-in-time inspector`}
-                  className="border border-border px-1.5 py-px font-mono text-[10px] tracking-[0.06em] text-muted-foreground transition-colors hover:text-foreground"
+                  title={`Open ${symbol} in Research to see what it had filed`}
+                  className="border border-border px-1.5 py-px font-mono text-[11px] tracking-[0.06em] text-muted-foreground transition-colors hover:text-foreground"
                 >
                   {symbol}
                 </button>
               </li>
             ))}
           </ul>
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             {gap.basis === 'concept'
               ? `Checked concept by concept: each of these is missing at least one of ${conceptList}.`
               : 'Checked against names with any filing at all — a name counted as covered may still be missing one of these concepts, so this is a floor.'}
@@ -196,7 +196,7 @@ export function CoverageWarning({
           {starved.map((concept) => {
             const entry = conceptCoverage(coverage, concept);
             return (
-              <li key={concept} role="alert" className="flex gap-2 border border-border p-2 text-[11px]">
+              <li key={concept} role="alert" className="flex gap-2 border border-border p-2 text-xs">
                 <TriangleAlert
                   size={16}
                   strokeWidth={1.5}

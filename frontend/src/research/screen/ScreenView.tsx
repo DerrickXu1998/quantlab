@@ -148,7 +148,7 @@ export function ScreenView({ onSelectSymbol }: ScreenViewProps): JSX.Element {
             purpose="The names that cleared every bound, ranked — beside how many were never measured at all."
             actions={
               result ? (
-                <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+                <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
                   as filed on {result.as_of}
                 </span>
               ) : null
@@ -337,7 +337,7 @@ function Results({
   return (
     <>
       <div className="shrink-0 space-y-3 border-b border-border p-3">
-        <p className="text-[11px] leading-snug text-muted-foreground" data-testid="screen-question">
+        <p className="text-xs leading-snug text-muted-foreground" data-testid="screen-question">
           {answered.constraints.length === 0
             ? `${formatCount(result.universe_size)} names in ${result.universe}, unconstrained.`
             : `${result.universe} where ${answered.constraints.map(describeConstraint).join(' and ')}.`}
@@ -353,7 +353,7 @@ function Results({
         */}
         {result.coverage.length > 0 ? (
           <div className="space-y-2 border-t border-border pt-3">
-            <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+            <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
               What could be measured at all
             </p>
             <div className="grid grid-cols-1 gap-x-8 gap-y-2 md:grid-cols-2 xl:grid-cols-3">
