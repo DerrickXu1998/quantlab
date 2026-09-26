@@ -50,11 +50,11 @@ export function Assumptions({
             What this run assumed
           </span>
         </span>
-        <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+        <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
           {assumptions.length}
         </span>
       </summary>
-      <ul className="space-y-1 px-3 py-2 text-[11px] text-muted-foreground">
+      <ul className="space-y-1 px-3 py-2 text-xs text-muted-foreground">
         {assumptions.map((line) => (
           <li key={line} className="flex gap-2">
             <span aria-hidden="true" className="text-primary">
@@ -64,7 +64,7 @@ export function Assumptions({
           </li>
         ))}
       </ul>
-      <p className="border-t border-border px-3 py-1.5 text-[10px] text-muted-foreground">
+      <p className="border-t border-border px-3 py-1.5 text-xs text-muted-foreground">
         Derived from the execution criteria this run was given, not written here — these figures are
         still a simulation and are not tradeable.
       </p>

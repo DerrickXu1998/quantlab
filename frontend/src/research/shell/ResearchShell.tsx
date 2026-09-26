@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Building2, FlaskConical, Filter, type LucideIcon } from 'lucide-react';
+import { Building2, Filter, type LucideIcon } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { FillColumn } from '../../components/ui/layout';
 import { RESEARCH_MODES, type ResearchMode } from './useResearchRoute';
@@ -29,21 +29,16 @@ interface ModeDefinition {
 export const MODE_DEFINITIONS: Record<ResearchMode, ModeDefinition> = {
   company: {
     id: 'company',
-    label: 'Company',
+    label: 'Ticker',
     icon: Building2,
-    purpose: 'Look up one name and see its price, its accounts as filed, and every signal it has fired.',
+    purpose:
+      'Load one ticker and study it: its price history, models applied to it and marked on the chart, its accounts as filed, and every signal it has fired.',
   },
   screen: {
     id: 'screen',
     label: 'Screen',
     icon: Filter,
-    purpose: 'Narrow a universe by the ratios companies actually filed, then open any name.',
-  },
-  test: {
-    id: 'test',
-    label: 'Test',
-    icon: FlaskConical,
-    purpose: 'Run a rule over history and see what it would have done.',
+    purpose: 'Find tickers by the ratios companies actually filed, then open any one of them.',
   },
 };
 
@@ -185,7 +180,7 @@ export function ResearchPanel({
             {Icon ? <Icon size={16} strokeWidth={1.5} className="text-muted-foreground" /> : null}
             {title}
           </h2>
-          <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{purpose}</p>
+          <p className="mt-0.5 text-xs leading-snug text-muted-foreground">{purpose}</p>
         </div>
         {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
       </div>

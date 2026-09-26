@@ -44,7 +44,7 @@ export function TradeLog({ trades }: { trades: TradeV2[] }) {
     <div className="max-h-72 overflow-y-auto">
       <table data-testid="trade-log" className="w-full">
         <thead className="sticky top-0 bg-card">
-          <tr className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+          <tr className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
             <th className={head}>Symbol</th>
             <th className={head}>Side</th>
             <th className={head}>In</th>
@@ -77,15 +77,15 @@ export function TradeLog({ trades }: { trades: TradeV2[] }) {
                   {trade.exit_date ?? <StatusBadge tone="active">Open</StatusBadge>}
                 </td>
                 <td className="px-3 py-1.5 text-right">
-                  <Numeric value={trade.qty} format="ratio" className="text-[11px]" />
+                  <Numeric value={trade.qty} format="ratio" className="text-xs" />
                 </td>
                 <td className="px-3 py-1.5 text-right">
-                  <Numeric value={trade.entry_price} className="text-[11px]" />
+                  <Numeric value={trade.entry_price} className="text-xs" />
                 </td>
                 <td className="px-3 py-1.5 text-right">
-                  <Numeric value={trade.exit_price} className="text-[11px]" />
+                  <Numeric value={trade.exit_price} className="text-xs" />
                 </td>
-                <td className="px-3 py-1.5 text-[11px] text-muted-foreground">
+                <td className="px-3 py-1.5 text-xs text-muted-foreground">
                   {trade.open ? (
                     <span title="Still held at the end of the window.">still open</span>
                   ) : (
@@ -97,7 +97,7 @@ export function TradeLog({ trades }: { trades: TradeV2[] }) {
                     value={trade.pnl}
                     format="signedPrice"
                     tone="signed"
-                    className="text-[11px]"
+                    className="text-xs"
                   />
                 </td>
                 <td className="px-3 py-1.5 text-right">
@@ -105,7 +105,7 @@ export function TradeLog({ trades }: { trades: TradeV2[] }) {
                     value={trade.fees}
                     format="price"
                     tone="muted"
-                    className="text-[11px]"
+                    className="text-xs"
                   />
                 </td>
                 <td className="px-3 py-1.5 text-right">
@@ -113,7 +113,7 @@ export function TradeLog({ trades }: { trades: TradeV2[] }) {
                     value={trade.return_pct}
                     format="signedPercent"
                     tone="signed"
-                    className="text-[11px]"
+                    className="text-xs"
                   />
                 </td>
               </tr>

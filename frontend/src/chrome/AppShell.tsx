@@ -65,7 +65,7 @@ function FeedStatus() {
   return (
     <span
       data-testid="feed-status"
-      className="flex items-center gap-1.5 text-[11px] text-muted-foreground"
+      className="flex items-center gap-1.5 text-xs text-muted-foreground"
       title="Simulated market data — QuantLab has no streaming feed"
     >
       {status === 'live' ? (
@@ -219,7 +219,7 @@ export function AppShell() {
                 <DatasetBadge />
               </div>
             )}
-            <div className="border-t border-border px-4 py-1.5 text-center text-[11px] text-muted-foreground">
+            <div className="border-t border-border px-4 py-1.5 text-center text-xs text-muted-foreground">
               <DataDisclaimer />
             </div>
           </footer>

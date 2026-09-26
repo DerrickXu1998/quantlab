@@ -32,14 +32,16 @@ const DIRECTION_TONE: Record<string, StatusTone> = {
 };
 
 /**
- * The signal carries everything the run form needs: model name and version,
- * and the parameter values it fired with — handed to Strategies as `p_*`
- * params on the hash, so the prefill survives a refresh.
+ * The signal carries everything a strategy needs to start from it: model name
+ * and version, the ticker it fired on, and the parameter values it fired with
+ * — handed to Strategies as `p_*` params on the hash, so the prefill survives a
+ * refresh. It arrives as the builder's first entry signal.
  */
 export function rerunParams(signal: Signal): Record<string, string> {
   const params: Record<string, string> = {
     model: signal.rule_name,
     version: signal.rule_version,
+    symbol: signal.symbol,
   };
   for (const [key, value] of Object.entries(signal.parameters)) {
     params[`p_${key}`] = String(value);

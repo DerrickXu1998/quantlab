@@ -89,7 +89,7 @@ export function AsFiledPanel({
       fill
       aside={
         status === 'ready' && rows.length > 0 ? (
-          <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+          <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
             {formatCount(inForce.length)} in force
             {superseded > 0 ? ` · ${formatCount(superseded)} superseded` : ''}
           </span>
@@ -167,7 +167,7 @@ export function AsFiledPanel({
               ))}
             </TableBody>
           </Table>
-          <p className="px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+          <p className="px-3 py-2 text-xs leading-relaxed text-muted-foreground">
             A figure older than {MAX_STALE_DAYS} days is marked stale: the fundamental rules stop
             honouring one past that age, so it is shown here but would not have been traded on.
           </p>

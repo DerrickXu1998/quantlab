@@ -81,7 +81,7 @@ export function RunConfigForm({
     });
   };
 
-  const label = 'font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground';
+  const label = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
 
   return (
     <form onSubmit={submit} className="space-y-4" data-testid="run-config">
@@ -132,7 +132,7 @@ export function RunConfigForm({
             </option>
           ))}
         </select>
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           {symbols.length === 0 ? 'Select at least one.' : `${symbols.length} selected`}
         </p>
       </div>
@@ -148,7 +148,7 @@ export function RunConfigForm({
                 <span>
                   <span className="font-mono">{spec.name}</span>
                   {spec.description ? (
-                    <span className="ml-2 font-sans text-[10px] normal-case tracking-normal text-muted-foreground">
+                    <span className="ml-2 font-sans text-xs normal-case tracking-normal text-muted-foreground">
                       {spec.description}
                     </span>
                   ) : null}
@@ -188,7 +188,7 @@ export function RunConfigForm({
                 <p
                   id={`run-param-${spec.name}-error`}
                   role="alert"
-                  className="text-[10px] text-destructive"
+                  className="text-xs text-destructive"
                 >
                   {spec.name}: {error}
                 </p>
@@ -215,7 +215,7 @@ export function RunConfigForm({
       </div>
 
       {running ? (
-        <p role="status" className="text-[11px] text-muted-foreground">
+        <p role="status" className="text-xs text-muted-foreground">
           Running the model over the selected dataset…
         </p>
       ) : null}

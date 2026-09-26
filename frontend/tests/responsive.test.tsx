@@ -101,6 +101,6 @@ describe('touch targets', () => {
     // Under 16px, focusing an input makes iOS Safari zoom the page, and the
     // zoom leaves the layout scrolled sideways with no way back.
     expect(fieldClasses).toMatch(/\btext-base\b/);
-    expect(fieldClasses).toContain('lg:text-[11px]');
+    expect(fieldClasses).toContain('lg:text-xs');
   });
 });

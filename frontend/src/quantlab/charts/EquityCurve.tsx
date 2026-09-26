@@ -72,7 +72,7 @@ export function EquityCurve({
 
   return (
     <div ref={themeRef} className={cn('flex flex-col gap-2', fill && 'min-h-0 flex-1')}>
-      <div className="flex items-center gap-4 font-mono text-[10px] uppercase tracking-[0.12em]">
+      <div className="flex items-center gap-4 font-mono text-[11px] uppercase tracking-[0.12em]">
         <span className="flex items-center gap-1.5 text-primary">
           <span aria-hidden="true" className="h-px w-3 bg-primary" />
           {strategyLabel}

@@ -126,7 +126,7 @@ function SaveExperiment({ run }: { run: RunDetailV2 }) {
         {saving ? 'Saving…' : 'Save experiment'}
       </Button>
       {error ? (
-        <span role="alert" className="text-[11px] text-destructive">
+        <span role="alert" className="text-xs text-destructive">
           {error}
         </span>
       ) : null}
@@ -194,7 +194,7 @@ export function RunResultsView({ run }: { run: RunDetailV2 }) {
         <div
           role="alert"
           data-testid="run-corporate-actions"
-          className="mt-3 flex gap-2 rounded-sm border border-destructive/40 bg-destructive/5 p-2 text-[11px] text-destructive"
+          className="mt-3 flex gap-2 rounded-sm border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive"
         >
           <TriangleAlert size={16} strokeWidth={1.5} className="mt-px shrink-0" />
           <span>
@@ -335,7 +335,7 @@ function StrategyProvenance({ run }: { run: RunDetailV2 }) {
       aria-label="Strategy executed"
       className="mt-3 border border-border bg-card p-3"
     >
-      <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+      <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
         Strategy executed
       </p>
       <p className="mt-1 text-xs">{strategy.name}</p>
@@ -343,7 +343,7 @@ function StrategyProvenance({ run }: { run: RunDetailV2 }) {
         {strategy.components.map((component, index) => (
           <li
             key={`${component.rule_name}-${component.role}-${index}`}
-            className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground"
+            className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground"
           >
             <StatusBadge tone={component.role === 'entry' ? 'active' : 'idle'}>
               {component.role}
@@ -357,7 +357,7 @@ function StrategyProvenance({ run }: { run: RunDetailV2 }) {
           </li>
         ))}
       </ul>
-      <p className="mt-2 text-[11px] text-muted-foreground">
+      <p className="mt-2 text-xs text-muted-foreground">
         <span className="font-mono uppercase tracking-[0.12em]">{strategy.entry_logic}</span> to
         enter,{' '}
         <span className="font-mono uppercase tracking-[0.12em]">{strategy.exit_logic}</span> to
@@ -365,7 +365,7 @@ function StrategyProvenance({ run }: { run: RunDetailV2 }) {
         <span className="font-mono tabular-nums">{strategy.combine_window_days}</span>
       </p>
       {execution ? (
-        <p data-testid="run-execution" className="mt-1 text-[11px] text-muted-foreground">
+        <p data-testid="run-execution" className="mt-1 text-xs text-muted-foreground">
           {executionChips(execution).join(' \u00b7 ')}
         </p>
       ) : null}

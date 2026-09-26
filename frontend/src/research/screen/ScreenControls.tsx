@@ -8,7 +8,7 @@ import { CoverageLine } from './Coverage';
 import { echoBound, isFraction, type ConstraintDraft, type DraftErrors } from './constraints';
 import type { UniverseSummary } from './useScreen';
 
-const LABEL = 'font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground';
+const LABEL = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
 
 export interface ScreenControlsProps {
   universes: UniverseSummary[];
@@ -82,7 +82,7 @@ export function ScreenControls(props: ScreenControlsProps) {
             </option>
           ))}
         </select>
-        <p className="text-[11px] leading-snug text-muted-foreground">
+        <p className="text-xs leading-snug text-muted-foreground">
           {chosen
             ? `${chosen.size.toLocaleString('en-US')} members, as the list stood on ${chosen.as_of}. A screen is always bounded by a list — that is how the filings index is keyed, and how the work is actually done.`
             : 'A screen is always bounded by a named list.'}
@@ -120,7 +120,7 @@ export function ScreenControls(props: ScreenControlsProps) {
           </select>
         </div>
       </div>
-      <p className="-mt-3 text-[11px] leading-snug text-muted-foreground">
+      <p className="-mt-3 text-xs leading-snug text-muted-foreground">
         Leave the date empty to use the most recent filings. Set one and every ratio is computed
         from the accounts that were public on that day — nothing filed later leaks in.
       </p>
@@ -135,7 +135,7 @@ export function ScreenControls(props: ScreenControlsProps) {
         </div>
 
         {drafts.length === 0 ? (
-          <p className="text-[11px] leading-snug text-muted-foreground">
+          <p className="text-xs leading-snug text-muted-foreground">
             No constraints. The screen returns the universe ranked, with every ratio shown and the
             holes in the filings left visible as dashes.
           </p>
@@ -163,7 +163,7 @@ export function ScreenControls(props: ScreenControlsProps) {
         >
           {running ? 'Screening…' : 'Run screen'}
         </Button>
-        <p className="text-[11px] leading-snug text-muted-foreground" data-testid="screen-run-note">
+        <p className="text-xs leading-snug text-muted-foreground" data-testid="screen-run-note">
           {running
             ? 'Reading the filings for every member of the universe. A few seconds.'
             : stale
@@ -221,7 +221,7 @@ function ConstraintRow({
         </Button>
       </div>
 
-      <p className="text-[11px] text-muted-foreground">{format.hint}</p>
+      <p className="text-xs text-muted-foreground">{format.hint}</p>
 
       <div className="grid grid-cols-2 gap-2">
         <label className="flex flex-col gap-1">
@@ -252,7 +252,7 @@ function ConstraintRow({
         dividing it by 100 behind the user's back is the one failure worse
         than an unlabelled box.
       */}
-      <p className="font-mono text-[10px] tabular-nums text-muted-foreground">
+      <p className="font-mono text-[11px] tabular-nums text-muted-foreground">
         {isFraction(draft.metric) ? 'a fraction — 0.12 is 12%' : 'a plain number'}
         {minEcho || maxEcho ? (
           <span className="ml-1.5 text-foreground">
@@ -266,7 +266,7 @@ function ConstraintRow({
       <CoverageLine metric={draft.metric} coverage={coverage} />
 
       {error ? (
-        <p role="alert" className="text-[11px] text-destructive">
+        <p role="alert" className="text-xs text-destructive">
           {error}
         </p>
       ) : null}

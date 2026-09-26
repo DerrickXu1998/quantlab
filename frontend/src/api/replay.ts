@@ -1,3 +1,5 @@
+import { getToken, reportUnauthorized } from '../auth/session';
+
 // Hand-written types for the historical replay stream. Deliberately separate
 // from schema.d.ts: the SSE frames carry no response_model on the backend, so
 // there is nothing for openapi-typescript to generate — the shapes mirror
@@ -97,38 +99,123 @@ export interface ReplayStream {
   close: () => void;
 }
 
+const STREAM_FAILED = 'The replay stream failed or was closed before the summary arrived.';
+
+/** Why the server refused to open a stream, in words a person can act on. */
+async function refusal(response: Response): Promise<string> {
+  if (response.status === 401) {
+    return 'Your session has expired. Sign in again to replay this run.';
+  }
+  try {
+    const body = (await response.json()) as { detail?: unknown };
+    if (body.detail) return `The replay could not start: ${String(body.detail)}.`;
+  } catch {
+    // no JSON body; fall through to the status
+  }
+  return `The replay could not start (HTTP ${response.status}).`;
+}
+
 /**
- * One run's replay as an EventSource. The backend emits bare `data:` frames,
- * so everything arrives on the default `message` channel.
+ * The `data:` payloads in one chunk of an SSE body, plus whatever trailing
+ * partial frame has to wait for the next chunk. Frames end at a blank line;
+ * the backend sends bare `data:` frames with no event names or ids.
+ */
+export function parseSseFrames(buffer: string): { frames: string[]; rest: string } {
+  const blocks = buffer.split(/\r?\n\r?\n/);
+  const rest = blocks.pop() ?? '';
+  const frames = blocks
+    .map((block) =>
+      block
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice(5).replace(/^ /, ''))
+        .join('\n'),
+    )
+    .filter((data) => data !== '');
+  return { frames, rest };
+}
+
+/**
+ * One run's replay, read with fetch rather than EventSource.
  *
- * EventSource would silently reconnect after a dropped connection, which for a
- * replay means the stream restarts from day one and double-counts every event.
- * An error therefore closes the source for good; starting over is the caller's
- * explicit act, not the transport's.
+ * EventSource cannot send headers, and the API authenticates with an
+ * `Authorization: Bearer` header -- so wherever sign-in is required (that is,
+ * production) every replay was refused with a 401 before a single frame, and
+ * the panel could only say the stream failed. fetch sends the same header as
+ * every other call, and says *why* when the server refuses.
+ *
+ * It also never reconnects on its own. For a replay that matters: a
+ * reconnect restarts from day one and double-counts every event, so an error
+ * ends the stream for good and starting over is the caller's explicit act.
  */
 export function streamReplay(runId: string, options: ReplayStreamOptions): ReplayStream {
   const { intervalMs = 0, step = 1, onEvent, onError } = options;
-  const source = new EventSource(replayStreamUrl(runId, { intervalMs, step }));
-  let failed = false;
+  const abort = new AbortController();
+  // Set once the stream is over for any reason -- closed by the caller,
+  // failed, or ended -- so nothing is reported twice or after a close.
+  let over = false;
 
-  source.onmessage = (message: MessageEvent<string>) => {
+  const fail = (message: string) => {
+    if (over) return;
+    over = true;
+    abort.abort();
+    onError?.(message);
+  };
+
+  void (async () => {
+    let response: Response;
     try {
-      onEvent(JSON.parse(message.data) as ReplayEvent);
+      const token = getToken();
+      response = await fetch(replayStreamUrl(runId, { intervalMs, step }), {
+        headers: {
+          Accept: 'text/event-stream',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        cache: 'no-store',
+        signal: abort.signal,
+      });
     } catch {
-      // An unparseable frame says nothing; drop it rather than kill the run.
+      fail(STREAM_FAILED);
+      return;
     }
-  };
-  source.onerror = () => {
-    if (failed) return;
-    failed = true;
-    source.close();
-    onError?.('The replay stream failed or was closed before the summary arrived.');
-  };
+
+    if (!response.ok || !response.body) {
+      if (response.status === 401) reportUnauthorized();
+      fail(response.ok ? STREAM_FAILED : await refusal(response));
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parsed = parseSseFrames(buffer);
+        buffer = parsed.rest;
+        for (const data of parsed.frames) {
+          if (over) return;
+          try {
+            onEvent(JSON.parse(data) as ReplayEvent);
+          } catch {
+            // An unparseable frame says nothing; drop it rather than kill the run.
+          }
+        }
+      }
+    } catch {
+      // Aborted by close(), or the connection dropped mid-stream.
+    }
+    // Ending without the caller closing on a terminal frame means the
+    // summary never came.
+    fail(STREAM_FAILED);
+  })();
 
   return {
     close: () => {
-      failed = true;
-      source.close();
+      over = true;
+      abort.abort();
     },
   };
 }

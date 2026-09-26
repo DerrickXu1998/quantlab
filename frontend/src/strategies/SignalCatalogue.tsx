@@ -10,7 +10,7 @@ import { StatusBadge } from '../components/ui/status-badge';
 import { conceptCoverage, conceptLabel } from './fundamentals';
 import { canFillRole, roleRefusal } from './strategyModel';
 
-const MICRO = 'font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground';
+const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
 
 /**
  * One signal, everything the registry says about it, and the three roles it
@@ -40,7 +40,7 @@ function SignalCard({
         <CardTitle className="truncate text-foreground">{model.name}</CardTitle>
         <span className="flex shrink-0 items-center gap-1.5">
           <StatusBadge tone="idle">{CATEGORY_LABELS[model.category]}</StatusBadge>
-          <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+          <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
             v{model.version}
           </span>
         </span>
@@ -48,7 +48,7 @@ function SignalCard({
 
       <CardContent className="space-y-2">
         <p className="text-xs">{model.summary}</p>
-        <p className="text-[11px] text-muted-foreground">{model.direction_semantics}</p>
+        <p className="text-xs text-muted-foreground">{model.direction_semantics}</p>
 
         <p className={MICRO}>
           Parameters:{' '}
@@ -74,7 +74,7 @@ function SignalCard({
               {model.requires_facts.map((concept) => {
                 const entry = conceptCoverage(coverage, concept);
                 return (
-                  <li key={concept} className="flex flex-wrap items-baseline gap-x-2 text-[11px]">
+                  <li key={concept} className="flex flex-wrap items-baseline gap-x-2 text-xs">
                     <span className="font-mono">{conceptLabel(concept)}</span>
                     {entry ? (
                       <span
@@ -125,7 +125,7 @@ function SignalCard({
           <p
             role="alert"
             data-testid={`role-refusal-${model.name}`}
-            className="border border-destructive/40 bg-destructive/5 px-2 py-1 text-[11px] text-destructive"
+            className="border border-destructive/40 bg-destructive/5 px-2 py-1 text-xs text-destructive"
           >
             {refusal}
           </p>

@@ -3,7 +3,7 @@ import { EXIT_REASON_LABELS } from '../../api/types';
 import { Numeric } from '../chrome/Numeric';
 import { Panel } from '../chrome/Panel';
 
-const MICRO = 'font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground';
+const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
 
 /**
  * Why the run's positions closed, and what the closing cost.
@@ -40,16 +40,16 @@ export function ExitBreakdown({
             <tbody>
               {entries.map(([reason, count]) => (
                 <tr key={reason} className="border-t border-border">
-                  <td className="py-1 text-[11px]">{EXIT_REASON_LABELS[reason] ?? reason}</td>
+                  <td className="py-1 text-xs">{EXIT_REASON_LABELS[reason] ?? reason}</td>
                   <td className="py-1 text-right">
-                    <Numeric value={count} format="integer" className="text-[11px]" />
+                    <Numeric value={count} format="integer" className="text-xs" />
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         ) : (
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             This run reported no exit-reason breakdown.
           </p>
         )}
@@ -57,18 +57,18 @@ export function ExitBreakdown({
         {costs ? (
           <dl
             data-testid="run-costs"
-            className="flex flex-wrap gap-x-6 gap-y-1 border-t border-border pt-2 text-[11px]"
+            className="flex flex-wrap gap-x-6 gap-y-1 border-t border-border pt-2 text-xs"
           >
             <div className="flex gap-2">
               <dt className={MICRO}>Commission</dt>
               <dd>
-                <Numeric value={costs.commission} format="currency" className="text-[11px]" />
+                <Numeric value={costs.commission} format="currency" className="text-xs" />
               </dd>
             </div>
             <div className="flex gap-2">
               <dt className={MICRO}>Slippage</dt>
               <dd>
-                <Numeric value={costs.slippage} format="currency" className="text-[11px]" />
+                <Numeric value={costs.slippage} format="currency" className="text-xs" />
               </dd>
             </div>
           </dl>
@@ -105,7 +105,7 @@ function Counter({
           value={value}
           format="integer"
           tone={lit ? 'default' : 'muted'}
-          className={`text-[11px] ${lit ? 'text-destructive' : ''}`}
+          className={`text-xs ${lit ? 'text-destructive' : ''}`}
         />
       </dd>
     </div>
@@ -129,7 +129,7 @@ function ExecutionSummaryStrip({ summary }: { summary: ExecutionSummary }) {
   return (
     <dl
       data-testid="execution-summary"
-      className="flex flex-wrap gap-x-6 gap-y-1 border-t border-border pt-2 text-[11px]"
+      className="flex flex-wrap gap-x-6 gap-y-1 border-t border-border pt-2 text-xs"
     >
       <Counter label="Orders" title="Entry and exit orders the strategy asked for." value={summary.orders} />
       <Counter label="Fills" title="Orders that actually traded." value={summary.fills} />

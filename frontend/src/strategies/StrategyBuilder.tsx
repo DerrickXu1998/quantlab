@@ -1,5 +1,5 @@
 import { BookMarked, FlaskConical, Hourglass, Play, ServerCrash, TriangleAlert } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Instrument } from '../api/client';
 import type { CatalogModel, CombineLogic, StrategyRole } from '../api/types';
 import { COMBINE_LOGICS, ROLE_EXPLAINERS, ROLE_LABELS } from '../api/types';
@@ -17,9 +17,11 @@ import { ExecutionForm } from './ExecutionForm';
 import { isFundamental } from './fundamentals';
 import { useFundamentalsCoverage } from './useFundamentals';
 import { SignalCatalogue } from './SignalCatalogue';
+import { UniversePicker } from './UniversePicker';
 import { StrategyComponentEditor } from './StrategyComponentEditor';
 import { templateToDraft, useStrategyTemplates } from './templates';
 import {
+  canFillRole,
   componentFor,
   describeStrategy,
   draftHasErrors,
@@ -34,7 +36,7 @@ import {
 import { StrategyStatusBadge, executedStrategyNames, statusOf } from './StrategyStatus';
 import { useStrategyLibrary } from './useStrategyLibrary';
 
-const MICRO = 'font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground';
+const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
 
 const LOGIC_LABELS: Record<CombineLogic, string> = {
   all: 'All must fire',
@@ -62,7 +64,22 @@ const ROLE_ORDER: StrategyRole[] = ['entry', 'exit', 'filter'];
  * the last of those and is the reason the rest of this screen is arranged
  * around it.
  */
-export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) {
+/** A rule handed over from elsewhere (a signal row): added once as an entry. */
+export interface StrategySeed {
+  /** Identity of the handoff, so the same one is not applied twice. */
+  key: string;
+  model: string;
+  values: Record<string, string>;
+  symbols: string[];
+}
+
+export function StrategyBuilder({
+  instruments,
+  seed = null,
+}: {
+  instruments: Instrument[];
+  seed?: StrategySeed | null;
+}) {
   const { catalog, modelsStatus, activeRun, inFlight, runError, startStrategyRun, cancel, allRuns } =
     useRuns();
   const library = useStrategyLibrary();
@@ -107,6 +124,25 @@ export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) 
         component.id === next.id ? next : component,
       ),
     }));
+
+  // A handoff lands once the registry can resolve its rule name.
+  const appliedSeed = useRef<string | null>(null);
+  useEffect(() => {
+    if (!seed || appliedSeed.current === seed.key || modelsStatus !== 'ready') return;
+    appliedSeed.current = seed.key;
+    const model = findModel(catalog, seed.model);
+    if (!model) {
+      setNotice(`${seed.model} is not registered on this backend, so it could not be added.`);
+      return;
+    }
+    const component = componentFor(model, canFillRole(model, 'entry') ? 'entry' : 'filter');
+    component.values = { ...component.values, ...seed.values };
+    setDraft((current) => ({ ...current, components: [...current.components, component] }));
+    if (seed.symbols.length > 0) setSymbols(seed.symbols);
+    setNotice(
+      `${model.name} added as ${ROLE_LABELS[component.role].toLowerCase()} with the parameters it fired with. Add more signals, widen the universe, then run.`,
+    );
+  }, [seed, catalog, modelsStatus]);
 
   const removeComponent = (id: string) =>
     setDraft((current) => ({
@@ -235,7 +271,7 @@ export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) 
                       </span>
                       <StrategyStatusBadge status={statusOf(strategy.name, runNames)} />
                     </span>
-                    <span className="block text-[10px] text-muted-foreground">
+                    <span className="block text-xs text-muted-foreground">
                       <span className="tabular-nums">{strategy.components.length}</span> components ·{' '}
                       {strategy.entry_logic} in / {strategy.exit_logic} out
                     </span>
@@ -320,7 +356,7 @@ export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) 
             />
           ) : (
             <>
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 A worked strategy, loaded into the builder in one click. Nothing is saved until you
                 press Save, so these are safe to open and take apart.
               </p>
@@ -340,7 +376,7 @@ export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) 
                       </Button>
                     </div>
                     {template.description ? (
-                      <p className="mt-1 text-[11px] text-muted-foreground">
+                      <p className="mt-1 text-xs text-muted-foreground">
                         {template.description}
                       </p>
                     ) : null}
@@ -398,7 +434,7 @@ export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) 
               placeholder="Name this strategy"
               onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
             />
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               Editing the name of a saved strategy and pressing Save renames it in place.
             </p>
           </div>
@@ -432,7 +468,7 @@ export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) 
             message={fundamentals.message}
             onReload={fundamentals.reload}
             onInspect={(symbol) =>
-              navigate('strategies', { mode: 'inspector', symbol, as_of: endDate })
+              navigate('research', { mode: 'company', symbol, as_of: endDate })
             }
           />
 
@@ -442,7 +478,7 @@ export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) 
                 <li
                   key={warning}
                   role="alert"
-                  className="flex gap-2 border border-border px-2 py-1.5 text-[11px] text-muted-foreground"
+                  className="flex gap-2 border border-border px-2 py-1.5 text-xs text-muted-foreground"
                 >
                   <TriangleAlert
                     size={16}
@@ -457,7 +493,7 @@ export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) 
           ) : null}
 
           {notice ? (
-            <p role="status" data-testid="builder-notice" className="text-[11px] text-primary">
+            <p role="status" data-testid="builder-notice" className="text-xs text-primary">
               {notice}
             </p>
           ) : null}
@@ -465,7 +501,7 @@ export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) 
             <p
               role="alert"
               data-testid="builder-save-error"
-              className="border border-destructive/40 bg-destructive/5 px-2 py-1.5 text-[11px] text-destructive"
+              className="border border-destructive/40 bg-destructive/5 px-2 py-1.5 text-xs text-destructive"
             >
               {saveError}
             </p>
@@ -530,7 +566,7 @@ export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) 
                 </option>
               ))}
             </Select>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               {LOGIC_EXPLAINERS[draft.entry_logic]}
             </p>
           </div>
@@ -555,7 +591,7 @@ export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) 
                 </option>
               ))}
             </Select>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               {LOGIC_EXPLAINERS[draft.exit_logic]}
             </p>
           </div>
@@ -579,7 +615,7 @@ export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) 
                   }))
                 }
               />
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 Net weight the firing entry components must reach before a position opens.
               </p>
             </div>
@@ -603,7 +639,7 @@ export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) 
                   }))
                 }
               />
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 Net weight the firing exit components must reach before the position closes.
               </p>
             </div>
@@ -626,7 +662,7 @@ export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) 
                 }))
               }
             />
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               Components may agree within this many bars rather than only on the same bar. 1 means
               "fired today".
             </p>
@@ -676,31 +712,9 @@ export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) 
             </div>
           </div>
 
-          <div className="space-y-1">
-            <label className={MICRO} htmlFor="strategy-symbols">
-              Instruments
-            </label>
-            <select
-              id="strategy-symbols"
-              multiple
-              size={5}
-              className={`${fieldClasses} h-auto`}
-              value={symbols}
-              onChange={(event) =>
-                setSymbols(Array.from(event.target.selectedOptions, (option) => option.value))
-              }
-            >
-              {instruments.map((instrument) => (
-                <option key={instrument.symbol} value={instrument.symbol}>
-                  {instrument.symbol} — {instrument.name}
-                </option>
-              ))}
-            </select>
-            <p className="text-[11px] text-muted-foreground">
-              {symbols.length === 0
-                ? 'Select at least one instrument to run against.'
-                : `${symbols.length} selected`}
-            </p>
+          <div className="space-y-2">
+            <p className={MICRO}>Universe</p>
+            <UniversePicker instruments={instruments} selected={symbols} onChange={setSymbols} />
           </div>
 
           <div className="flex items-center justify-end gap-2 border-t border-border pt-3">
@@ -720,7 +734,7 @@ export function StrategyBuilder({ instruments }: { instruments: Instrument[] }) 
             </Button>
           </div>
           {hasErrors ? (
-            <p role="alert" className="text-[11px] text-destructive">
+            <p role="alert" className="text-xs text-destructive">
               One or more component parameters is out of range. Fix the fields marked above before
               running.
             </p>

@@ -60,7 +60,7 @@ export function AsOfControl({ value, onChange, today, resolved }: AsOfControlPro
     <div className="w-full min-w-0 lg:w-auto lg:shrink-0">
       <label
         htmlFor={inputId}
-        className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground"
+        className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground"
       >
         As of
       </label>
@@ -89,7 +89,7 @@ export function AsOfControl({ value, onChange, today, resolved }: AsOfControlPro
               aria-pressed={preset.value === value}
               onClick={() => onChange(preset.value)}
               className={cn(
-                'h-11 rounded-sm border px-3 font-mono text-[10px] uppercase tracking-[0.12em] transition-colors lg:h-9 lg:px-2',
+                'h-11 rounded-sm border px-3 font-mono text-[11px] uppercase tracking-[0.12em] transition-colors lg:h-9 lg:px-2',
                 preset.value === value
                   ? 'border-primary text-primary'
                   : 'border-border text-muted-foreground hover:text-foreground',
@@ -100,7 +100,7 @@ export function AsOfControl({ value, onChange, today, resolved }: AsOfControlPro
           ))}
         </ButtonGroup>
       </div>
-      <p className="mt-1 text-[11px] text-muted-foreground">
+      <p className="mt-1 text-xs text-muted-foreground">
         {resolved && resolved !== value
           ? `Requested ${value}; the server resolved to ${resolved}.`
           : 'Accounts are read as they were on this date. Nothing filed after it is shown.'}

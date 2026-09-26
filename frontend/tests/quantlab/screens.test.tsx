@@ -24,6 +24,7 @@ vi.mock('../../src/api/client', async (importOriginal) => {
     listRuns: vi.fn(),
     getRun: vi.fn(),
     createRun: vi.fn(),
+    createStrategyRun: vi.fn(),
     getRunPerformance: vi.fn(),
     saveRun: vi.fn(),
     deleteRun: vi.fn(),
@@ -78,17 +79,21 @@ function renderApp() {
   );
 }
 
-/**
- * Strategies opens on the builder now, so the single-model surface these
- * assertions are about is one tab across. The handoff case (`?model=`) lands
- * on the signal lab directly and has its own test below.
- */
 async function openStrategies() {
   const user = userEvent.setup();
   renderApp();
   await user.click(screen.getByRole('button', { name: /strategies/i }));
-  await user.click(screen.getByRole('tab', { name: /signal lab/i }));
+  await screen.findByTestId('signal-catalogue');
   return user;
+}
+
+/** A one-signal strategy on one ticker, run from the builder. */
+async function runStrategy(user: ReturnType<typeof userEvent.setup>, symbol = 'ZZTRND') {
+  await user.click(
+    within(screen.getByTestId('signal-card-sma-crossover')).getByRole('button', { name: 'Entry' }),
+  );
+  await user.type(screen.getByLabelText(/add tickers/i), `${symbol}{Enter}`);
+  await user.click(screen.getByRole('button', { name: /run backtest/i }));
 }
 
 describe('App shell', () => {
@@ -104,6 +109,14 @@ describe('App shell', () => {
 
     await waitFor(() => expect(window.location.hash).toBe('#/overview'));
     expect(await screen.findByTestId('portfolio-summary')).toBeInTheDocument();
+  });
+
+  it('sends a bookmark to the retired Research Test mode to Strategies', async () => {
+    window.location.hash = '#/research?mode=test';
+    renderApp();
+
+    await waitFor(() => expect(window.location.hash).toBe('#/strategies'));
+    expect(await screen.findByTestId('signal-catalogue')).toBeInTheDocument();
   });
 
   it('navigates between destinations and follows the back button', async () => {
@@ -225,7 +238,11 @@ describe('Overview', () => {
   });
 
   it('makes saved runs the primary content of the rail', async () => {
-    const saved = makeRun({ id: 'run-saved', name: 'base case', created_at: '2026-09-18T12:00:00Z' });
+    const saved = makeRun({
+      id: 'run-saved',
+      name: 'base case',
+      created_at: '2026-09-18T12:00:00Z',
+    });
     vi.mocked(apiClient.listRuns).mockResolvedValue({
       total: 2,
       items: [saved, makeRun()],
@@ -248,7 +265,11 @@ describe('Overview', () => {
   });
 
   it('loads a saved run into the hero when its row is selected', async () => {
-    const saved = makeRun({ id: 'run-saved', name: 'base case', created_at: '2026-09-18T12:00:00Z' });
+    const saved = makeRun({
+      id: 'run-saved',
+      name: 'base case',
+      created_at: '2026-09-18T12:00:00Z',
+    });
     vi.mocked(apiClient.listRuns).mockResolvedValue({ total: 1, items: [saved] });
     vi.mocked(apiClient.getRun).mockImplementation((id: string) =>
       Promise.resolve(makeRun({ id, name: 'base case' })),
@@ -317,150 +338,70 @@ describe('Overview', () => {
 });
 
 describe('Strategies', () => {
-  it('lists what the registry reports, with nothing about it hardcoded', async () => {
+  /**
+   * The reported problem: Research and Strategies could not be told apart,
+   * because Strategies carried a single-rule lab and a filings inspector that
+   * were Research's Test and Company views again.
+   */
+  it('is one builder, without the tabs that duplicated Research', async () => {
     await openStrategies();
 
-    const list = await screen.findByTestId('model-list');
-    expect(within(list).getByText('sma-crossover')).toBeInTheDocument();
-    expect(within(list).getByText('v1.0.0')).toBeInTheDocument();
-    // The count renders through the shared Numeric primitive, so the row's
-    // text is split across elements; match on its full text.
-    expect(
-      within(list).getByText((_, element) => element?.textContent === '1 run'),
-    ).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: /signal lab/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: /point-in-time/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/combine several signals/i)).toBeInTheDocument();
   });
 
-  it('does not pretend a model is live or paper trading', async () => {
+  it('draws its universe from the whole catalogue, not the eight-name watchlist', async () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({
+      symbol: `ZZ${i}.US`,
+      name: `Company ${i}`,
+      currency: 'USD',
+      regime: null,
+    })) as unknown as apiClient.Instrument[];
+    vi.mocked(apiClient.listInstruments).mockResolvedValue({ total: many.length, items: many });
+
     await openStrategies();
 
-    const list = await screen.findByTestId('model-list');
-    // BACKTEST is the only mode the backend has, so it is the only one lit.
-    expect(within(list).getByText('Backtest')).toBeInTheDocument();
-    for (const label of ['Paper', 'Live']) {
-      expect(within(list).getByText(label)).toHaveAttribute(
-        'title',
-        expect.stringMatching(/no execution backend/i),
-      );
-    }
+    expect(await screen.findByRole('button', { name: /all us\s*12/i })).toBeInTheDocument();
   });
 
-  it('generates the parameter form from declared metadata', async () => {
-    await openStrategies();
+  it('refuses to run until the strategy has a signal and a universe', async () => {
+    const user = await openStrategies();
+    const run = screen.getByRole('button', { name: /run backtest/i });
+    expect(run).toBeDisabled();
 
-    const field = (await screen.findByLabelText(/fast/i)) as HTMLInputElement;
-    expect(field.value).toBe('20');
-    expect(field.min).toBe('2');
-    expect(field.max).toBe('100');
+    await user.click(
+      within(screen.getByTestId('signal-card-sma-crossover')).getByRole('button', {
+        name: 'Entry',
+      }),
+    );
+    expect(run).toBeDisabled();
+    expect(apiClient.createStrategyRun).not.toHaveBeenCalled();
   });
 
-  it('refuses to run until instruments are chosen', async () => {
-    await openStrategies();
-    await screen.findByLabelText(/fast/i);
-
-    expect(screen.getByRole('button', { name: /run backtest/i })).toBeDisabled();
-    expect(apiClient.createRun).not.toHaveBeenCalled();
-  });
-
-  it('submits only the parameters that were changed', async () => {
-    vi.mocked(apiClient.createRun).mockResolvedValue(makeRun());
+  it('runs the strategy over its universe and shows the results with the trade log', async () => {
+    vi.mocked(apiClient.createStrategyRun).mockResolvedValue(makeRun());
     const user = await openStrategies();
 
-    await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(screen.getByRole('button', { name: /run backtest/i }));
+    await runStrategy(user);
 
-    await waitFor(() => expect(apiClient.createRun).toHaveBeenCalled());
-    const [body] = vi.mocked(apiClient.createRun).mock.calls[0];
+    await waitFor(() => expect(apiClient.createStrategyRun).toHaveBeenCalledTimes(1));
+    const [body] = vi.mocked(apiClient.createStrategyRun).mock.calls[0];
     expect(body.symbols).toEqual(['ZZTRND']);
-    expect(body.parameters).toEqual({});
-  });
-
-  it('reports an out-of-range parameter against that field', async () => {
-    const user = await openStrategies();
-
-    const field = await screen.findByLabelText(/fast/i);
-    await user.clear(field);
-    await user.type(field, '500');
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(/<= 100/);
-    expect(field).toHaveAttribute('aria-invalid', 'true');
-  });
-
-  it('shows the full results for a completed run, including the trade log', async () => {
-    vi.mocked(apiClient.createRun).mockResolvedValue(makeRun());
-    const user = await openStrategies();
-
-    await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(screen.getByRole('button', { name: /run backtest/i }));
+    expect(body.strategy?.components).toHaveLength(1);
 
     const results = await screen.findByTestId('run-results');
     expect(within(results).getByTestId('run-coverage')).toHaveTextContent('1/1');
-    expect(within(results).getByTestId('run-dataset')).toHaveTextContent(/demo data/i);
-
     const log = await screen.findByTestId('trade-log');
     expect(within(log).getByText('ZZTRND')).toBeInTheDocument();
-    // An unrealised position is labelled, not shown as a closed result.
-    expect(within(log).getByText('Open')).toBeInTheDocument();
-  });
-
-  it('treats a zero-signal run as a result, not a failure', async () => {
-    const empty = makeRun({ signal_count: 0, signals: [] });
-    vi.mocked(apiClient.createRun).mockResolvedValue(empty);
-    vi.mocked(apiClient.getRun).mockResolvedValue(empty);
-    const user = await openStrategies();
-
-    await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(screen.getByRole('button', { name: /run backtest/i }));
-
-    expect(await screen.findByTestId('run-empty')).toHaveTextContent(/no signals/i);
-    expect(screen.queryByTestId('run-failed')).not.toBeInTheDocument();
-  });
-
-  it('renders a failed run distinctly from an empty one', async () => {
-    const failed = makeRun({ status: 'failed', error: 'boom', signal_count: 0 });
-    vi.mocked(apiClient.createRun).mockResolvedValue(failed);
-    vi.mocked(apiClient.getRun).mockResolvedValue(failed);
-    const user = await openStrategies();
-
-    await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(screen.getByRole('button', { name: /run backtest/i }));
-
-    const failure = await screen.findByTestId('run-failed');
-    expect(failure).toHaveAttribute('role', 'alert');
-    expect(screen.queryByTestId('run-empty')).not.toBeInTheDocument();
-  });
-
-  it('warns about unadjusted corporate actions in the window', async () => {
-    const withSplit = makeRun({
-      corporate_actions: [
-        {
-          instrument_id: 1,
-          symbol: 'ZZTRND',
-          ex_date: '2024-08-31',
-          action_type: 'split',
-          split_ratio: 4,
-          dividend: null,
-        },
-      ],
-    });
-    vi.mocked(apiClient.createRun).mockResolvedValue(withSplit);
-    vi.mocked(apiClient.getRun).mockResolvedValue(withSplit);
-    const user = await openStrategies();
-
-    await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(screen.getByRole('button', { name: /run backtest/i }));
-
-    const warning = await screen.findByTestId('run-corporate-actions');
-    expect(warning).toHaveAttribute('role', 'alert');
-    expect(warning).toHaveTextContent('2024-08-31');
   });
 
   it('saves an experiment under a name, which the run then wears', async () => {
-    vi.mocked(apiClient.createRun).mockResolvedValue(makeRun());
+    vi.mocked(apiClient.createStrategyRun).mockResolvedValue(makeRun());
     vi.mocked(apiClient.saveRun).mockResolvedValue(makeRun({ name: 'base case' }));
     const user = await openStrategies();
 
-    await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(screen.getByRole('button', { name: /run backtest/i }));
+    await runStrategy(user);
     await screen.findByTestId('run-results');
 
     await user.type(screen.getByLabelText(/experiment name/i), 'base case');
@@ -470,57 +411,37 @@ describe('Strategies', () => {
     expect(await screen.findByTestId('run-saved-name')).toHaveTextContent('base case');
   });
 
-  it('prefills the form from a signal-row handoff', async () => {
-    window.location.hash = '#/strategies?model=sma-crossover&p_fast=50';
+  it('turns a signal-row handoff into the first entry signal, on the ticker it fired on', async () => {
+    window.location.hash = '#/strategies?model=sma-crossover&p_fast=50&symbol=ZZTRND';
     renderApp();
 
-    const field = (await screen.findByLabelText(/fast/i)) as HTMLInputElement;
-    expect(field.value).toBe('50');
-    // The named model is the one being configured.
-    expect(await screen.findByRole('region', { name: /sma-crossover — backtest/i }))
-      .toBeInTheDocument();
-  });
-
-  it('explains an empty registry instead of showing a blank list', async () => {
-    vi.mocked(apiClient.listModels).mockResolvedValue({ total: 0, items: [] });
-
-    await openStrategies();
-
-    expect(await screen.findByTestId('model-list-empty')).toHaveTextContent(
-      /no models registered/i,
-    );
+    expect(await screen.findByText(/sma-crossover added as entry/i)).toBeInTheDocument();
+    expect(screen.getByTestId('universe-count')).toHaveTextContent(/1 ticker/i);
+    expect(screen.getByDisplayValue('50')).toBeInTheDocument();
   });
 });
 
 describe('cross-destination run state', () => {
-  it('a run created in Research is already selected in Strategies', async () => {
-    vi.mocked(apiClient.createRun).mockResolvedValue(makeRun());
-    const user = userEvent.setup();
-    window.location.hash = '#/research';
-    renderApp();
+  it('a strategy run is still on screen after visiting another destination', async () => {
+    vi.mocked(apiClient.createStrategyRun).mockResolvedValue(makeRun());
+    const user = await openStrategies();
 
-    // Research opens on Company now, and running a rule is its own mode. The
-    // dock used to render all six panels at once, which is why this reached
-    // straight for the form; the walk to Test is the destination being
-    // legible rather than dense (docs/RESEARCH.md §4).
-    await user.click(await screen.findByRole('tab', { name: /test/i }));
-    await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(await screen.findByRole('button', { name: /run backtest/i }));
+    await runStrategy(user);
     expect(await screen.findByTestId('run-results')).toBeInTheDocument();
 
+    await user.click(screen.getByRole('button', { name: /research/i }));
     await user.click(screen.getByRole('button', { name: /strategies/i }));
 
-    // No re-finding, no re-running: the same run is on screen.
+    // No re-running: the same run comes back from the shared store.
     expect(await screen.findByTestId('run-results')).toBeInTheDocument();
-    expect(apiClient.createRun).toHaveBeenCalledTimes(1);
+    expect(apiClient.createStrategyRun).toHaveBeenCalledTimes(1);
   });
 
   it('"Watch in Overview" pins the run in the Overview rail', async () => {
-    vi.mocked(apiClient.createRun).mockResolvedValue(makeRun());
+    vi.mocked(apiClient.createStrategyRun).mockResolvedValue(makeRun());
     const user = await openStrategies();
 
-    await user.selectOptions(await screen.findByLabelText('Instruments'), 'ZZTRND');
-    await user.click(screen.getByRole('button', { name: /run backtest/i }));
+    await runStrategy(user);
     await screen.findByTestId('run-results');
 
     await user.click(screen.getByRole('button', { name: /watch in overview/i }));

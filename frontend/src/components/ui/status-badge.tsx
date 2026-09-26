@@ -35,7 +35,7 @@ export function StatusBadge({
       role={role}
       title={title}
       className={cn(
-        'rounded-sm border px-1.5 py-px font-mono text-[10px] uppercase tracking-[0.12em]',
+        'rounded-sm border px-1.5 py-px font-mono text-[11px] uppercase tracking-[0.12em]',
         TONES[tone],
         className,
       )}

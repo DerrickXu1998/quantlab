@@ -9,7 +9,9 @@ import { replaceRoute, useRoute } from '../../chrome/router';
  * the object the destination was missing and the one whose first action —
  * type a symbol — needs no explanation (docs/RESEARCH.md §4).
  */
-export const RESEARCH_MODES = ['company', 'screen', 'test'] as const;
+// `test` (run one rule over many names) moved to Strategies, which is where
+// running rules across a universe lives. Research is one ticker at a time.
+export const RESEARCH_MODES = ['company', 'screen'] as const;
 
 export type ResearchMode = (typeof RESEARCH_MODES)[number];
 

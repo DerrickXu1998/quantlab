@@ -34,14 +34,14 @@ function RunRow({
           <span className="truncate font-mono text-[11px]">
             {run.name ?? run.model_name}
           </span>
-          <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+          <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
             {run.created_at.slice(0, 10)}
           </span>
         </span>
-        <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-muted-foreground">
+        <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
           <span className="font-mono">v{run.model_version}</span>
           <span className="flex items-center gap-1 font-mono">
-            <Numeric value={run.signal_count} format="integer" className="text-[10px]" />
+            <Numeric value={run.signal_count} format="integer" className="text-xs" />
             sig
           </span>
           <StatusBadge tone={run.dataset === 'warehouse' ? 'good' : 'idle'}>
@@ -135,7 +135,7 @@ export function RunsRail({
               type="button"
               aria-pressed={(option === 'saved') === savedOnly}
               onClick={() => setSavedOnly(option === 'saved')}
-              className={`px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] transition-colors ${
+              className={`px-2 py-1 font-mono text-[11px] uppercase tracking-[0.12em] transition-colors ${
                 (option === 'saved') === savedOnly
                   ? 'bg-primary/10 text-primary'
                   : 'bg-card text-muted-foreground hover:text-foreground'

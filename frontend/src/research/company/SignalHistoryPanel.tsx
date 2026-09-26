@@ -58,7 +58,7 @@ export function SignalHistoryPanel({
       fill
       aside={
         status === 'ready' && ordered.length > 0 ? (
-          <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+          <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
             {formatCount(total)} signals
           </span>
         ) : null
@@ -129,7 +129,7 @@ export function SignalHistoryPanel({
               ))}
             </TableBody>
           </Table>
-          <p className="px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+          <p className="px-3 py-2 text-xs leading-relaxed text-muted-foreground">
             Only rules with materialised history appear. A rule missing from this list has not
             necessarily passed over {symbol} without firing — it may never have been run.
           </p>

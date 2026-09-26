@@ -42,7 +42,7 @@ export function CoveragePanel({
       fill
       aside={
         status === 'ready' ? (
-          <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+          <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
             {formatCount(available.length)} / {formatCount(available.length + missing.length)}
           </span>
         ) : null
@@ -119,10 +119,10 @@ function ConceptGroup({
   const Icon = tone === 'filed' ? Check : Ban;
   return (
     <div data-testid={testId}>
-      <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+      <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
         {title}
       </p>
-      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{blurb}</p>
+      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{blurb}</p>
       {concepts.length > 0 ? (
         <ul className="mt-2 flex flex-wrap gap-1.5">
           {concepts.map((concept) => (
@@ -135,8 +135,8 @@ function ConceptGroup({
               }
               className={
                 tone === 'filed'
-                  ? 'flex items-center gap-1 rounded-sm border border-primary/40 px-1.5 py-px text-[11px] text-primary'
-                  : 'flex items-center gap-1 rounded-sm border border-dashed border-border px-1.5 py-px text-[11px] text-muted-foreground'
+                  ? 'flex items-center gap-1 rounded-sm border border-primary/40 px-1.5 py-px text-xs text-primary'
+                  : 'flex items-center gap-1 rounded-sm border border-dashed border-border px-1.5 py-px text-xs text-muted-foreground'
               }
             >
               <Icon size={16} strokeWidth={1.5} aria-hidden="true" className="h-3 w-3" />

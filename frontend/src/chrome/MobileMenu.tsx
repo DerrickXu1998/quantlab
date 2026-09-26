@@ -196,7 +196,7 @@ function AccountRow({ onSignedOut }: { onSignedOut: () => void }) {
   return (
     <div className="flex flex-col gap-2 border-t border-border pt-2" data-testid="mobile-account">
       <Row>
-        <span className="flex min-w-0 items-center gap-3 text-[11px] text-muted-foreground">
+        <span className="flex min-w-0 items-center gap-3 text-xs text-muted-foreground">
           <UserRound size={20} strokeWidth={1.5} aria-hidden="true" className="shrink-0" />
           <span className="truncate font-mono text-foreground">{auth.user.email}</span>
         </span>

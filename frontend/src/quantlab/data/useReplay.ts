@@ -167,9 +167,8 @@ export function useReplay(runId: string | null, intervalMs: number): ReplayContr
           return;
         }
         dispatch({ type: 'event', event });
-        // Close on the terminal frame: the server ending its stream otherwise
-        // surfaces as an EventSource error, and EventSource's reconnect would
-        // restart the replay from day one.
+        // Close on the terminal frame: the server ending its response would
+        // otherwise read as a stream that stopped before its summary.
         if (event.event === 'summary' || event.event === 'truncated') stop();
       },
       onError: (message) => {

@@ -257,3 +257,8 @@ export function useRuns(): RunsContextValue {
   }
   return ctx;
 }
+
+/** The store where there is one, null where there is not (isolated renders). */
+export function useOptionalRuns(): RunsContextValue | null {
+  return useContext(RunsContext) ?? null;
+}

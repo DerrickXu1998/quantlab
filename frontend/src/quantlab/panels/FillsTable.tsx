@@ -29,7 +29,7 @@ export function FillsTable({ fills }: { fills: Fill[] }) {
   return (
     <table data-testid="fills-table" className="w-full">
       <thead className="sticky top-0 z-10 bg-card">
-        <tr className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+        <tr className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
           <th className="px-3 py-1.5 text-left font-normal">Time</th>
           <th className="px-3 py-1.5 text-left font-normal">Symbol</th>
           <th className="px-3 py-1.5 text-left font-normal">Side</th>
@@ -46,10 +46,10 @@ export function FillsTable({ fills }: { fills: Fill[] }) {
               <StatusBadge tone={fill.side === 'BUY' ? 'active' : 'idle'}>{fill.side}</StatusBadge>
             </td>
             <td className="px-3 py-1.5 text-right">
-              <Numeric value={fill.qty} format="integer" className="text-[11px]" />
+              <Numeric value={fill.qty} format="integer" className="text-xs" />
             </td>
             <td className="px-3 py-1.5 text-right">
-              <Numeric value={fill.price} className="text-[11px]" />
+              <Numeric value={fill.price} className="text-xs" />
             </td>
           </tr>
         ))}

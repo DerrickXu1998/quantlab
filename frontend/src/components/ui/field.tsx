@@ -17,16 +17,17 @@ import { cn } from '../../lib/utils';
 // target at once rather than each screen discovering it separately. `text-base`
 // below `lg` is not cosmetic: iOS Safari zooms the page when a focused input's
 // text is under 16px, and that zoom is what leaves a mobile form scrolled
-// sideways with no way back. The 11px mono returns with the desktop row.
+// sideways with no way back. On desktop it is 12px mono: 11px was reported as
+// too small to read.
 export const fieldClasses =
-  'h-11 w-full rounded-sm border border-input bg-background px-2 font-mono text-base tabular-nums text-foreground transition-colors focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 lg:h-9 lg:text-[11px]';
+  'h-11 w-full rounded-sm border border-input bg-background px-2 font-mono text-base tabular-nums text-foreground transition-colors focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 lg:h-9 lg:text-xs';
 
 export const Label = forwardRef<HTMLLabelElement, LabelHTMLAttributes<HTMLLabelElement>>(
   ({ className, ...props }, ref) => (
     <label
       ref={ref}
       className={cn(
-        'flex flex-col gap-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground',
+        'flex flex-col gap-1 font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground',
         className,
       )}
       {...props}

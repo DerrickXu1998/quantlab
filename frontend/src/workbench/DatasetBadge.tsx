@@ -12,7 +12,7 @@ export function DatasetBadge() {
   const state = useDataset();
 
   if (state.status === 'loading') {
-    return <span className="text-[11px] text-muted-foreground">checking data source…</span>;
+    return <span className="text-xs text-muted-foreground">checking data source…</span>;
   }
 
   // "Cannot reach the data" and "no data" are different answers and must not

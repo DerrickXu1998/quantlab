@@ -1,6 +1,6 @@
 import { act, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { CandlestickChart } from '../src/components/CandlestickChart';
+import { CandlestickChart, type ChartSignal } from '../src/components/CandlestickChart';
 import { PanelApiProvider } from '../src/components/usePanelSize';
 import { ThemeProvider } from '../src/theme/ThemeProvider';
 import { makeBar } from './fixtures';
@@ -18,7 +18,7 @@ const bars = [
   makeBar({ date: '2024-03-15', open: 101, high: 106, low: 100, close: 104, volume: 1_500_000 }),
 ];
 
-function renderChart(props: { bars: typeof bars; markerDate?: string }) {
+function renderChart(props: { bars: typeof bars; markerDate?: string; signals?: ChartSignal[] }) {
   return render(
     <ThemeProvider>
       <CandlestickChart {...props} />
@@ -73,6 +73,38 @@ describe('CandlestickChart', () => {
     expect(markerData[0]).toMatchObject({ time: '2024-03-15' });
 
     expect(screen.getByTestId('signal-marker')).toHaveTextContent('2024-03-15');
+  });
+
+  it('draws model signals: bullish below the bar, bearish above, each labelled', () => {
+    renderChart({
+      bars,
+      signals: [
+        { date: '2024-03-15', direction: 'bearish', label: 'RSI' },
+        { date: '2024-03-14', direction: 'bullish', label: 'SMA' },
+        // Off the chart: the plugin throws on a date the series does not have.
+        { date: '2023-01-01', direction: 'bullish', label: 'SMA' },
+      ],
+    });
+
+    const [markers] = createdMarkerPlugins;
+    const [data] = markers.setMarkers.mock.calls.at(-1) as [
+      { time: string; position: string; shape: string; text: string }[],
+    ];
+    // In time order, and only the two on bars the chart has.
+    expect(data).toEqual([
+      expect.objectContaining({
+        time: '2024-03-14',
+        position: 'belowBar',
+        shape: 'arrowUp',
+        text: 'SMA',
+      }),
+      expect.objectContaining({
+        time: '2024-03-15',
+        position: 'aboveBar',
+        shape: 'arrowDown',
+        text: 'RSI',
+      }),
+    ]);
   });
 
   it('sets no marker when markerDate matches no bar', () => {

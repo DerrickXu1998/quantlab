@@ -102,7 +102,7 @@ function messageFor(error: unknown, mode: Mode): string {
   return mode === 'login' ? 'Could not sign in.' : 'Could not create the account.';
 }
 
-const MICRO = 'font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground';
+const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
 
 function StrengthMeter({ password }: { password: string }) {
   const strength = passwordStrength(password);
@@ -121,7 +121,7 @@ function StrengthMeter({ password }: { password: string }) {
         </span>
         <span className={MICRO}>{strength.label}</span>
       </div>
-      <p className="text-[11px] text-muted-foreground">{strength.hint}</p>
+      <p className="text-xs text-muted-foreground">{strength.hint}</p>
     </div>
   );
 }
@@ -212,7 +212,7 @@ export function LoginScreen() {
       <main className="relative z-10 w-full max-w-sm" data-testid="login-screen">
         <div className="mb-6 text-center">
           <p className="font-display text-2xl tracking-[-0.02em]">QuantLab</p>
-          <p className="mt-1 text-[11px] text-muted-foreground">
+          <p className="mt-1 text-xs text-muted-foreground">
             Signal research on stored daily bars. Your runs and strategies are yours alone.
           </p>
         </div>
@@ -249,7 +249,7 @@ export function LoginScreen() {
                 onBlur={() => setTouched((current) => ({ ...current, email: true }))}
               />
               {showEmailError ? (
-                <p id="auth-email-error" role="alert" className="text-[11px] text-destructive">
+                <p id="auth-email-error" role="alert" className="text-xs text-destructive">
                   {errors.email}
                 </p>
               ) : null}
@@ -270,7 +270,7 @@ export function LoginScreen() {
                 onBlur={() => setTouched((current) => ({ ...current, password: true }))}
               />
               {showPasswordError ? (
-                <p id="auth-password-error" role="alert" className="text-[11px] text-destructive">
+                <p id="auth-password-error" role="alert" className="text-xs text-destructive">
                   {errors.password}
                 </p>
               ) : null}
@@ -283,7 +283,7 @@ export function LoginScreen() {
               <p
                 role="alert"
                 data-testid="auth-error"
-                className="border border-destructive/40 bg-destructive/5 px-2 py-1.5 text-[11px] text-destructive"
+                className="border border-destructive/40 bg-destructive/5 px-2 py-1.5 text-xs text-destructive"
               >
                 {error}
               </p>
@@ -299,7 +299,7 @@ export function LoginScreen() {
                   : 'Create account'}
             </Button>
 
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               {mode === 'login'
                 ? 'No account yet? Create one — it takes an email and a password, and nothing else.'
                 : 'Creating an account gives you a private workspace: only you can read, rename or delete your runs.'}
