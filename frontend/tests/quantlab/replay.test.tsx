@@ -1,7 +1,13 @@
 import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { replayStreamUrl, streamReplay, type ReplayEvent } from '../../src/api/replay';
+import {
+  parseSseFrames,
+  replayStreamUrl,
+  streamReplay,
+  type ReplayEvent,
+} from '../../src/api/replay';
+import { getToken, setToken } from '../../src/auth/session';
 import { ReplayPanel } from '../../src/quantlab/panels/ReplayPanel';
 import { ThemeProvider } from '../../src/theme/ThemeProvider';
 import { installCanvas2d } from '../mocks/canvas-2d';
@@ -12,45 +18,93 @@ installResizeObserver();
 installCanvas2d();
 
 /**
- * A controllable EventSource: the component under test wires its handlers onto
- * the instance, the test emits frames and failures by hand.
+ * A controllable replay stream behind a stubbed fetch: the code under test
+ * reads a real ReadableStream, the test enqueues SSE frames and failures by
+ * hand. Each call settles the reader before returning, so an assertion after
+ * `await act(() => source.emit(...))` sees the rendered result.
  */
-class FakeEventSource {
-  static instances: FakeEventSource[] = [];
+const encoder = new TextEncoder();
+
+async function settle(): Promise<void> {
+  for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+class FakeStream {
+  static instances: FakeStream[] = [];
+  /** Set by a test to make the next fetch a refusal instead of a stream. */
+  static refuseNext: { status: number; body: unknown } | null = null;
 
   readonly url: string;
+  readonly headers: Record<string, string>;
   closed = false;
-  onmessage: ((message: MessageEvent<string>) => void) | null = null;
-  onerror: (() => void) | null = null;
+  private controller!: ReadableStreamDefaultController<Uint8Array>;
 
-  constructor(url: string) {
+  constructor(url: string, init: RequestInit) {
     this.url = url;
-    FakeEventSource.instances.push(this);
+    this.headers = (init.headers ?? {}) as Record<string, string>;
+    init.signal?.addEventListener('abort', () => {
+      this.closed = true;
+      try {
+        this.controller.error(new DOMException('aborted', 'AbortError'));
+      } catch {
+        // already closed or errored
+      }
+    });
+    FakeStream.instances.push(this);
   }
 
-  close(): void {
-    this.closed = true;
+  response(): Response {
+    const refusal = FakeStream.refuseNext;
+    FakeStream.refuseNext = null;
+    if (refusal) {
+      return new Response(JSON.stringify(refusal.body), {
+        status: refusal.status,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    const body = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        this.controller = controller;
+      },
+    });
+    return { ok: true, status: 200, body } as Response;
   }
 
-  emit(event: ReplayEvent): void {
-    this.onmessage?.({ data: JSON.stringify(event) } as MessageEvent<string>);
+  /** Raw bytes, for frames split across chunks. */
+  async write(text: string): Promise<void> {
+    this.controller.enqueue(encoder.encode(text));
+    await settle();
   }
 
-  fail(): void {
-    this.onerror?.();
+  emit(event: ReplayEvent): Promise<void> {
+    return this.write(`data: ${JSON.stringify(event)}\n\n`);
   }
 
-  static latest(): FakeEventSource {
-    const latest = FakeEventSource.instances.at(-1);
-    if (!latest) throw new Error('no EventSource was opened');
+  async fail(): Promise<void> {
+    try {
+      this.controller.error(new TypeError('network error'));
+    } catch {
+      // already closed or errored
+    }
+    await settle();
+  }
+
+  static latest(): FakeStream {
+    const latest = FakeStream.instances.at(-1);
+    if (!latest) throw new Error('no replay stream was opened');
     return latest;
   }
 }
 
-vi.stubGlobal('EventSource', FakeEventSource);
+vi.stubGlobal(
+  'fetch',
+  vi.fn((url: string, init: RequestInit) => Promise.resolve(new FakeStream(url, init).response())),
+);
 
 afterEach(() => {
-  FakeEventSource.instances = [];
+  FakeStream.instances = [];
+  FakeStream.refuseNext = null;
+  setToken(null);
 });
 
 const run = makeRun(); // 2024-01-01 → 2024-12-31, completed, ZZTRND
@@ -97,32 +151,105 @@ describe('streamReplay', () => {
     );
   });
 
-  it('parses bare data: frames on the default message channel', () => {
+  it('parses bare data: frames off the response body', async () => {
     const seen: ReplayEvent[] = [];
     streamReplay('run-1', { onEvent: (event) => seen.push(event) });
 
-    FakeEventSource.latest().emit(equityEvent('2024-01-02', 100_123.4));
+    await FakeStream.latest().emit(equityEvent('2024-01-02', 100_123.4));
 
     expect(seen).toEqual([equityEvent('2024-01-02', 100_123.4)]);
   });
 
-  it('closes on error instead of letting EventSource reconnect and double-count', () => {
+  it('reassembles a frame split across network chunks', async () => {
+    const seen: ReplayEvent[] = [];
+    streamReplay('run-1', { onEvent: (event) => seen.push(event) });
+    const frame = `data: ${JSON.stringify(equityEvent('2024-01-02', 100_123.4))}\n\n`;
+    const source = FakeStream.latest();
+
+    await source.write(frame.slice(0, 17));
+    expect(seen).toHaveLength(0);
+    await source.write(frame.slice(17));
+
+    expect(seen).toEqual([equityEvent('2024-01-02', 100_123.4)]);
+  });
+
+  it('splits several frames and ignores anything that is not data:', () => {
+    expect(
+      parseSseFrames('data: {"a":1}\n\n: keepalive\n\ndata: {"b":2}\r\n\r\ndata: {"c"'),
+    ).toEqual({
+      frames: ['{"a":1}', '{"b":2}'],
+      rest: 'data: {"c"',
+    });
+  });
+
+  /**
+   * The production bug: EventSource cannot send headers, so wherever sign-in
+   * is required every replay was a 401 before its first frame.
+   */
+  it('sends the session token, which EventSource never could', () => {
+    setToken('session-token');
+    streamReplay('run-1', { onEvent: () => {} });
+
+    expect(FakeStream.latest().headers.Authorization).toBe('Bearer session-token');
+  });
+
+  it('says the session expired on a 401, and drops the dead token', async () => {
+    setToken('stale-token');
+    FakeStream.refuseNext = { status: 401, body: { detail: 'authentication required' } };
+    const errors: string[] = [];
+
+    streamReplay('run-1', { onEvent: () => {}, onError: (message) => errors.push(message) });
+    await settle();
+
+    expect(errors).toEqual(['Your session has expired. Sign in again to replay this run.']);
+    expect(getToken()).toBeNull();
+  });
+
+  it("passes the server's reason through when it refuses a stream", async () => {
+    FakeStream.refuseNext = {
+      status: 429,
+      body: { detail: 'too many concurrent replay streams; wait for one to finish' },
+    };
+    const errors: string[] = [];
+
+    streamReplay('run-1', { onEvent: () => {}, onError: (message) => errors.push(message) });
+    await settle();
+
+    expect(errors[0]).toMatch(/too many concurrent replay streams/);
+  });
+
+  it('reports a failure once, closes, and never reconnects to double-count', async () => {
     const errors: string[] = [];
     const seen: ReplayEvent[] = [];
     const stream = streamReplay('run-1', {
       onEvent: (event) => seen.push(event),
       onError: (message) => errors.push(message),
     });
-    const source = FakeEventSource.latest();
+    const source = FakeStream.latest();
 
-    source.fail();
-    source.fail(); // a second failure event must not report twice
+    await source.fail();
+    await source.fail(); // a second failure must not report twice
 
     expect(source.closed).toBe(true);
     expect(errors).toHaveLength(1);
+    expect(FakeStream.instances).toHaveLength(1);
 
     stream.close();
     expect(seen).toHaveLength(0);
+  });
+
+  it('reports nothing after the caller closes it', async () => {
+    const errors: string[] = [];
+    const stream = streamReplay('run-1', {
+      onEvent: () => {},
+      onError: (message) => errors.push(message),
+    });
+
+    stream.close();
+    await settle();
+
+    expect(FakeStream.latest().closed).toBe(true);
+    expect(errors).toHaveLength(0);
   });
 });
 
@@ -145,16 +272,14 @@ describe('ReplayPanel', () => {
 
   it('renders streamed events incrementally, exactly as they arrive', async () => {
     await startReplay();
-    const source = FakeEventSource.latest();
+    const source = FakeStream.latest();
     expect(source.url).toContain('/api/v1/runs/run-1/replay/stream');
 
-    act(() => {
-      source.emit({ event: 'bar', date: '2024-01-02', closes: { ZZTRND: 161.4 } });
-    });
+    await act(() => source.emit({ event: 'bar', date: '2024-01-02', closes: { ZZTRND: 161.4 } }));
     expect(screen.getByTestId('replay-prices')).toHaveTextContent('ZZTRND 161.40');
     expect(screen.getByTestId('replay-status')).toHaveTextContent('Streaming');
 
-    act(() => {
+    await act(() =>
       source.emit({
         event: 'fill',
         date: '2024-01-02',
@@ -164,17 +289,15 @@ describe('ReplayPanel', () => {
         price: 139.78,
         value: 33_319.0,
         realized_pnl: 0,
-      });
-    });
+      }),
+    );
     const fills = screen.getByTestId('replay-fills');
     expect(within(fills).getByText('ZZTRND')).toBeInTheDocument();
     expect(within(fills).getByText('buy')).toBeInTheDocument();
     expect(within(fills).getByText('238.47')).toBeInTheDocument();
 
     // The stat strip shows the wire's numbers verbatim — nothing derived.
-    act(() => {
-      source.emit(equityEvent('2024-07-02', 100_123.4));
-    });
+    await act(() => source.emit(equityEvent('2024-07-02', 100_123.4)));
     const stats = screen.getByTestId('replay-stats');
     expect(stats).toHaveTextContent('2024-07-02');
     expect(stats).toHaveTextContent('$100,123');
@@ -187,16 +310,12 @@ describe('ReplayPanel', () => {
 
   it('shows the summary card on the terminal frame, with its assumptions', async () => {
     await startReplay();
-    const source = FakeEventSource.latest();
+    const source = FakeStream.latest();
 
-    act(() => {
-      source.emit(equityEvent('2024-01-02', 100_123.4));
-    });
+    await act(() => source.emit(equityEvent('2024-01-02', 100_123.4)));
     expect(screen.queryByTestId('replay-summary')).not.toBeInTheDocument();
 
-    act(() => {
-      source.emit(summaryEvent);
-    });
+    await act(() => source.emit(summaryEvent));
 
     const summary = screen.getByTestId('replay-summary');
     // Straight off the payload: +23.21% and 2.50 are the engine's figures.
@@ -210,26 +329,22 @@ describe('ReplayPanel', () => {
     // The stream is closed on the terminal frame: a trailing transport error
     // (the server ending its response) must not flip a finished replay.
     expect(source.closed).toBe(true);
-    act(() => source.fail());
+    await act(() => source.fail());
     expect(screen.queryByTestId('replay-error')).not.toBeInTheDocument();
     expect(screen.getByTestId('replay-status')).toHaveTextContent('Complete');
   });
 
   it('pauses the display while the stream continues, then catches up on resume', async () => {
     const user = await startReplay();
-    const source = FakeEventSource.latest();
-    act(() => {
-      source.emit(equityEvent('2024-01-02', 100_123.4));
-    });
+    const source = FakeStream.latest();
+    await act(() => source.emit(equityEvent('2024-01-02', 100_123.4)));
 
     await user.click(screen.getByRole('button', { name: /pause/i }));
 
     expect(screen.getByTestId('replay-status')).toHaveTextContent('Paused');
     // The connection stays open and events keep arriving, held off screen.
     expect(source.closed).toBe(false);
-    act(() => {
-      source.emit(equityEvent('2024-01-03', 101_000));
-    });
+    await act(() => source.emit(equityEvent('2024-01-03', 101_000)));
     expect(screen.getByTestId('replay-stats')).toHaveTextContent('2024-01-02');
     expect(screen.getByTestId('replay-stats')).not.toHaveTextContent('2024-01-03');
 
@@ -243,10 +358,8 @@ describe('ReplayPanel', () => {
 
   it('resets the display and closes the stream on Reset', async () => {
     const user = await startReplay();
-    const source = FakeEventSource.latest();
-    act(() => {
-      source.emit(equityEvent('2024-01-02', 100_123.4));
-    });
+    const source = FakeStream.latest();
+    await act(() => source.emit(equityEvent('2024-01-02', 100_123.4)));
 
     await user.click(screen.getByRole('button', { name: /reset/i }));
 
@@ -257,9 +370,9 @@ describe('ReplayPanel', () => {
 
   it('reports a stream failure as an error, with the source closed', async () => {
     await startReplay();
-    const source = FakeEventSource.latest();
+    const source = FakeStream.latest();
 
-    act(() => source.fail());
+    await act(() => source.fail());
 
     const error = screen.getByTestId('replay-error');
     expect(error).toHaveAttribute('role', 'alert');
@@ -270,11 +383,11 @@ describe('ReplayPanel', () => {
 
   it('treats a truncated stream as a prefix, never as a result', async () => {
     await startReplay();
-    const source = FakeEventSource.latest();
+    const source = FakeStream.latest();
 
-    act(() => {
-      source.emit({ event: 'truncated', detail: 'max_events=250000 reached before the summary' });
-    });
+    await act(() =>
+      source.emit({ event: 'truncated', detail: 'max_events=250000 reached before the summary' }),
+    );
 
     const warning = screen.getByTestId('replay-truncated');
     expect(warning).toHaveAttribute('role', 'alert');
@@ -284,15 +397,15 @@ describe('ReplayPanel', () => {
 
   it('changes pace only from the next play — a running stream keeps its speed', async () => {
     const user = await startReplay();
-    expect(FakeEventSource.latest().url).toContain('interval_ms=50');
+    expect(FakeStream.latest().url).toContain('interval_ms=50');
 
     await user.click(screen.getByRole('button', { name: '100 ms' }));
     // No new connection mid-stream.
-    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(FakeStream.instances).toHaveLength(1);
 
     await user.click(screen.getByRole('button', { name: /reset/i }));
     await user.click(screen.getByRole('button', { name: /^play$/i }));
-    expect(FakeEventSource.latest().url).toContain('interval_ms=100');
+    expect(FakeStream.latest().url).toContain('interval_ms=100');
   });
 });
 
@@ -323,9 +436,7 @@ describe('ReplayPanel fitting', () => {
 
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: /^play$/i }));
-    act(() => {
-      FakeEventSource.latest().emit(equityEvent('2024-01-02', 100_123.4));
-    });
+    await act(() => FakeStream.latest().emit(equityEvent('2024-01-02', 100_123.4)));
 
     expect(screen.queryByTestId('replay-equity-empty')).not.toBeInTheDocument();
   });
