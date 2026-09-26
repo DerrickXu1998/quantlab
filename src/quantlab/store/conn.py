@@ -11,13 +11,16 @@ from __future__ import annotations
 import contextlib
 import os
 from typing import Any, Iterator
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 DEFAULT_DSN = "postgresql://quantlab:quantlab@localhost:5432/quantlab"
 DEFAULT_CH_URL = "clickhouse://quantlab:quantlab@localhost:8123/quantlab"
 
 ENV_VAR = "QUANTLAB_DB_URL"
 CH_ENV_VAR = "QUANTLAB_CH_URL"
+#: The ClickHouse password when the URL carries none (a managed service's
+#: secret kept out of the address). Postgres has libpq's own PGPASSWORD.
+CH_PASSWORD_ENV = "QUANTLAB_CH_PASSWORD"
 
 
 class StoreNotConfigured(RuntimeError):
@@ -92,14 +95,28 @@ def ch_url(explicit: str = "") -> str:
 
 
 def _parse_ch_url(url: str) -> dict[str, Any]:
-    """clickhouse://user:pass@host:8123/db -> clickhouse_connect kwargs."""
+    """clickhouse[s]://user:pass@host:port/db -> clickhouse_connect kwargs.
+
+    `clickhouses://` (or `?secure=true`) is TLS, defaulting to 8443 -- what a
+    managed ClickHouse Cloud service speaks.
+    """
     parsed = urlparse(url)
-    secure = parsed.scheme in ("clickhouses", "https")
+    query = parse_qs(parsed.query)
+    secure = parsed.scheme in ("clickhouses", "https") or query.get("secure", [""])[0].lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    # Percent-decoded: a managed service's generated password routinely holds
+    # `@`, `/` or `%`, which only survive a URL encoded -- and urlparse hands
+    # them back still encoded. With no password in the URL at all, it comes
+    # from QUANTLAB_CH_PASSWORD, so the secret can live apart from the address.
+    password = unquote(parsed.password) if parsed.password else os.environ.get(CH_PASSWORD_ENV, "")
     return {
         "host": parsed.hostname or "localhost",
         "port": parsed.port or (8443 if secure else 8123),
-        "username": parsed.username or "default",
-        "password": parsed.password or "",
+        "username": unquote(parsed.username) if parsed.username else "default",
+        "password": password,
         "database": (parsed.path or "/default").lstrip("/") or "default",
         "secure": secure,
     }

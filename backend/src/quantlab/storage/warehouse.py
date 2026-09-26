@@ -16,7 +16,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 # The screen below derives its ratios with the fundamental rules' own helpers
 # rather than a second copy of them. This module has no other business knowing
@@ -28,6 +28,9 @@ from quantlab.storage.pool import ClientPool, pool_config
 
 DB_URL_ENV = "QUANTLAB_DB_URL"
 CH_URL_ENV = "QUANTLAB_CH_URL"
+#: The ClickHouse password when the URL carries none (a managed service's
+#: secret kept out of the address). Postgres has libpq's own PGPASSWORD.
+CH_PASSWORD_ENV = "QUANTLAB_CH_PASSWORD"
 
 # Read through the FINAL view, never the raw table: ReplacingMergeTree
 # collapses re-ingested duplicates on its own schedule, so the raw table can
@@ -45,14 +48,28 @@ def pg_dsn() -> str:
 
 
 def ch_settings(url: str = "") -> dict[str, Any]:
-    """clickhouse://user:pass@host:8123/db -> clickhouse_connect kwargs."""
+    """clickhouse[s]://user:pass@host:port/db -> clickhouse_connect kwargs.
+
+    `clickhouses://` (or `?secure=true`) is TLS, defaulting to 8443 -- what a
+    managed ClickHouse Cloud service speaks.
+    """
     parsed = urlparse(url or os.environ.get(CH_URL_ENV, ""))
-    secure = parsed.scheme in ("clickhouses", "https")
+    query = parse_qs(parsed.query)
+    secure = parsed.scheme in ("clickhouses", "https") or query.get("secure", [""])[0].lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    # Percent-decoded: a managed service's generated password routinely holds
+    # `@`, `/` or `%`, which only survive a URL encoded -- and urlparse hands
+    # them back still encoded. With no password in the URL at all, it comes
+    # from QUANTLAB_CH_PASSWORD, so the secret can live apart from the address.
+    password = unquote(parsed.password) if parsed.password else os.environ.get(CH_PASSWORD_ENV, "")
     return {
         "host": parsed.hostname or "localhost",
         "port": parsed.port or (8443 if secure else 8123),
-        "username": parsed.username or "default",
-        "password": parsed.password or "",
+        "username": unquote(parsed.username) if parsed.username else "default",
+        "password": password,
         "database": (parsed.path or "/default").lstrip("/") or "default",
         "secure": secure,
     }
