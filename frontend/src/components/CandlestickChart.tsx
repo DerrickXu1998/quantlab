@@ -236,6 +236,11 @@ export function CandlestickChart({
     // The plugin wants markers in time order.
     marker.sort((a, b) => String(a.time).localeCompare(String(b.time)));
     markers.setMarkers(marker);
+
+    // Without this the chart shows only the rightmost slice that fits in the
+    // viewport. A ten-year window then looks like "only 2016 data" even though
+    // the series reaches back further.
+    chartRef.current?.timeScale().fitContent();
   }, [bars, markedBar, signals, theme]);
 
   // Apply the panel's size, but only while the panel is actually visible. A
