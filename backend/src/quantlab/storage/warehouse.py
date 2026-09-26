@@ -180,7 +180,11 @@ def health(wh: Warehouse) -> tuple[bool, int]:
     """(has_data, signal_count). 'Seeded' means at least one bar is present."""
     try:
         with wh.bars() as client:
-            rows = client.query(f"SELECT count() FROM {BARS_VIEW}").result_rows
+            # Daily bars only: the API serves nothing else, and the pipeline
+            # sharing this ClickHouse also stores minute bars in the same table.
+            rows = client.query(
+                f"SELECT count() FROM {BARS_VIEW} WHERE frequency = '1d'"
+            ).result_rows
             bars = int(rows[0][0]) if rows else 0
     except Exception:
         return False, 0
@@ -244,7 +248,8 @@ def list_instruments(wh: Warehouse) -> dict:
 
     with wh.bars() as client:
         counts_rows = client.query(
-            f"SELECT instrument_id, count() FROM {BARS_VIEW} GROUP BY instrument_id"
+            f"SELECT instrument_id, count() FROM {BARS_VIEW} "
+            "WHERE frequency = '1d' GROUP BY instrument_id"
         ).result_rows
     bar_counts = {int(iid): int(n) for iid, n in counts_rows}
 
