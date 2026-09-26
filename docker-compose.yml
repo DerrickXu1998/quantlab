@@ -76,6 +76,10 @@ services:
     environment:
       QUANTLAB_DB_URL: ${QUANTLAB_DB_URL:-postgresql://quantlab:quantlab@postgres:5432/quantlab}
       QUANTLAB_CH_URL: ${QUANTLAB_CH_URL:-clickhouse://quantlab:quantlab@clickhouse:8123/quantlab}
+      # Empty by default: the local URLs above carry their own passwords. Set
+      # them (with the two URLs) to point this stack at the managed services.
+      PGPASSWORD: ${PGPASSWORD:-}
+      QUANTLAB_CH_PASSWORD: ${QUANTLAB_CH_PASSWORD:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -96,6 +100,10 @@ services:
     environment:
       QUANTLAB_DB_URL: ${QUANTLAB_DB_URL:-postgresql://quantlab:quantlab@postgres:5432/quantlab}
       QUANTLAB_CH_URL: ${QUANTLAB_CH_URL:-clickhouse://quantlab:quantlab@clickhouse:8123/quantlab}
+      # Empty by default: the local URLs above carry their own passwords. Set
+      # them (with the two URLs) to point this stack at the managed services.
+      PGPASSWORD: ${PGPASSWORD:-}
+      QUANTLAB_CH_PASSWORD: ${QUANTLAB_CH_PASSWORD:-}
       QUANTLAB_HOME: /var/lib/quantlab
       # SEC and other sources want a real contact address; override in .env.
       QUANTLAB_USER_AGENT: ${QUANTLAB_USER_AGENT:-quantlab/0.1 (research)}
@@ -195,6 +203,10 @@ services:
       # dataset, which needs no network and no databases.
       QUANTLAB_DB_URL: ${QUANTLAB_DB_URL:-postgresql://quantlab:quantlab@postgres:5432/quantlab}
       QUANTLAB_CH_URL: ${QUANTLAB_CH_URL:-clickhouse://quantlab:quantlab@clickhouse:8123/quantlab}
+      # Empty by default: the local URLs above carry their own passwords. Set
+      # them (with the two URLs) to point this stack at the managed services.
+      PGPASSWORD: ${PGPASSWORD:-}
+      QUANTLAB_CH_PASSWORD: ${QUANTLAB_CH_PASSWORD:-}
       QUANTLAB_DB: /data/quantlab.db
       QUANTLAB_DB_PATH: /data/quantlab.db
       # Set unconditionally so the backend service definition works with and

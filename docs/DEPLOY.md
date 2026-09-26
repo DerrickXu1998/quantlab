@@ -1,7 +1,9 @@
 # Deploying QuantLab
 
 The work is split in two. **Vercel** builds and serves the SPA from `frontend/`.
-One `e2-standard-2` Compute Engine VM runs **the API and its datastores**.
+One `e2-standard-2` Compute Engine VM runs **the API**; its datastores are
+**managed services** — bars in ClickHouse Cloud, the catalog in a managed
+Postgres — reached over TLS.
 GitHub Actions builds two images, pushes them to Artifact Registry, and restarts
 Compose on the VM over an IAP SSH tunnel. Both pipelines cost nothing; the VM is
 the bill.
@@ -19,9 +21,11 @@ the bill.
         +--- ssh via IAP --->  e2-standard-2 VM
                                 caddy :80/:443  (TLS, the only public port)
                                   -> backend (uvicorn, 2 workers)
-                                     -> postgres   (catalog)
-                                     -> clickhouse (bars)
                                   [migrate + ingest run from the ingest image]
+                                        |
+                                        | TLS
+                                        +--> managed Postgres   (catalog)
+                                        +--> ClickHouse Cloud   (bars)
 ```
 
 Two consequences follow from the split, and both are load-bearing:
@@ -35,8 +39,10 @@ Two consequences follow from the split, and both are load-bearing:
   certificate authority issues for a bare IP, so plain HTTP is only good for
   curling the box from itself.
 
-Postgres and ClickHouse are bound to `127.0.0.1` and are not reachable from the
-internet at all.
+The databases are not on the VM. Their addresses and passwords live in
+`/opt/quantlab/.env` (`QUANTLAB_DB_URL` + `PGPASSWORD`, `QUANTLAB_CH_URL` +
+`QUANTLAB_CH_PASSWORD`); restrict each service's IP allow-list to the VM's
+address.
 
 ## Why this shape
 
@@ -44,7 +50,7 @@ internet at all.
 |---|---|
 | SPA on Vercel, not on the VM | Vercel already builds `frontend/` from this repository on every push. Shipping a second copy in a container would be two builds and two deploys of one artefact. The cost is CORS and a mandatory domain — see above. |
 | The ingest image still ships | It is not only the data loader: the `migrate` service runs from it, and the backend will not start until that container has exited successfully. Dropping it would stop the API booting. |
-| One VM, not Cloud Run | ClickHouse and Postgres want persistent local disk and a long-lived process. Cloud Run gives neither, and managed equivalents (Cloud SQL + ClickHouse Cloud) cost several times the VM on their own. |
+| Managed databases, not containers on the VM | Backups, upgrades and disk growth become the provider's job, and the VM holds no market data — it can be rebuilt from scratch in minutes. The price is network latency on every query, which is why the VM should sit in the same region as the databases. |
 | Artifact Registry, not Docker Hub | The VM authenticates with its own service account. No registry credentials exist on the host to leak or rotate. |
 | Workload Identity Federation, not a JSON key | Actions exchanges GitHub's OIDC token for a short-lived Google credential. There is no key in repository secrets because there is no key. |
 | SSH through IAP, not a public port 22 | The firewall admits only IAP's `35.235.240.0/20` range. |
@@ -123,20 +129,25 @@ sudo AR_REGION=europe-west2 bash /tmp/quantlab/deploy/bootstrap-vm.sh
 ```
 
 Installs Docker and Compose v2, points Docker at Artifact Registry, creates
-2 GiB of swap and the kernel limits ClickHouse needs, generates
-`/opt/quantlab/.env` with **random database passwords**, installs the
+2 GiB of swap, generates `/opt/quantlab/.env` for you to fill in, installs the
 `quantlab.service` systemd unit so the stack survives a reboot, and enables
 unattended security upgrades.
 
-Then add your ingest API keys (all free — see [DATA_SOURCES.md](DATA_SOURCES.md)):
+Then fill in the managed databases and your ingest API keys (all free — see
+[DATA_SOURCES.md](DATA_SOURCES.md)):
 
 ```bash
-sudo nano /opt/quantlab/.env     # SEC_USER_AGENT, FRED_API_KEY, COMPANIES_HOUSE_API_KEY
+sudo nano /opt/quantlab/.env
+#   QUANTLAB_DB_URL=postgresql://postgres@<pg-host>:5432/postgres?sslmode=require
+#   PGPASSWORD=...
+#   QUANTLAB_CH_URL=clickhouses://default@<service>.clickhouse.cloud:8443/quantlab
+#   QUANTLAB_CH_PASSWORD=...
+#   SEC_USER_AGENT, FRED_API_KEY, COMPANIES_HOUSE_API_KEY
 ```
 
-> `/opt/quantlab/.env` holds the only copy of the generated database passwords,
-> and they are baked into the Postgres and ClickHouse volumes on first start.
-> Changing them in the file alone will not change them in the databases.
+Passwords go in their own variables, never inside the URLs: a generated
+password needs no escaping there, and never appears in a logged URL. Allow the
+VM's external IP in both services' IP allow-lists.
 
 ### 3. Domain, HTTPS and CORS — before the first deploy
 
@@ -233,13 +244,41 @@ sudo cp .env.images.prev .env.images
 sudo systemctl restart quantlab
 ```
 
-**Reach a database** without exposing it. The ports are bound to loopback on the
-VM, so tunnel to them:
+**Reach a database.** They are managed services, so connect to them directly
+(from an allow-listed address) or use each provider's web console:
 
 ```bash
-gcloud compute ssh quantlab --zone europe-west2-c --tunnel-through-iap -- -L 5432:localhost:5432
-psql "postgresql://quantlab:<password-from-/opt/quantlab/.env>@localhost:5432/quantlab"
+PGPASSWORD=... psql "postgresql://postgres@<pg-host>:5432/postgres?sslmode=require"
+clickhouse client --host <service>.clickhouse.cloud --secure --password ...
 ```
+
+## Moving an existing VM onto the managed databases
+
+A VM set up before the move runs Postgres and ClickHouse as containers, with the
+data in their volumes. `deploy/migrate-to-managed.sh` copies it across, once,
+while those containers are still running:
+
+1. On the VM, put the managed settings in `/opt/quantlab/.env.managed`
+   (`sudo nano`, then `sudo chmod 600`) — the same four lines as above.
+2. Run it: `sudo bash migrate-to-managed.sh` (copy it over, or run it from a
+   checkout). It checks both targets, the source's foreign keys and the needed
+   Postgres extensions; pauses the API; `pg_dump`s and restores Postgres;
+   recreates and streams each ClickHouse table; compares **every** table's row
+   count; and only if all match rewrites `.env` (keeping
+   `.env.pre-managed-<time>`) and deletes `.env.managed`. The API restarts on its
+   old settings either way.
+3. Deploy (merge to `main`). The new compose file has no database containers;
+   `migrate` finds the copied schema up to date and the backend reads the
+   managed services.
+
+Until step 2 has run, `remote-deploy.sh` refuses to deploy — an `.env` still
+naming the `postgres` / `clickhouse` hosts would otherwise stop the containers
+and leave the API with nothing to read. The old volumes are kept, unmounted, as a
+fallback; remove them once you trust the copy:
+`docker volume rm quantlab_quantlab-chdata quantlab_quantlab-pgdata`.
+
+**Rolling back** before trusting the copy: restore `.env.pre-managed-<time>` as
+`.env` and redeploy the commit before the move.
 
 ## When something is wrong
 
@@ -252,8 +291,10 @@ psql "postgresql://quantlab:<password-from-/opt/quantlab/.env>@localhost:5432/qu
 | Browser blocks the API call as "mixed content" | The SPA is on HTTPS and `QUANTLAB_SITE_ADDRESS` is still `:80`. Set a real hostname and point `VITE_API_BASE_URL` at `https://`. |
 | Stack refuses to start, `required variable QUANTLAB_CORS_ORIGINS` | Working as intended — the API is useless to the SPA without it, so it fails loudly rather than serving something the browser will reject. |
 | API serves data that looks plausible but fictitious | It fell back to the synthetic SQLite demo because `QUANTLAB_DB_URL` or `QUANTLAB_CH_URL` is unset or wrong. `remote-deploy.sh` hard-fails on this, and `make prod-check` re-checks it any time. |
-| A container is killed mid-query | Memory. The Compose limits and `clickhouse-limits.xml` size the stack for 8 GB; a query that needs more now fails with `MEMORY_LIMIT_EXCEEDED` instead of taking the host down. Widen the ClickHouse limit only if you also grow the VM. |
-| Disk filling | `docker system df`. The weekly prune keeps a week of superseded images; ClickHouse `system.query_log` is capped at 14 days. |
+| Deploy refuses: "still points at the retired in-compose database" | `.env` still names the old `postgres` / `clickhouse` containers. Run `deploy/migrate-to-managed.sh` first (see above); the old stack keeps serving meanwhile. |
+| `migrate` fails to connect, or times out | The managed service's IP allow-list does not include the VM's external IP, or `PGPASSWORD` / `QUANTLAB_CH_PASSWORD` is wrong. `sudo docker compose ... logs migrate` has the driver's message. |
+| API slow on every request | Round trips to the databases. Keep the VM in the same region as ClickHouse Cloud and the Postgres service; each request makes several queries, and a transatlantic round trip is ~80 ms each. |
+| Disk filling | `docker system df`. The weekly prune keeps a week of superseded images. |
 | Certificate not issued | DNS must resolve to the VM *before* `QUANTLAB_SITE_ADDRESS` is set. `make prod-logs SERVICE=caddy`. |
 | Deploy blocked by frontend tests timing out | CI runs vitest with `--maxWorkers=2`. Unbounded, twenty parallel jsdom environments starve each other and six `findBy*` queries time out — a contention artefact, not a defect. The underlying reliance on wall-clock timeouts is still worth fixing in the tests. |
 

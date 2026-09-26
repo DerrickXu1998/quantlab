@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # QuantLab -- the part of a deploy that runs ON the VM.
 #
-# GitHub Actions copies this file, docker-compose.prod.yml, the Caddyfile and
-# clickhouse-limits.xml into a staging directory, then runs:
+# GitHub Actions copies this file, docker-compose.prod.yml and the Caddyfile
+# into a staging directory, then runs:
 #
 #     sudo bash remote-deploy.sh <backend-image> <ingest-image>
 #
@@ -41,11 +41,30 @@ compose() {
 [ -d "$APP_DIR" ] || fail "$APP_DIR does not exist -- run deploy/bootstrap-vm.sh on this VM first"
 [ -f "$APP_DIR/.env" ] || fail "$APP_DIR/.env is missing -- run deploy/bootstrap-vm.sh first"
 
+# --- 0. the datastores are managed services -----------------------------------
+# The compose file no longer runs Postgres or ClickHouse. An .env still pointing
+# at the old in-compose hosts would let this deploy stop those containers and
+# then fail every query -- so refuse here, before anything changes, with the
+# old stack still serving. deploy/migrate-to-managed.sh copies the data across
+# and rewrites these lines; run it first.
+for var in QUANTLAB_DB_URL QUANTLAB_CH_URL; do
+	value="$(sed -n "s/^${var}=//p" "$APP_DIR/.env" | head -1)"
+	case "$value" in
+	*@postgres:* | *@postgres/* | *@clickhouse:* | *@clickhouse/*)
+		fail "$var in $APP_DIR/.env still points at the retired in-compose database. Run deploy/migrate-to-managed.sh on this VM first (see docs/DEPLOY.md)."
+		;;
+	"") fail "$var is empty in $APP_DIR/.env" ;;
+	esac
+done
+for var in PGPASSWORD QUANTLAB_CH_PASSWORD; do
+	grep -q "^${var}=." "$APP_DIR/.env" || fail "$var is empty in $APP_DIR/.env -- the managed databases need it"
+done
+
 # --- 1. install the new configuration ----------------------------------------
 # Config is copied every deploy, so a change to the compose file or the Caddyfile
 # ships exactly like a code change: commit, push, done.
 log "installing configuration from $STAGE_DIR"
-for f in docker-compose.prod.yml Caddyfile clickhouse-limits.xml; do
+for f in docker-compose.prod.yml Caddyfile; do
 	[ -f "$STAGE_DIR/$f" ] || fail "$f missing from the staged deploy"
 	install -o root -g root -m 0644 "$STAGE_DIR/$f" "$APP_DIR/$f"
 done
