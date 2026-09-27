@@ -8,7 +8,6 @@ import { derivePositions, type Fill } from '../../src/quantlab/data/execution';
 import { buildOrderBook } from '../../src/quantlab/data/orderBook';
 import { FeedProvider } from '../../src/quantlab/feed/FeedProvider';
 import { ExecutionView } from '../../src/quantlab/views/ExecutionView';
-import { IndicatorsView } from '../../src/quantlab/views/IndicatorsView';
 import { ThemeProvider } from '../../src/theme/ThemeProvider';
 import { installCanvas2d } from '../mocks/canvas-2d';
 import { installResizeObserver } from '../mocks/resize-observer';
@@ -86,62 +85,6 @@ describe('indicator math', () => {
     const result = vwap([10, 20, 30]);
 
     expect(result).toEqual([10, 15, 20]);
-  });
-});
-
-describe('Indicators view', () => {
-  it('explains an empty watchlist instead of charting nothing', () => {
-    renderWithFeed(<IndicatorsView instruments={[]} feedError={null} />);
-
-    expect(screen.getByTestId('indicators-empty')).toHaveTextContent(/no instruments/i);
-  });
-
-  it('distinguishes a dead feed from an empty one', () => {
-    renderWithFeed(<IndicatorsView instruments={instruments} feedError="backend down" />);
-
-    const error = screen.getByTestId('indicators-feed-error');
-    expect(error).toHaveAttribute('role', 'alert');
-  });
-
-  it('selects the first instrument and charts it without being asked', async () => {
-    renderWithFeed(<IndicatorsView instruments={instruments} feedError={null} />);
-
-    const panel = await screen.findByRole('region', { name: /ZZTRND — intraday/i });
-    expect(within(panel).getByTestId('price-chart-summary')).toBeInTheDocument();
-    // Anything showing a tick walks away from the real close and says so.
-    expect(within(panel).getAllByTestId('simulated-tag').length).toBeGreaterThan(0);
-  });
-
-  it('shows RSI and MACD as sub-panels only while toggled on', async () => {
-    const user = userEvent.setup();
-    renderWithFeed(<IndicatorsView instruments={instruments} feedError={null} />);
-    await screen.findByRole('region', { name: /intraday/i });
-
-    expect(screen.queryByRole('region', { name: /^RSI/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole('region', { name: /^MACD/ })).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: /^RSI 14/ }));
-    await user.click(screen.getByRole('button', { name: /^MACD 12/ }));
-
-    expect(screen.getByRole('region', { name: /^RSI \(14\)/ })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: /^MACD \(12, 26, 9\)/ })).toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: /^RSI 14/ }));
-    expect(screen.queryByRole('region', { name: /^RSI/ })).not.toBeInTheDocument();
-  });
-
-  it('keeps Bollinger and VWAP as overlays — toggling them adds no sub-panel', async () => {
-    const user = userEvent.setup();
-    renderWithFeed(<IndicatorsView instruments={instruments} feedError={null} />);
-    await screen.findByRole('region', { name: /intraday/i });
-
-    await user.click(screen.getByRole('button', { name: /^BB 20/ }));
-    await user.click(screen.getByRole('button', { name: /^VWAP/ }));
-
-    expect(screen.queryByRole('region', { name: /bollinger|vwap/i })).not.toBeInTheDocument();
-    // Two regions only: the instruments rail and the price chart itself.
-    expect(screen.getAllByRole('region').map((region) => region.getAttribute('aria-label')))
-      .toEqual(['Instruments', expect.stringMatching(/intraday/i)]);
   });
 });
 
@@ -241,42 +184,6 @@ describe('Execution view', () => {
   });
 });
 
-describe('Market destination handoffs', () => {
-  it('"Signals for X" deep-links Research with the instrument filter applied', async () => {
-    const user = userEvent.setup();
-    renderWithFeed(<IndicatorsView instruments={instruments} feedError={null} />);
-    await screen.findByRole('region', { name: /intraday/i });
-
-    await user.click(screen.getByRole('button', { name: /signals for ZZTRND/i }));
-
-    expect(window.location.hash).toBe('#/research?instrument=ZZTRND');
-  });
-
-  it('daily history swaps the simulated feed for real stored bars, and says so', async () => {
-    vi.mocked(apiClient.getPrices).mockResolvedValue({
-      total: 2,
-      items: [
-        { date: '2024-12-30', open: 10, high: 11, low: 9, close: 10.5, volume: 100 },
-        { date: '2024-12-31', open: 10.5, high: 11, low: 10, close: 10.8, volume: 120 },
-      ] as unknown as apiClient.PriceBar[],
-    });
-    const user = userEvent.setup();
-    renderWithFeed(<IndicatorsView instruments={instruments} feedError={null} />);
-    const intraday = await screen.findByRole('region', { name: /intraday/i });
-    // The default view is the simulated feed, tagged as such.
-    expect(within(intraday).getAllByTestId('simulated-tag').length).toBeGreaterThan(0);
-
-    await user.click(screen.getByRole('button', { name: /daily history/i }));
-
-    const daily = await screen.findByRole('region', { name: /daily history/i });
-    expect(apiClient.getPrices).toHaveBeenCalledWith('ZZTRND');
-    // The sim tag is visibly replaced by the real-data state.
-    expect(within(daily).queryByTestId('simulated-tag')).toBeNull();
-    expect(await within(daily).findByTestId('real-data-badge')).toBeInTheDocument();
-    expect(within(daily).getByTestId('price-chart')).toBeInTheDocument();
-  });
-});
-
 /**
  * Fitting, as a behaviour.
  *
@@ -342,57 +249,4 @@ describe('workspace fitting', () => {
     expect(screen.getByTestId('execution-positions-empty')).toHaveClass('py-6');
   });
 
-  it('makes the market workspace a fill column and grows the chart into it', async () => {
-    renderWithFeed(<IndicatorsView instruments={instruments} feedError={null} />);
-    const panel = await screen.findByRole('region', { name: /intraday/i });
-
-    const workspace = screen.getByTestId('market-workspace');
-    expect(hasAll(workspace, 'min-h-0', 'flex-1', 'overflow-y-auto')).toEqual([]);
-    expect(hasAll(panel, 'flex', 'min-h-0', 'flex-1', 'flex-col')).toEqual([]);
-
-    // The chart grows through PriceChart's own `fill` prop now, rather than a
-    // wrapper reaching through its DOM with arbitrary variants. Assert the
-    // shape that produces: the canvas wrapper is a growing flex child with a
-    // floor, and carries no inline pixel height to fight.
-    const summary = within(panel).getByTestId('price-chart-summary');
-    const wrapper = summary.parentElement as HTMLElement;
-    expect(hasAll(wrapper, 'min-h-[220px]', 'flex-1')).toEqual([]);
-    expect(wrapper.style.height).toBe('');
-
-    const column = wrapper.parentElement;
-    expect(hasAll(column, 'flex', 'min-h-0', 'flex-1', 'flex-col')).toEqual([]);
-  });
-
-  it('gives the chart the space a toggled-off indicator is not using', async () => {
-    const user = userEvent.setup();
-    renderWithFeed(<IndicatorsView instruments={instruments} feedError={null} />);
-    const panel = await screen.findByRole('region', { name: /intraday/i });
-    const cell = panel.parentElement;
-
-    // With every indicator off there is no void below the chart: the chart is
-    // the one thing in the column that grows.
-    expect(hasAll(cell, 'flex-1', 'flex', 'flex-col')).toEqual([]);
-
-    await user.click(screen.getByRole('button', { name: /^RSI 14/ }));
-    const rsi = screen.getByRole('region', { name: /^RSI \(14\)/ });
-
-    // The sub-panel takes its own height and no more; the chart keeps the rest.
-    expect(rsi.parentElement).toHaveClass('shrink-0');
-    expect(hasAll(cell, 'flex-1')).toEqual([]);
-  });
-
-  it('fills the instrument rail and lets a name read at 240px', async () => {
-    renderWithFeed(<IndicatorsView instruments={instruments} feedError={null} />);
-    await screen.findByRole('region', { name: /intraday/i });
-
-    const rail = screen.getByRole('region', { name: 'Instruments' });
-    expect(hasAll(rail, 'flex', 'min-h-0', 'flex-1', 'flex-col')).toEqual([]);
-
-    const row = within(rail).getByRole('button', { name: /ZZTRND/ });
-    // Two lines: identifiers over movement. On one line the name was the only
-    // non-numeric thing competing for 240px, and it always lost.
-    expect(row).toHaveClass('flex-col');
-    expect(row).toHaveAttribute('title', 'Trend Co');
-    expect(row).toHaveTextContent('Trend Co');
-  });
 });

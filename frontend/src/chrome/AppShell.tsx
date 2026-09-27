@@ -20,7 +20,7 @@ import { useWatchlist } from '../quantlab/data/useWatchlist';
 import { FeedProvider, useFeedStatus } from '../quantlab/feed/FeedProvider';
 import { TickerTape } from '../quantlab/panels/TickerTape';
 import { ExecutionView } from '../quantlab/views/ExecutionView';
-import { IndicatorsView } from '../quantlab/views/IndicatorsView';
+import { MarketView } from '../quantlab/views/MarketView';
 import { OverviewView } from '../quantlab/views/OverviewView';
 import { ReplayView } from '../quantlab/views/ReplayView';
 import { StrategyLabView } from '../quantlab/views/StrategyLabView';
@@ -203,7 +203,7 @@ export function AppShell() {
               <ReplayView />
             </div>
           ) : route.destination === 'market' ? (
-            <IndicatorsView instruments={instruments} feedError={error} />
+            <MarketView instruments={instruments} feedError={error} />
           ) : (
             <ExecutionView instruments={instruments} feedError={error} />
           )}

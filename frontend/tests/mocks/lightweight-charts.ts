@@ -12,17 +12,27 @@ import { vi } from 'vitest';
 
 export const CandlestickSeries = { seriesType: 'Candlestick' } as const;
 export const HistogramSeries = { seriesType: 'Histogram' } as const;
+export const LineSeries = { seriesType: 'Line' } as const;
+
+export const LineStyle = { Solid: 0, Dotted: 1, Dashed: 2, LargeDashed: 3, SparseDotted: 4 } as const;
 
 export const ColorType = { Solid: 'solid', VerticalGradient: 'gradient' } as const;
 export const CrosshairMode = { Normal: 0, Magnet: 1 } as const;
 
-export type MockSeriesDefinition = typeof CandlestickSeries | typeof HistogramSeries;
+export type MockSeriesDefinition =
+  | typeof CandlestickSeries
+  | typeof HistogramSeries
+  | typeof LineSeries;
 
 export interface MockSeries {
   seriesType: MockSeriesDefinition['seriesType'];
   setData: ReturnType<typeof vi.fn>;
   applyOptions: ReturnType<typeof vi.fn>;
   priceScale: ReturnType<typeof vi.fn>;
+  createPriceLine: ReturnType<typeof vi.fn>;
+  /** The pane the series was added to; 0 is the price pane. */
+  paneIndex: number;
+  options: Record<string, unknown>;
 }
 
 export interface MockMarkersPlugin {
@@ -37,6 +47,8 @@ export interface MockChart {
   timeScale: ReturnType<typeof vi.fn>;
   resize: ReturnType<typeof vi.fn>;
   remove: ReturnType<typeof vi.fn>;
+  panes: ReturnType<typeof vi.fn>;
+  options: Record<string, unknown>;
 }
 
 export const createdCharts: MockChart[] = [];
@@ -49,20 +61,32 @@ export function resetLightweightChartsMock() {
   createdMarkerPlugins.length = 0;
 }
 
-function makeSeries(definition: MockSeriesDefinition): MockSeries {
+function makeSeries(
+  definition: MockSeriesDefinition,
+  options: Record<string, unknown> = {},
+  paneIndex = 0,
+): MockSeries {
   const series: MockSeries = {
     seriesType: definition.seriesType,
     setData: vi.fn(),
     applyOptions: vi.fn(),
     priceScale: vi.fn(() => ({ applyOptions: vi.fn() })),
+    createPriceLine: vi.fn(),
+    paneIndex,
+    options,
   };
   createdSeries.push(series);
   return series;
 }
 
-export function createChart(): MockChart {
+export function createChart(_container?: unknown, options: Record<string, unknown> = {}): MockChart {
   const chart: MockChart = {
-    addSeries: vi.fn((definition: MockSeriesDefinition) => makeSeries(definition)),
+    addSeries: vi.fn(
+      (definition: MockSeriesDefinition, seriesOptions?: Record<string, unknown>, paneIndex?: number) =>
+        makeSeries(definition, seriesOptions, paneIndex),
+    ),
+    panes: vi.fn(() => []),
+    options,
     subscribeCrosshairMove: vi.fn(),
     applyOptions: vi.fn(),
     timeScale: vi.fn(() => ({ fitContent: vi.fn(), applyOptions: vi.fn() })),

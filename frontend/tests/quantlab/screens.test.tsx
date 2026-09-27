@@ -125,7 +125,7 @@ describe('App shell', () => {
     await screen.findByTestId('portfolio-summary');
 
     await user.click(screen.getByRole('button', { name: /market/i }));
-    expect(await screen.findByRole('region', { name: /intraday/i })).toBeInTheDocument();
+    expect(await screen.findByTestId('market-view')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /execution/i }));
     expect(await screen.findByTestId('order-ticket')).toBeInTheDocument();

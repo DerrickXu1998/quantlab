@@ -77,7 +77,7 @@ function BookStats({ state }: { state: ReturnType<typeof useReplay>['state'] }) 
   return (
     <div data-testid="replay-stats">
       <StatGrid min="8rem">
-        <BookStat label="Date">
+        <BookStat label="Bar date (EOD)">
           <span className="font-mono tabular-nums">{state.currentDate ?? '—'}</span>
         </BookStat>
         <BookStat label="Equity">
@@ -175,6 +175,13 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
               </Button>
             ))}
           </ButtonGroup>
+          {/* The question this answers used to go unasked: one step is one
+              stored end-of-day bar, never a minute aggregate, and the speed is
+              only the wall-clock pause between steps. */}
+          <p data-testid="replay-granularity" className="text-[11px] text-muted-foreground">
+            One step = one trading day (end-of-day bar). Speed is the pause between days, not
+            the bar size.
+          </p>
         </fieldset>
 
         <div className="flex items-center gap-2">
