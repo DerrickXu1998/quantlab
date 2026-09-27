@@ -13,6 +13,7 @@ branch on which one it is.
 
 from __future__ import annotations
 
+import datetime as dt
 import sqlite3
 from pathlib import Path
 from typing import Protocol
@@ -56,6 +57,10 @@ class StorageBackend(Protocol):
     # the same reason `load_facts_for` does.
     def fundamentals_coverage(self) -> dict: ...
     def list_universes(self) -> dict: ...
+    def publish_universe(
+        self, name: str, symbols: list[str], snapshot_date: str | None = None
+    ) -> dict: ...
+    def ensure_default_universe(self) -> None: ...
     def company_overview(self, symbol: str, as_of: str) -> dict | None: ...
     def screen(self, **kwargs) -> dict | None: ...
 
@@ -172,6 +177,14 @@ class SqliteBackend:
     def list_universes(self) -> dict:
         # The synthetic dataset is one flat list with no membership history.
         return {"total": 0, "items": []}
+
+    def publish_universe(
+        self, name: str, symbols: list[str], snapshot_date: str | None = None
+    ) -> dict:
+        raise NotImplementedError("the demo dataset has no universe history")
+
+    def ensure_default_universe(self) -> None:
+        pass
 
     def company_overview(self, symbol: str, as_of: str) -> dict | None:
         """The same page, minus the half the demo has no data for.
@@ -329,6 +342,17 @@ class WarehouseBackend:
 
     def list_universes(self) -> dict:
         return warehouse.list_universes(self.wh)
+
+    def publish_universe(
+        self, name: str, symbols: list[str], snapshot_date: str | None = None
+    ) -> dict:
+        date: dt.date | None = None
+        if snapshot_date:
+            date = dt.date.fromisoformat(snapshot_date)
+        return warehouse.publish_universe(self.wh, name, symbols, snapshot_date=date)
+
+    def ensure_default_universe(self) -> None:
+        warehouse.ensure_default_universe(self.wh)
 
     def company_overview(self, symbol: str, as_of: str) -> dict | None:
         return warehouse.company_overview(self.wh, symbol, as_of)

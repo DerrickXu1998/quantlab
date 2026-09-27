@@ -273,8 +273,27 @@ while those containers are still running:
 
 Until step 2 has run, `remote-deploy.sh` refuses to deploy — an `.env` still
 naming the `postgres` / `clickhouse` hosts would otherwise stop the containers
-and leave the API with nothing to read. The old volumes are kept, unmounted, as a
-fallback; remove them once you trust the copy:
+and leave the API with nothing to read.
+
+If the old containers are already gone but the managed databases already hold
+the data you need (for example, after a manual migration or when rebuilding the
+VM against an existing managed warehouse), you can rewrite `.env` directly
+without copying from the containers:
+
+```bash
+QUANTLAB_DB_URL=postgresql://postgres@<pg-host>:5432/postgres?sslmode=require \
+PGPASSWORD=<postgres password> \
+QUANTLAB_CH_URL=clickhouses://default@<service>.clickhouse.cloud:8443/quantlab \
+QUANTLAB_CH_PASSWORD=<clickhouse password> \
+GCP_INSTANCE=<vm> GCP_ZONE=<zone> \
+bash deploy/set-managed-env.sh
+```
+
+This backs up the previous `.env` and updates the four managed settings. The
+next deploy — or a manual `sudo systemctl restart quantlab` — uses them.
+
+The old volumes are kept, unmounted, as a fallback; remove them once you trust
+the copy:
 `docker volume rm quantlab_quantlab-chdata quantlab_quantlab-pgdata`.
 
 **Rolling back** before trusting the copy: restore `.env.pre-managed-<time>` as
@@ -291,7 +310,7 @@ fallback; remove them once you trust the copy:
 | Browser blocks the API call as "mixed content" | The SPA is on HTTPS and `QUANTLAB_SITE_ADDRESS` is still `:80`. Set a real hostname and point `VITE_API_BASE_URL` at `https://`. |
 | Stack refuses to start, `required variable QUANTLAB_CORS_ORIGINS` | Working as intended — the API is useless to the SPA without it, so it fails loudly rather than serving something the browser will reject. |
 | API serves data that looks plausible but fictitious | It fell back to the synthetic SQLite demo because `QUANTLAB_DB_URL` or `QUANTLAB_CH_URL` is unset or wrong. `remote-deploy.sh` hard-fails on this, and `make prod-check` re-checks it any time. |
-| Deploy refuses: "still points at the retired in-compose database" | `.env` still names the old `postgres` / `clickhouse` containers. Run `deploy/migrate-to-managed.sh` first (see above); the old stack keeps serving meanwhile. |
+| Deploy refuses: "still points at the retired in-compose database" | `.env` still names the old `postgres` / `clickhouse` containers. Run `deploy/migrate-to-managed.sh` first if the old containers still have the data; if they are already gone, use `deploy/set-managed-env.sh` to point `.env` at the managed services directly. |
 | `migrate` fails to connect, or times out | The managed service's IP allow-list does not include the VM's external IP, or `PGPASSWORD` / `QUANTLAB_CH_PASSWORD` is wrong. `sudo docker compose ... logs migrate` has the driver's message. |
 | API slow on every request | Round trips to the databases. Keep the VM in the same region as ClickHouse Cloud and the Postgres service; each request makes several queries, and a transatlantic round trip is ~80 ms each. |
 | Disk filling | `docker system df`. The weekly prune keeps a week of superseded images. |

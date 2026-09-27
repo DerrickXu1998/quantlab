@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
+import { DataSourceTag } from '../../components/DataSourceTag';
 import { CornerTicks } from '../../components/ui/corner-ticks';
-import { StatusBadge } from '../../components/ui/status-badge';
 import { cn } from '../../lib/utils';
 
 export interface PanelProps {
@@ -65,9 +65,12 @@ export function Panel({
         </h2>
         <div className="flex items-center gap-2">
           {simulated ? (
-            <StatusBadge tone="simulated" title={simulated} testId="simulated-tag">
-              Simulated
-            </StatusBadge>
+            <DataSourceTag
+              source="simulated"
+              title={simulated}
+              testId="simulated-tag"
+              className="text-[10px] tracking-[0.1em]"
+            />
           ) : null}
           {actions}
         </div>

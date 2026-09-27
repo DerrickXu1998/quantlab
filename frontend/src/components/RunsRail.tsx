@@ -1,8 +1,8 @@
-import { History, Trash2 } from 'lucide-react';
+import { History } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { Run } from '../api/client';
 import { useRuns } from '../runs/RunsContext';
-import { Button } from './ui/button';
+import { ConfirmDelete } from './ConfirmDelete';
 import { EmptyState } from './ui/empty-state';
 import { Numeric } from './ui/numeric';
 import { StatusBadge } from './ui/status-badge';
@@ -17,8 +17,6 @@ function RunRow({
   onSelect: () => void;
 }) {
   const { remove } = useRuns();
-  const [confirming, setConfirming] = useState(false);
-  const [deleting, setDeleting] = useState(false);
 
   return (
     <li className="group relative">
@@ -62,42 +60,11 @@ function RunRow({
       </button>
 
       <span className="absolute right-2 top-2">
-        {confirming ? (
-          <span className="flex items-center gap-1">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={deleting}
-              className="border-destructive/50 text-destructive hover:text-destructive"
-              onClick={async () => {
-                setDeleting(true);
-                try {
-                  await remove(run.id);
-                } finally {
-                  setDeleting(false);
-                  setConfirming(false);
-                }
-              }}
-            >
-              {deleting ? 'Deleting…' : 'Confirm'}
-            </Button>
-            <Button type="button" size="sm" variant="ghost" onClick={() => setConfirming(false)}>
-              Keep
-            </Button>
-          </span>
-        ) : (
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            aria-label={`Delete run ${run.name ?? run.id}`}
-            title="Delete this run"
-            onClick={() => setConfirming(true)}
-          >
-            <Trash2 size={16} strokeWidth={1.5} aria-hidden="true" />
-          </Button>
-        )}
+        <ConfirmDelete
+          label={`Delete run ${run.name ?? run.id}`}
+          title="Delete this run"
+          onConfirm={() => remove(run.id)}
+        />
       </span>
     </li>
   );

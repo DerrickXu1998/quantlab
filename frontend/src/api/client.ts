@@ -32,6 +32,9 @@ export type PriceBar = components['schemas']['PriceBar'];
 export type PriceBarList = components['schemas']['PriceBarList'];
 export type Signal = components['schemas']['Signal'];
 export type SignalList = components['schemas']['SignalList'];
+export type Universe = components['schemas']['Universe'];
+export type UniverseList = components['schemas']['UniverseList'];
+export type UniversePublishRequest = components['schemas']['UniversePublishRequest'];
 
 export type SignalQuery = NonNullable<paths['/signals']['get']['parameters']['query']>;
 export type PriceQuery = NonNullable<
@@ -376,8 +379,13 @@ export function screen(params: {
 }
 
 /** The universes a screen may be run over. */
-export function listUniverses(): Promise<{ items: { name: string; as_of: string; size: number }[] }> {
-  return request<{ items: { name: string; as_of: string; size: number }[] }>('/universes');
+export function listUniverses(): Promise<UniverseList> {
+  return request<UniverseList>('/universes');
+}
+
+/** Publish the current symbol list as a named universe snapshot. */
+export function createUniverse(body: UniversePublishRequest): Promise<Universe> {
+  return send<Universe>('/universes', 'POST', body);
 }
 
 export type { ExecutionConfig };

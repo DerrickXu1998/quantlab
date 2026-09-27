@@ -627,6 +627,12 @@ class UniverseList(BaseModel):
     items: list[UniverseSummary]
 
 
+class UniversePublishRequest(BaseModel):
+    name: str
+    symbols: list[str]
+    snapshot_date: str | None = None
+
+
 # RunRequest and Run reference StrategyRequest, ExecutionConfigModel and
 # ExecutionSummaryModel, which are defined below them. Rebuilding here resolves
 # those forward references now rather than on first request.

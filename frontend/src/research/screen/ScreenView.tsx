@@ -12,7 +12,8 @@ import { CoverageLine, ExclusionLedger } from './Coverage';
 import { ScreenControls } from './ScreenControls';
 import { ScreenTable } from './ScreenTable';
 import { describeConstraint, newDraft, readDrafts, type ConstraintDraft } from './constraints';
-import { useScreen, useUniverses, type ScreenQuery } from './useScreen';
+import { useUniverses, type UniversesState } from '../../api/UniversesProvider';
+import { useScreen, type ScreenQuery } from './useScreen';
 
 export interface ScreenViewProps {
   /** Hands the chosen name to the shell, which walks the user over to Company. */
@@ -181,7 +182,7 @@ export function ScreenView({ onSelectSymbol }: ScreenViewProps): JSX.Element {
  * lists. Three different next actions, so three different screens — and none
  * of them is a bare spinner.
  */
-function Unavailable({ universes }: { universes: ReturnType<typeof useUniverses> }) {
+function Unavailable({ universes }: { universes: UniversesState }) {
   const state = (() => {
     if (universes.status === 'loading') {
       return {

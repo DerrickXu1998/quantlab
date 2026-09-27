@@ -85,6 +85,13 @@ def create_app(db_path: str | Path | None = None, backend=None) -> FastAPI:
     )
     app.state.db_path = str(db_path) if db_path is not None else resolve_db_path()
     app.state.backend = backend or backends.select_backend(app.state.db_path)
+    # If the warehouse has no universe snapshots, publish every tradable
+    # instrument as a default 'all' universe so screens and strategies work
+    # out of the box. Idempotent: skipped once any snapshot exists.
+    try:
+        app.state.backend.ensure_default_universe()
+    except Exception:
+        logger.exception("ensure_default_universe_failed")
     # Mirrors select_backend: the warehouse when configured, else the demo.
     # Hand the store the warehouse itself (when the backend has one) so
     # experiment queries borrow its catalog pool rather than opening a second.

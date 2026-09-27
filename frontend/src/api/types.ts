@@ -84,7 +84,7 @@ export type StrategyRole = (typeof STRATEGY_ROLES)[number];
 export type ParamSpecV2 = ParamSpec & { unit?: ParamUnit | string | null };
 
 /** A registry entry with the §2 additions applied. */
-export type CatalogModel = Omit<Model, 'parameters'> & {
+export type CatalogModel = Omit<Model, 'parameters' | 'category'> & {
   parameters: ParamSpecV2[];
   category: SignalCategory | 'uncategorised';
   summary: string;
@@ -100,9 +100,10 @@ export type CatalogModel = Omit<Model, 'parameters'> & {
 };
 
 /** What `/models` may actually answer with while the backend is mid-flight. */
-export type RawCatalogModel = Omit<Model, 'parameters'> & {
+export type RawCatalogModel = Omit<Model, 'parameters' | 'category'> & {
   parameters: ParamSpecV2[];
-} & Partial<Omit<CatalogModel, keyof Model>>;
+  category?: CatalogModel['category'];
+} & Partial<Omit<CatalogModel, keyof Model | 'category'>>;
 
 export const CATEGORY_LABELS: Record<CatalogModel['category'], string> = {
   trend: 'Trend',
@@ -294,12 +295,12 @@ export const EXIT_REASON_LABELS: Record<ExitReason, string> = {
  * them, so a backend at the documented shape still reads.
  */
 export interface ExecutionSummary {
-  orders: number;
-  fills: number;
-  rejected_no_cash: number;
-  dropped_no_bar: number;
-  total_commission: number;
-  total_slippage: number;
+  orders?: number;
+  fills?: number;
+  rejected_no_cash?: number;
+  dropped_no_bar?: number;
+  total_commission?: number;
+  total_slippage?: number;
   rejected_max_positions?: number;
   rejected_cooldown?: number;
   rejected_shorts_disabled?: number;

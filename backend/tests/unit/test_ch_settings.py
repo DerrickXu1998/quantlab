@@ -55,4 +55,5 @@ def test_the_password_can_live_outside_the_url(monkeypatch):
 
 def test_a_password_in_the_url_wins_over_the_environment(monkeypatch):
     monkeypatch.setenv("QUANTLAB_CH_PASSWORD", "from-the-environment")
-    assert ch_settings(f"clickhouses://default:in-url@{CLOUD_HOST}/quantlab")["password"] == "in-url"
+    settings = ch_settings(f"clickhouses://default:in-url@{CLOUD_HOST}/quantlab")
+    assert settings["password"] == "in-url"

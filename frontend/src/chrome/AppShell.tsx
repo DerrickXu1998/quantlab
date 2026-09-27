@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { UserMenu } from '../auth/UserMenu';
+import { DataSourceBanner } from '../components/DataSourceBanner';
 import { DataDisclaimer } from '../components/DataDisclaimer';
 import { Button } from '../components/ui/button';
 import { StatusBadge } from '../components/ui/status-badge';
@@ -182,6 +183,8 @@ export function AppShell() {
               </div>
             </header>
           ) : null}
+
+          <DataSourceBanner />
 
           {/* One destination mounted at a time. This was previously a
               comment about Dockview corrupting its layout when measured at

@@ -161,7 +161,7 @@ export function RunsProvider({ children }: { children: ReactNode }) {
       const run = await submit(controller.signal);
       // A new run never replaces an earlier one (FR-012).
       setSessionRuns((current) => [run, ...current]);
-      setAllRuns((current) => [run, ...current]);
+      setAllRuns((current) => [run as RunV2, ...current]);
       setActiveRun(await getRun(run.id));
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === 'AbortError') return;
@@ -195,7 +195,7 @@ export function RunsProvider({ children }: { children: ReactNode }) {
 
   const save = useCallback(async (runId: string, name: string) => {
     const saved = await saveRun(runId, name);
-    setAllRuns((current) => current.map((run) => (run.id === runId ? saved : run)));
+    setAllRuns((current) => current.map((run) => (run.id === runId ? (saved as RunV2) : run)));
     setSessionRuns((current) => current.map((run) => (run.id === runId ? saved : run)));
     setActiveRun((current) => (current?.id === runId ? { ...current, name: saved.name } : current));
   }, []);

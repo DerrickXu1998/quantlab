@@ -75,6 +75,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/signal-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Catalog of signal templates custom rules are built from
+         * @description Templates, not expressions: a custom rule is a template id plus a config whose fields come from the fixed enums in `config_fields`. `inputs` declares what the template reads ("bars" or "bars+fundamentals"), and `available_on_dataset` reports whether the active dataset can serve it -- fundamental templates report false on the SQLite demo. Registry-driven: a new template appears here with no change to consumers.
+         */
+        get: operations["listSignalTemplates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/models": {
         parameters: {
             query?: never;
@@ -183,7 +203,8 @@ export interface paths {
          *         book marked once per replayed date, after that date's fills.
          *       * `summary` -- terminal; the ReplaySummary object.
          *       * `truncated` -- terminal in place of `summary` when `max_events`
-         *         cut the stream short: `{event, detail}`.
+         *         or the stream's wall-clock limit cut the stream short:
+         *         `{event, detail}`.
          *
          *     Events on one date arrive in bar, signal, fill, equity order, so a signal never precedes the bar event of its own date. Sizing and filling mirror the run's performance report exactly (equal-weight per-symbol sleeves, close-of-signal-date fills, no costs): the terminal `summary` reconciles with GET /runs/{run_id}/performance.
          */
@@ -228,10 +249,289 @@ export interface paths {
         /**
          * Replay a Kafka bar stream live, as a server-sent event stream
          * @description The streaming counterpart of GET /runs/{run_id}/replay/stream. A publisher (`quantlab replay-publish`) has turned a warehouse window into a chronological bar stream on the Kafka replay topic; this endpoint consumes the topic from the beginning, re-runs the model's compute on each symbol's growing window as bars arrive (identical to batch by the point-in-time truncation guarantee), and trades the new signals through the same portfolio simulator.
-         *     The frame format is exactly the batch replay's: `bar`, `signal`, `fill`, `equity` and a terminal `summary` (whose `run_id` is `live:<model>`), plus `truncated` if `max_events` cuts the stream short. Bars dated before `start` act as warm-up: they feed the model's lookback but emit no events and no trades, mirroring how a batch run loads history before its window. Because of that warm-up, the terminal summary reconciles with a batch replay of a run over the same model, symbols and window when the publisher's range covers the model's lookback before `start`.
+         *     The frame format is exactly the batch replay's: `bar`, `signal`, `fill`, `equity` and a terminal `summary` (whose `run_id` is `live:<model>`), plus `truncated` if `max_events` or the stream's wall-clock limit cuts the stream short. Bars dated before `start` act as warm-up: they feed the model's lookback but emit no events and no trades, mirroring how a batch run loads history before its window. Because of that warm-up, the terminal summary reconciles with a batch replay of a run over the same model, symbols and window when the publisher's range covers the model's lookback before `start`.
          *     Requires the streaming stack (`docker compose --profile streaming up`). A 503 means the bus is unconfigured (QUANTLAB_KAFKA_BROKERS unset) or the broker is unreachable -- never a startup failure.
          */
         get: operations["streamLiveReplay"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the caller's custom rules */
+        get: operations["listCustomRules"];
+        put?: never;
+        /** Define a custom signal rule from a template */
+        post: operations["createCustomRule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/rules/{rule_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rule_id: string;
+            };
+            cookie?: never;
+        };
+        /** One custom rule */
+        get: operations["getCustomRule"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a rule
+         * @description Runs that used the rule stay readable (their definition snapshot is recorded on the run) and report model_available=false.
+         */
+        delete: operations["deleteCustomRule"];
+        options?: never;
+        head?: never;
+        /**
+         * Rename a rule or replace its config
+         * @description The template is immutable: changing what a rule IS makes a new rule. Runs that already used the rule keep their definition snapshot; edits apply to future runs only.
+         */
+        patch: operations["updateCustomRule"];
+        trace?: never;
+    };
+    "/auth/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create an account and return a session
+         * @description A 409 does disclose that an address is registered. That is unavoidable for a self-service signup -- refusing to say so would mean silently not creating the account -- and it is why the *login* path, not this one, is hardened against enumeration.
+         */
+        post: operations["register"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Exchange credentials for a session
+         * @description An unknown address and a wrong password produce the same status, the same body and the same timing -- the unknown-address path still performs a full key derivation against a dummy hash. Skipping that work would make "does this person have an account?" answerable with a stopwatch.
+         */
+        post: operations["login"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke the calling session
+         * @description Revokes this session and no other. Possible only because a session is a row rather than a signed token: a stateless token cannot be withdrawn before it expires, which would make this endpoint a gesture.
+         */
+        post: operations["logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The authenticated user */
+        get: operations["getCurrentUser"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/strategies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's saved strategies */
+        get: operations["listStrategies"];
+        put?: never;
+        /** Save a strategy */
+        post: operations["createStrategy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/strategies/{strategy_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                strategy_id: string;
+            };
+            cookie?: never;
+        };
+        /** One strategy */
+        get: operations["getStrategy"];
+        /** Replace a strategy */
+        put: operations["replaceStrategy"];
+        post?: never;
+        /** Delete a strategy */
+        delete: operations["deleteStrategy"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/strategy-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Complete starter strategies
+         * @description Unauthenticated: they are identical for everyone and contain nothing of anybody's. Assembled from the registry at request time, so a template can only ever name rules that actually exist. Each carries realistic costs -- a starter that charged nothing would teach a new user that turnover is free, which is the most expensive lesson to unlearn.
+         */
+        get: operations["listStrategyTemplates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instruments/{symbol}/fundamentals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One instrument's filed accounts, as they stood on a date
+         * @description Resolved through the same reader the backtest uses, so this screen and a run cannot disagree about what was knowable. Rows are keyed on `filed_at`, never `period_end` -- see docs/FUNDAMENTALS.md.
+         */
+        get: operations["getFundamentals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instruments/{symbol}/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Everything filed about one name, as of a date
+         * @description A composition of reads that already existed and were reachable only by clicking a signal row. Bars, facts and signal counts are all bounded by `as_of`, so the page cannot show a signal from after the date it claims to answer.
+         */
+        get: operations["getCompanyOverview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/fundamentals/coverage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Which instruments and concepts have filings at all
+         * @description Coverage is not uniform -- 580 of 644 names have any facts, and within them gross profit reaches 237 against revenue's 376. A screen that does not say so reads as "few qualified" when the truth is "most were never measured".
+         */
+        get: operations["getFundamentalsCoverage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/universes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The named lists a screen may be run over */
+        get: operations["listUniverses"];
+        put?: never;
+        /** Publish a custom universe snapshot */
+        post: operations["publishUniverse"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/screen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Narrow a universe by ratios built from filed accounts
+         * @description `universe` is required rather than defaulting to everything, because `fundamentals_pit_idx` leads with `instrument_id`: unbounded the query falls to a sequential scan at 6,700ms against 836ms bounded. Ratios are computed by the same helpers the fundamental rules use, so a screen and a backtest cannot disagree.
+         */
+        get: operations["screen"];
         put?: never;
         post?: never;
         delete?: never;
@@ -267,6 +567,11 @@ export interface components {
             /** @description True once the seed step has completed */
             seeded: boolean;
             signal_count: number;
+            /**
+             * @description Whether this deployment demands a bearer token. Carried on the one endpoint that never needs one, because a client has to learn this before it can possibly hold a token.
+             * @default true
+             */
+            auth_required: boolean;
         };
         /** @enum {string} */
         Direction: "bullish" | "bearish";
@@ -368,13 +673,88 @@ export interface components {
             /** @enum {string} */
             scale_class: "scale_free" | "price_scaled";
             direction_semantics: string;
+            /**
+             * @description Presentation metadata; nothing in the engine branches on it.
+             * @default trend
+             * @enum {string}
+             */
+            category: "trend" | "momentum" | "mean_reversion" | "volatility" | "volume";
+            /** @description One line, for a catalogue card. */
+            summary?: string;
+            /**
+             * @description Which slots in a strategy this rule may fill. A rule that reports a *regime* rather than a tradeable event -- ADX above a threshold -- advertises `[filter]` only, and a strategy naming it as an entry is refused. Without this a user can build a strategy that enters on every bar with no way to see why.
+             * @default [
+             *       "entry",
+             *       "exit"
+             *     ]
+             */
+            roles: ("entry" | "exit" | "filter")[];
         };
         ModelList: {
             total: number;
             items: components["schemas"]["Model"][];
         };
+        CustomRuleRequest: {
+            name: string;
+            /** @description Template id from GET /signal-templates. */
+            template: string;
+            /** @description Validated against the template's declared vocabulary. */
+            config: {
+                [key: string]: unknown;
+            };
+        };
+        /** @description At least one of name and config is required. */
+        CustomRuleUpdateRequest: {
+            name?: string;
+            config?: {
+                [key: string]: unknown;
+            };
+        };
+        CustomRule: {
+            rule_id: string;
+            name: string;
+            /** @description Derived from the name; unique within the owner's scope. */
+            slug: string;
+            template: string;
+            config: {
+                [key: string]: unknown;
+            };
+            /** @description Derived from the config, not declared. */
+            lookback_days: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        CustomRuleList: {
+            total: number;
+            items: components["schemas"]["CustomRule"][];
+        };
+        SignalTemplate: {
+            /** @example indicator-threshold */
+            id: string;
+            /** @example 1.0.0 */
+            version: string;
+            description: string;
+            /**
+             * @description What the template reads.
+             * @enum {string}
+             */
+            inputs: "bars" | "bars+fundamentals";
+            /** @description Whether the active dataset can serve this template. Fundamental templates report false on the SQLite demo. */
+            available_on_dataset: boolean;
+            /** @description Enums and bounds per config field, for form generation. */
+            config_fields: {
+                [key: string]: unknown;
+            };
+        };
+        SignalTemplateList: {
+            total: number;
+            items: components["schemas"]["SignalTemplate"][];
+        };
+        /** @description Exactly one of `model_name`, `strategy_id` or `strategy` identifies what to run; giving two is a 400, because silently preferring one would run something other than what the caller wrote. The single-model form is unchanged and still supported -- it is promoted internally into a one-rule strategy, so there is one execution path rather than a legacy branch that slowly stops matching the real one. */
         RunRequest: {
-            model_name: string;
+            model_name?: string;
             /** @description Omit to use the highest registered version. */
             model_version?: string;
             /** @description Overrides only. Omitted parameters take the model's declared default; the merged result is recorded as the run's effective parameters. */
@@ -386,6 +766,10 @@ export interface components {
             start_date: string;
             /** Format: date */
             end_date: string;
+            /** @description A saved strategy of the caller's. */
+            strategy_id?: string;
+            strategy?: components["schemas"]["StrategyRequest"];
+            execution?: components["schemas"]["ExecutionConfig"];
         };
         RunCoverage: {
             instruments_requested: number;
@@ -427,6 +811,11 @@ export interface components {
             corporate_actions?: components["schemas"]["CorporateActionNotice"][];
             /** @description False when the run's recorded dataset is not the active one. The run stays readable; it simply cannot be reproduced as recorded. */
             re_runnable?: boolean;
+            /** @description The fully resolved strategy that actually ran. Null on runs recorded before strategies existed; the API reports that rather than inventing a spec those runs never had. */
+            strategy?: components["schemas"]["StrategyRequest"] | null;
+            /** @description The fully resolved execution criteria that actually ran. */
+            execution?: components["schemas"]["ExecutionConfig"] | null;
+            execution_summary?: components["schemas"]["ExecutionSummary"] | null;
             /** @description False when the recorded model/version is no longer registered; the run stays readable but is not re-runnable. */
             model_available?: boolean;
         };
@@ -447,6 +836,12 @@ export interface components {
              * @description Latest bar date used as input; always <= date (point-in-time proof, Constitution VII).
              */
             data_window_end: string;
+            /**
+             * @description Whether this opens a position, closes one, or does both. `both` is one rule wearing both hats, which is exactly what a single-model run is -- and what rows recorded before strategies existed mean. Emitted as one decision rather than two so a legacy run records exactly the signals it always did.
+             * @default both
+             * @enum {string}
+             */
+            kind: "entry" | "exit" | "both";
         };
         RunDetail: components["schemas"]["Run"] & {
             signals: components["schemas"]["ExperimentSignal"][];
@@ -472,6 +867,22 @@ export interface components {
             return_pct: number;
             /** @description True when the position was still held at the end of the window. An open trade is marked to market, not realised, and never counts toward the win rate. */
             open: boolean;
+            /**
+             * @default long
+             * @enum {string}
+             */
+            side: "long" | "short";
+            /** @default 0 */
+            qty: number;
+            /** @default signal */
+            exit_reason: components["schemas"]["ExitReason"];
+            /**
+             * @description Net of this trade's own commission, both sides.
+             * @default 0
+             */
+            pnl: number;
+            /** @default 0 */
+            fees: number;
         };
         PerformanceMetrics: {
             /** @description Fraction, e.g. 0.12 for +12%. */
@@ -499,7 +910,182 @@ export interface components {
             trades: components["schemas"]["Trade"][];
             /** @description Every simplification applied. These figures are not tradeable and must never be presented as if they were. */
             assumptions: string[];
+            costs?: components["schemas"]["CostBreakdown"];
+            /** @description Closed-position counts by reason. Sums to the number of trades. */
+            exit_reasons?: {
+                [key: string]: number;
+            };
         };
+        Credentials: {
+            /** Format: email */
+            email: string;
+            /** @description At least 12 characters. Hashed with PBKDF2-HMAC-SHA256 at 600,000 iterations with a 16-byte salt, both recorded in the stored hash so the cost can be raised later without a mass password reset. See docs/SECURITY.md for why a stdlib KDF rather than argon2. */
+            password: string;
+        };
+        User: {
+            id: string;
+            email: string;
+            created_at: string;
+        };
+        Session: {
+            user: components["schemas"]["User"];
+            /** @description Send as `Authorization: Bearer <token>`. 32 bytes of CSPRNG output; only its SHA-256 is stored. */
+            token: string;
+            /** @description Absolute, not sliding -- a stolen token cannot be kept alive by use. */
+            expires_at: string;
+        };
+        /** @description One signal rule doing one job inside a strategy. */
+        StrategyComponent: {
+            rule_name: string;
+            /** @description Omit to use the highest registered version. */
+            rule_version?: string;
+            /** @description Overrides only; omitted parameters take the rule's default. */
+            parameters?: {
+                [key: string]: unknown;
+            };
+            /**
+             * @description **Filters gate, they never fire.** A filter contributes no entry of its own and can only prevent one, whichever direction the entry points -- "there is a trend here" qualifies a short as much as a long. Filters deliberately do *not* gate exits: a filter switching off must never trap a position in the book at the exact moment the regime has changed.
+             * @default entry
+             * @enum {string}
+             */
+            role: "entry" | "exit" | "filter";
+            /**
+             * @description Read only by `weighted` logic.
+             * @default 1
+             */
+            weight: number;
+            /**
+             * @description Swap this component's two directions. How a long-biased filter becomes a short-biased one without needing a second rule.
+             * @default false
+             */
+            invert: boolean;
+        };
+        StrategyRequest: {
+            name: string;
+            /** @default  */
+            description: string;
+            components: components["schemas"]["StrategyComponent"][];
+            /**
+             * @default all
+             * @enum {string}
+             */
+            entry_logic: "all" | "any" | "majority" | "weighted";
+            /**
+             * @default any
+             * @enum {string}
+             */
+            exit_logic: "all" | "any" | "majority" | "weighted";
+            /**
+             * @description Net weight needed to fire, under `weighted` logic only.
+             * @default 1
+             */
+            entry_threshold: number;
+            /** @default 1 */
+            exit_threshold: number;
+            /**
+             * @description How many sessions components have to agree within. 1 means "the same bar", which is strict enough that two oscillators almost never coincide; a window of 3 lets a confirmation arrive a little late.
+             * @default 1
+             */
+            combine_window_days: number;
+            execution?: components["schemas"]["ExecutionConfig"];
+        };
+        Strategy: components["schemas"]["StrategyRequest"] & {
+            id: string;
+            owner_id?: string | null;
+            created_at: string;
+            updated_at: string;
+            /** @description Legal but probably not what the user meant -- no exit component, a combination that can never occur, filters gating shorts. Computed per request rather than stored, because what is worth flagging changes as the engine does and a stored copy goes stale. Reported, never enforced. */
+            warnings?: string[];
+        };
+        StrategyList: {
+            total: number;
+            items: components["schemas"]["Strategy"][];
+        };
+        StrategyTemplate: components["schemas"]["StrategyRequest"] & {
+            /** @enum {string} */
+            id: "rsi-mean-reversion" | "macd-trend-following" | "donchian-breakout" | "dual-confirmation";
+        };
+        StrategyTemplateList: {
+            total: number;
+            items: components["schemas"]["StrategyTemplate"][];
+        };
+        /**
+         * @description What turns a signal into a trade. Every field was previously hardcoded and merely disclosed in prose.
+         *     Ordering within a bar is fixed, because two criteria can both be satisfiable on the same bar and a backtest that resolves them arbitrarily is not reproducible: mark, then orders queued yesterday fill at today's open, then protective exits (stop, trailing stop, target, holding limit, in that order), then signal exits, then entries.
+         *     Gaps resolve pessimistically in both directions, which is not symmetric arithmetic. A **stop** the session gapped through fills at the open, worse than the level. A **target** the session gapped through fills at the target, declining the windfall -- collecting every favourable gap adds up to an edge no live book ever earns.
+         */
+        ExecutionConfig: {
+            /** @default 100000 */
+            initial_capital: number;
+            /**
+             * @description `equal_weight` gives each instrument its own cash sleeve, which is what the pre-execution engine did and what makes a legacy run reproduce exactly. The other three draw on one shared pool, so `max_positions` and cash rejections behave differently between them.
+             * @default equal_weight
+             * @enum {string}
+             */
+            position_sizing: "equal_weight" | "fixed_fraction" | "fixed_notional" | "volatility_target";
+            /** @description Fraction of equity (`fixed_fraction`), cash per trade (`fixed_notional`), or target annualised volatility (`volatility_target`). Rejected rather than ignored under `equal_weight`: silently discarding a number the user typed is how a run quietly does something other than what the form said. */
+            sizing_value?: number | null;
+            max_positions?: number | null;
+            /** @default 1 */
+            max_position_pct: number;
+            /**
+             * @default signal_close
+             * @enum {string}
+             */
+            fill_timing: "signal_close" | "next_open";
+            /**
+             * @description Charged per side, on notional.
+             * @default 0
+             */
+            commission_bps: number;
+            /**
+             * @description Moves the fill price against the trade, per side.
+             * @default 0
+             */
+            slippage_bps: number;
+            /** @description A fraction, not a percentage: 0.05 is five percent. Bounded because a user who types `5` meaning "five percent" would otherwise get a stop 500% away that never triggers, and the backtest would look like the stop simply never helped. */
+            stop_loss_pct?: number | null;
+            take_profit_pct?: number | null;
+            /** @description Measured from the best close seen while the position was held. */
+            trailing_stop_pct?: number | null;
+            /** @description Stop at entry -/+ k x ATR as at the entry bar. Set alongside `stop_loss_pct`, the tighter of the two binds. */
+            atr_stop_multiple?: number | null;
+            /** @default 14 */
+            atr_period: number;
+            max_holding_days?: number | null;
+            /**
+             * @description Suppresses signal exits only; protective exits still fire.
+             * @default 0
+             */
+            min_holding_days: number;
+            /** @default 0 */
+            cooldown_days: number;
+            /** @default false */
+            allow_shorts: boolean;
+        };
+        /** @description What the engine did, including what it refused to do. The rejection counters matter as much as the fills: a strategy whose signals were mostly dropped for want of a free slot has not been tested, and without these it looks identical to one that simply signalled rarely. */
+        ExecutionSummary: {
+            orders?: number;
+            fills?: number;
+            rejected_no_cash?: number;
+            rejected_max_positions?: number;
+            rejected_cooldown?: number;
+            rejected_shorts_disabled?: number;
+            dropped_no_bar?: number;
+            total_commission?: number;
+            total_slippage?: number;
+            /** @description Dates where the entry logic said both "long" and "short", and so said nothing. Neither side was taken. */
+            contradictions?: number;
+        };
+        CostBreakdown: {
+            commission?: number;
+            slippage?: number;
+        };
+        /**
+         * @description Why a position closed. "The strategy said so" and "the stop caught it" are different facts about a strategy, and averaging them into one win rate hides which one is doing the work.
+         * @enum {string}
+         */
+        ExitReason: "signal" | "stop_loss" | "take_profit" | "trailing_stop" | "max_holding" | "end_of_window";
         /** @description The terminal event of a run's replay. Metrics are computed by the same helpers behind GET /runs/{run_id}/performance, over the replayed equity curve and trade list, so the two reconcile on the same run. */
         ReplaySummary: {
             run_id: string;
@@ -522,6 +1108,129 @@ export interface components {
             losing_trades: number;
             /** @description Every simplification applied, shared with the performance report. These figures are not tradeable and must never be presented as if they were. */
             assumptions: string[];
+            exit_reasons?: {
+                [key: string]: number;
+            } | null;
+            /** @default 0 */
+            total_commission: number;
+            /** @default 0 */
+            total_slippage: number;
+        };
+        FundamentalFact: {
+            concept: string;
+            value: number;
+            /** Format: date */
+            period_start?: string | null;
+            /** Format: date */
+            period_end: string;
+            /**
+             * Format: date
+             * @description The date this figure became public, and the only column that makes a look-ahead visible. A restatement filed later is a different row.
+             */
+            filed_at: string;
+            /** @description Age on the as-of date. Rules stop honouring a figure past 455. */
+            days_stale: number;
+            /** @description `instant` or `duration`. A balance-sheet figure is an instant and a P&L figure spans a period; mixing them puts a quarterly revenue in an annual P/E, wrong by four times. */
+            scope?: string | null;
+            /** @description Period ends after the as-of date though filed before it. Rare, and surfaced rather than hidden. */
+            forward_dated?: boolean;
+            /** @description The row the point-in-time rule selects for this concept. */
+            in_force?: boolean;
+        };
+        ConceptCoverage: {
+            concept: string;
+            /** @description How many names have at least one filing of it. */
+            instruments: number;
+            /** Format: date */
+            first_filed?: string | null;
+            /** Format: date */
+            last_filed?: string | null;
+            symbols?: string[];
+        };
+        FundamentalsCoverage: {
+            instruments_total: number;
+            /** @description 64 of 644 names have none. A fundamental filter over those *cannot* trade rather than failing to find trades, and the two are indistinguishable in a result. */
+            instruments_with_facts: number;
+            concepts: components["schemas"]["ConceptCoverage"][];
+            symbols_with_facts?: string[];
+            symbols_without_facts?: string[];
+        };
+        CompanySignalCount: {
+            rule_name: string;
+            count: number;
+            /** Format: date */
+            last_date?: string | null;
+            last_direction?: components["schemas"]["Direction"];
+        };
+        CompanyOverview: {
+            symbol: string;
+            /** @description Blank for many warehouse rows; falls back to the symbol rather than being invented. */
+            name: string;
+            exchange: string;
+            currency: string;
+            /** @description Blank for 607 of 644 names, and returned blank. An invented sector would license a peer group that does not exist. */
+            sector: string;
+            /** Format: date */
+            as_of: string;
+            /** Format: date */
+            first_bar?: string | null;
+            /** Format: date */
+            last_bar?: string | null;
+            /** @description Taken on or before the as-of date -- the one number every ratio divides by. */
+            last_close?: number | null;
+            facts: components["schemas"]["FundamentalFact"][];
+            concepts_available: string[];
+            /** @description Never filed, as opposed to merely absent on this date. Carried explicitly because the two produce the same gap on the page and are not the same fact. */
+            concepts_missing: string[];
+            signals: components["schemas"]["CompanySignalCount"][];
+            signal_total: number;
+        };
+        /** @enum {string} */
+        ScreenMetric: "pe" | "pb" | "roe" | "leverage" | "net_margin" | "gross_margin" | "current_ratio";
+        ScreenMetricCoverage: {
+            metric: components["schemas"]["ScreenMetric"];
+            measured: number;
+            universe: number;
+            /** @description The filed concepts the ratio is built from. */
+            requires: string[];
+        };
+        ScreenRow: {
+            symbol: string;
+            name: string;
+            /** @description Null where the inputs were not filed, or where a denominator was zero or negative. Unknown is never a zero: negative equity must not read as cheap and pass a value filter. */
+            values: {
+                [key: string]: number | null;
+            };
+        };
+        ScreenResult: {
+            /** Format: date */
+            as_of: string;
+            universe: string;
+            universe_size: number;
+            rows: components["schemas"]["ScreenRow"][];
+            coverage: components["schemas"]["ScreenMetricCoverage"][];
+            sort_by?: components["schemas"]["ScreenMetric"];
+            /** @description Measured, and failed a bound. This is a finding. */
+            excluded_by_constraint: number;
+            /** @description A constrained ratio could not be computed from what was filed. Counted apart from the above, because collapsing them is what makes a coverage hole look like a result. */
+            excluded_unmeasured: number;
+        };
+        Universe: {
+            name: string;
+            /** Format: date */
+            as_of: string;
+            /** @description Counted from members rather than trusting a stored count. */
+            size: number;
+        };
+        UniversePublishRequest: {
+            name: string;
+            symbols: string[];
+            /** Format: date */
+            snapshot_date?: string;
+        };
+        UniverseList: {
+            total: number;
+            items: components["schemas"]["Universe"][];
         };
     };
     responses: never;
@@ -641,6 +1350,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listSignalTemplates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registered templates */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignalTemplateList"];
                 };
             };
         };
@@ -1016,6 +1745,687 @@ export interface operations {
             };
             /** @description The event bus is unconfigured or unreachable */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listCustomRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Rules owned by the caller */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomRuleList"];
+                };
+            };
+        };
+    };
+    createCustomRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CustomRuleRequest"];
+            };
+        };
+        responses: {
+            /** @description Rule created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomRule"];
+                };
+            };
+            /** @description Unknown template */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Config failed the template's declared validation */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getCustomRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The rule */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomRule"];
+                };
+            };
+            /** @description Unknown rule, or one owned by another user */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    deleteCustomRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown rule, or one owned by another user */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    updateCustomRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CustomRuleUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated rule */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomRule"];
+                };
+            };
+            /** @description Unknown rule, or one owned by another user */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Empty patch, or config failed template validation */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    register: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Credentials"];
+            };
+        };
+        responses: {
+            /** @description The new account and its first session */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Session"];
+                };
+            };
+            /** @description That email address is already registered */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The password does not meet the policy */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    login: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Credentials"];
+            };
+        };
+        responses: {
+            /** @description A new session */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Session"];
+                };
+            };
+            /** @description Invalid email or password -- deliberately says no more */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Too many failed attempts against this address */
+            429: {
+                headers: {
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getCurrentUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listStrategies: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Strategies belonging to the caller, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyList"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    createStrategy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StrategyRequest"];
+            };
+        };
+        responses: {
+            /** @description The saved strategy */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Strategy"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The spec cannot be executed. The detail names the offending component index and field, e.g. `components[0].parameters.period: must be <= 100`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getStrategy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                strategy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The strategy */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Strategy"];
+                };
+            };
+            /** @description Unknown, or not the caller's. Another user's strategy reads as absent rather than forbidden: a 403 would confirm that the row exists, which the caller has not earned. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    replaceStrategy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                strategy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StrategyRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated strategy */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Strategy"];
+                };
+            };
+            /** @description Unknown, or not the caller's */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The spec cannot be executed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    deleteStrategy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                strategy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown, or not the caller's */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listStrategyTemplates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The template catalogue */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyTemplateList"];
+                };
+            };
+        };
+    };
+    getFundamentals: {
+        parameters: {
+            query?: {
+                /** @description Defaults to today. Nothing filed after it is returned. */
+                as_of?: string;
+                /** @description Comma-separated. An unknown concept is a 422, not an empty answer. */
+                concepts?: string;
+            };
+            header?: never;
+            path: {
+                symbol: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The facts in force on the as-of date, one per concept */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FundamentalFact"][];
+                };
+            };
+            /** @description Unknown symbol */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getCompanyOverview: {
+        parameters: {
+            query?: {
+                as_of?: string;
+            };
+            header?: never;
+            path: {
+                symbol: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The company as it stood */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyOverview"];
+                };
+            };
+            /** @description Unknown symbol */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getFundamentalsCoverage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What exists, before anything is run */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FundamentalsCoverage"];
+                };
+            };
+        };
+    };
+    listUniverses: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One row per snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UniverseList"];
+                };
+            };
+        };
+    };
+    publishUniverse: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UniversePublishRequest"];
+            };
+        };
+        responses: {
+            /** @description Snapshot created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Universe"];
+                };
+            };
+            /** @description Unknown symbols or duplicate snapshot */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    screen: {
+        parameters: {
+            query: {
+                universe: string;
+                as_of?: string;
+                /** @description Comma-separated subset; fewer metrics is proportionally faster. */
+                metrics?: string;
+                /** @description `metric:min:max` comma-separated, an empty bound meaning unbounded (`pe::20,roe:0.15:`). A GET so a screen stays linkable. */
+                constraints?: string;
+                sort_by?: components["schemas"]["ScreenMetric"];
+                descending?: boolean;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The ranked names, with per-metric coverage and both exclusion counts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreenResult"];
+                };
+            };
+            /** @description No snapshot of that universe on or before the as-of date */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

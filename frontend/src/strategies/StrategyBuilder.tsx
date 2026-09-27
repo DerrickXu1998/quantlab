@@ -7,6 +7,7 @@ import { Button } from '../components/ui/button';
 import { EmptyState } from '../components/ui/empty-state';
 import { fieldClasses, Input, Select } from '../components/ui/field';
 import { StatusBadge } from '../components/ui/status-badge';
+import { ConfirmDelete } from '../components/ConfirmDelete';
 import { RunResultsView } from '../components/RunResultsView';
 import { navigate } from '../chrome/router';
 import { Panel } from '../quantlab/chrome/Panel';
@@ -96,7 +97,6 @@ export function StrategyBuilder({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [serverWarnings, setServerWarnings] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
-  const [armedDelete, setArmedDelete] = useState<string | null>(null);
   const { startDate, endDate, setStartDate, setEndDate } = useDataWindow(instruments);
 
   // Only asked for when the registry actually has a rule that reads filings:
@@ -276,33 +276,18 @@ export function StrategyBuilder({
                       {strategy.entry_logic} in / {strategy.exit_logic} out
                     </span>
                   </button>
-                  {armedDelete === strategy.id ? (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="border-destructive/50 text-destructive"
-                      onClick={async () => {
-                        setArmedDelete(null);
-                        await library.remove(strategy.id);
-                        setDraft((current) =>
-                          current.id === strategy.id ? { ...current, id: null } : current,
-                        );
-                      }}
-                    >
-                      Confirm
-                    </Button>
-                  ) : (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      aria-label={`Delete strategy ${strategy.name}`}
-                      onClick={() => setArmedDelete(strategy.id)}
-                    >
-                      Delete
-                    </Button>
-                  )}
+                  <ConfirmDelete
+                    label={`Delete strategy ${strategy.name}`}
+                    title="Delete strategy"
+                    onConfirm={async () => {
+                      await library.remove(strategy.id);
+                      setDraft((current) =>
+                        current.id === strategy.id ? { ...current, id: null } : current,
+                      );
+                    }}
+                  >
+                    Delete
+                  </ConfirmDelete>
                 </li>
               ))}
             </ul>

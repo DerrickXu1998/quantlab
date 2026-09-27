@@ -6,12 +6,12 @@ import { fieldClasses } from '../../components/ui/field';
 import { METRIC_FORMAT } from '../format';
 import { CoverageLine } from './Coverage';
 import { echoBound, isFraction, type ConstraintDraft, type DraftErrors } from './constraints';
-import type { UniverseSummary } from './useScreen';
+import type { Universe } from '../../api/client';
 
 const LABEL = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
 
 export interface ScreenControlsProps {
-  universes: UniverseSummary[];
+  universes: Universe[];
   universe: string;
   onUniverse: (name: string) => void;
   asOf: string;

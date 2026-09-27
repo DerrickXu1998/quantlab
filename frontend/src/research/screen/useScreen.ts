@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ApiError, listUniverses, screen } from '../../api/client';
+import { useCallback, useRef, useState } from 'react';
+import { ApiError, screen } from '../../api/client';
 import type { ScreenConstraint, ScreenMetric, ScreenResult } from '../../api/types';
 
 /**
@@ -28,61 +28,6 @@ function classify(caught: unknown): { status: 'unsupported' | 'error'; message: 
     status: 'error',
     message: caught instanceof ApiError ? caught.message : 'the screener is unreachable',
   };
-}
-
-/** One named list a screen may be run over, as `/universes` reports it. */
-export interface UniverseSummary {
-  name: string;
-  as_of: string;
-  size: number;
-}
-
-export interface UniversesRead {
-  universes: UniverseSummary[];
-  status: ReadStatus;
-  message: string | null;
-  reload: () => void;
-}
-
-/**
- * The universes on offer.
- *
- * Read once on mount and never re-derived from a screen result: the list of
- * lists is a property of the warehouse, not of the question being asked.
- */
-export function useUniverses(): UniversesRead {
-  const [universes, setUniverses] = useState<UniverseSummary[]>([]);
-  const [status, setStatus] = useState<ReadStatus>('loading');
-  const [message, setMessage] = useState<string | null>(null);
-  const [nonce, setNonce] = useState(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    setStatus('loading');
-    listUniverses()
-      .then((result) => {
-        if (cancelled) return;
-        setUniverses(result.items);
-        setMessage(null);
-        setStatus('ready');
-      })
-      .catch((caught: unknown) => {
-        if (cancelled) return;
-        const classified = classify(caught);
-        setUniverses([]);
-        setMessage(
-          classified.status === 'unsupported'
-            ? 'This backend does not publish universes, so there is nothing to screen within.'
-            : classified.message,
-        );
-        setStatus(classified.status);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [nonce]);
-
-  return { universes, status, message, reload: () => setNonce((value) => value + 1) };
 }
 
 /**

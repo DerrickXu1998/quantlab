@@ -1,4 +1,5 @@
 import { DatasetProvider } from './api/DatasetProvider';
+import { UniversesProvider } from './api/UniversesProvider';
 import { AuthGate } from './auth/AuthGate';
 import { AuthProvider } from './auth/AuthProvider';
 import { AppShell } from './chrome/AppShell';
@@ -21,11 +22,13 @@ export default function App() {
   return (
     <AuthProvider>
       <DatasetProvider>
-        <AuthGate>
-          <RunsProvider>
-            <AppShell />
-          </RunsProvider>
-        </AuthGate>
+        <UniversesProvider>
+          <AuthGate>
+            <RunsProvider>
+              <AppShell />
+            </RunsProvider>
+          </AuthGate>
+        </UniversesProvider>
       </DatasetProvider>
     </AuthProvider>
   );

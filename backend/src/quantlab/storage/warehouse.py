@@ -10,6 +10,7 @@ No pandas here either -- the backend serves JSON, and raw rows are cheaper.
 
 from __future__ import annotations
 
+import datetime as dt
 import os
 import threading
 from collections.abc import Iterator, Sequence
@@ -858,6 +859,73 @@ def list_universes(wh: Warehouse) -> dict[str, Any]:
         for universe, snapshot_date, size in rows
     ]
     return {"total": len(items), "items": items}
+
+
+def publish_universe(
+    wh: Warehouse,
+    name: str,
+    symbols: Sequence[str],
+    snapshot_date: dt.date | str | None = None,
+) -> dict[str, Any]:
+    """Create a new universe snapshot from a list of canonical symbols.
+
+    Rejects unknown symbols and duplicate (name, date) snapshots. Membership
+    is append-only by trigger, so a published snapshot cannot be edited later.
+    """
+    if snapshot_date is None:
+        snapshot_date = dt.date.today()
+    elif isinstance(snapshot_date, str):
+        snapshot_date = dt.date.fromisoformat(snapshot_date)
+
+    unknown = validate_symbols(wh, symbols)
+    if unknown:
+        raise ValueError(f"unknown symbols: {', '.join(unknown)}")
+
+    ids = _instrument_ids(wh, list(symbols))
+    if not ids:
+        raise ValueError("no symbols to publish")
+
+    with wh.catalog() as conn:
+        existing = conn.execute(
+            "SELECT snapshot_id FROM universe_snapshots WHERE universe = %s AND snapshot_date = %s",
+            (name, snapshot_date),
+        ).fetchone()
+        if existing is not None:
+            raise ValueError(f"snapshot {name}@{snapshot_date} already exists")
+
+        row = conn.execute(
+            """
+            INSERT INTO universe_snapshots (universe, snapshot_date, source, member_count)
+            VALUES (%s, %s, %s, %s)
+            RETURNING snapshot_id
+            """,
+            (name, snapshot_date, "manual", len(ids)),
+        ).fetchone()
+        snapshot_id = row[0]
+        if ids:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    "INSERT INTO universe_members (snapshot_id, instrument_id) VALUES (%s, %s)",
+                    [(snapshot_id, instrument_id) for instrument_id in ids.values()],
+                )
+
+    return {"name": name, "as_of": snapshot_date.isoformat(), "size": len(ids)}
+
+
+def ensure_default_universe(wh: Warehouse) -> None:
+    """If no universe snapshots exist, publish every tradable instrument as 'all'."""
+    if list_universes(wh)["total"] > 0:
+        return
+    with wh.catalog() as conn:
+        rows = conn.execute(
+            """
+            SELECT symbol FROM instruments
+             WHERE symbol NOT LIKE '%.FRED' AND symbol NOT LIKE '%.BOE'
+            """
+        ).fetchall()
+    symbols = [symbol for symbol, in rows]
+    if symbols:
+        publish_universe(wh, "all", symbols)
 
 
 def resolve_universe(wh: Warehouse, universe: str, as_of: str) -> UniverseSnapshot | None:

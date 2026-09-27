@@ -366,7 +366,7 @@ function StrategyProvenance({ run }: { run: RunDetailV2 }) {
       </p>
       {execution ? (
         <p data-testid="run-execution" className="mt-1 text-xs text-muted-foreground">
-          {executionChips(execution).join(' \u00b7 ')}
+          {executionChips(execution as ExecutionConfig).join(' \u00b7 ')}
         </p>
       ) : null}
     </section>

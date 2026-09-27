@@ -338,6 +338,22 @@ def list_universes(request: Request) -> dict:
     return backend(request).list_universes()
 
 
+@router.post(
+    "/universes",
+    response_model=schemas.UniverseSummary,
+    tags=["instruments"],
+    operation_id="publishUniverse",
+    dependencies=[Depends(require_seeded)],
+    status_code=201,
+)
+def publish_universe(request: Request, body: schemas.UniversePublishRequest) -> dict:
+    """Publish a custom list of instruments as a named universe snapshot."""
+    try:
+        return backend(request).publish_universe(body.name, body.symbols, body.snapshot_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 #: The metric vocabulary, taken from the response schema so the request cannot
 #: accept a metric the response has no column for.
 SCREEN_METRICS: tuple[str, ...] = get_args(schemas.ScreenMetric)

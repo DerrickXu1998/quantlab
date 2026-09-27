@@ -1,6 +1,7 @@
-import { Plus, Search, X } from 'lucide-react';
+import { Bookmark, Plus, Search, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { Instrument } from '../api/client';
+import { usePublishUniverse } from '../api/UniversesProvider';
 import { Button } from '../components/ui/button';
 import { fieldClasses } from '../components/ui/field';
 import { StatusBadge } from '../components/ui/status-badge';
@@ -66,6 +67,11 @@ export function UniversePicker({
 }) {
   const [query, setQuery] = useState('');
   const [showAll, setShowAll] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const publish = usePublishUniverse();
 
   const tradable = useMemo(() => instruments.filter(isTradable), [instruments]);
   const chosen = useMemo(() => new Set(selected), [selected]);
@@ -226,7 +232,102 @@ export function UniversePicker({
             ) : null}
           </ul>
         ) : null}
+
+        {selected.length > 0 ? (
+          <div className="space-y-2 border-t border-border pt-3" data-testid="universe-save">
+            {!editing ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setEditing(true)}
+              >
+                <Bookmark size={16} strokeWidth={1.5} aria-hidden="true" className="mr-1.5" />
+                Save as universe
+              </Button>
+            ) : (
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+                <input
+                  type="text"
+                  autoComplete="off"
+                  placeholder="Universe name"
+                  className={cn(fieldClasses, 'h-8 text-sm')}
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      void handleSave();
+                    }
+                    if (event.key === 'Escape') {
+                      setEditing(false);
+                      setNotice(null);
+                    }
+                  }}
+                  disabled={saving}
+                />
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={!name.trim() || saving}
+                    onClick={() => void handleSave()}
+                  >
+                    {saving ? 'Saving…' : 'Save'}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={saving}
+                    onClick={() => {
+                      setEditing(false);
+                      setNotice(null);
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
+            {notice ? (
+              <p
+                className={cn(
+                  'text-xs',
+                  notice.type === 'error' ? 'text-destructive' : 'text-primary',
+                )}
+                role={notice.type === 'error' ? 'alert' : 'status'}
+              >
+                {notice.text}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </div>
   );
+
+  async function handleSave() {
+    const trimmed = name.trim();
+    if (!trimmed || saving) return;
+    setSaving(true);
+    setNotice(null);
+    try {
+      await publish({
+        name: trimmed,
+        symbols: selected,
+        snapshot_date: new Date().toISOString().slice(0, 10),
+      });
+      setNotice({ type: 'success', text: `Saved "${trimmed}" as a universe.` });
+      setName('');
+      setEditing(false);
+    } catch (caught: unknown) {
+      setNotice({
+        type: 'error',
+        text: caught instanceof Error ? caught.message : 'Could not save the universe.',
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
 }

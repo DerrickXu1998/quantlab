@@ -1106,6 +1106,25 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/UniverseList"
+    post:
+      tags: [research]
+      operationId: publishUniverse
+      summary: Publish a custom universe snapshot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UniversePublishRequest"
+      responses:
+        "201":
+          description: Snapshot created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Universe"
+        "422":
+          description: Unknown symbols or duplicate snapshot
 
   /screen:
     get:
@@ -2635,6 +2654,20 @@ components:
         size:
           type: integer
           description: Counted from members rather than trusting a stored count.
+
+    UniversePublishRequest:
+      type: object
+      required: [name, symbols]
+      properties:
+        name:
+          type: string
+        symbols:
+          type: array
+          items:
+            type: string
+        snapshot_date:
+          type: string
+          format: date
 
     UniverseList:
       type: object
