@@ -297,7 +297,7 @@ def get_prices(
     with wh.bars() as client:
         rows = client.query(
             f"""
-            SELECT ts, open, high, low, close, volume
+            SELECT ts, open, high, low, close, volume, source
               FROM {BARS_VIEW}
              WHERE {' AND '.join(clauses)}
              ORDER BY ts ASC
@@ -314,8 +314,9 @@ def get_prices(
             "low": float(lo),
             "close": float(c),
             "volume": int(v),
+            "source": src or None,
         }
-        for ts, o, h, lo, c, v in rows
+        for ts, o, h, lo, c, v, src in rows
     ]
     return {"total": len(items), "items": items}
 

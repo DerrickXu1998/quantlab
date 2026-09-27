@@ -50,6 +50,9 @@ class PriceBar(BaseModel):
     low: float
     close: float
     volume: int
+    # The provider that supplied the bar at ingest (yahoo, fred, boe, ...), or
+    # "synthetic" for generated data. Optional so older stores still validate.
+    source: str | None = None
 
 
 class PriceBarList(BaseModel):

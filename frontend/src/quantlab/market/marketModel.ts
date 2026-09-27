@@ -113,6 +113,52 @@ export function cellClasses(index: number, count: number): string {
   return count === 3 && index === 2 ? 'lg:col-span-2' : '';
 }
 
+/**
+ * The provider behind each stored bar, by the code the ingest writes. Bars are
+ * not the warehouse's own: the warehouse only stores what a market data
+ * provider supplied, so the chart names the provider.
+ */
+export const PROVIDER_LABEL: Record<string, string> = {
+  yahoo: 'Yahoo Finance',
+  tiingo: 'Tiingo',
+  stooq: 'Stooq',
+  alphavantage: 'Alpha Vantage',
+  polygon: 'Polygon',
+  fred: 'FRED',
+  boe: 'Bank of England',
+  synthetic: 'Synthetic',
+};
+
+export function providerLabel(code: string): string {
+  return PROVIDER_LABEL[code.toLowerCase()] ?? code;
+}
+
+export interface ProviderMix {
+  /** Provider codes in the window, most bars first, with their bar counts. */
+  providers: { code: string; label: string; bars: number }[];
+  /** Every bar in the window is generated, not ingested. */
+  synthetic: boolean;
+  /** Bars the store did not attribute (an older backend omits the field). */
+  unreported: number;
+}
+
+export function providerMix(bars: Pick<PriceBar, 'source'>[]): ProviderMix {
+  const counts = new Map<string, number>();
+  let unreported = 0;
+  for (const bar of bars) {
+    if (bar.source) counts.set(bar.source, (counts.get(bar.source) ?? 0) + 1);
+    else unreported += 1;
+  }
+  const providers = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([code, count]) => ({ code, label: providerLabel(code), bars: count }));
+  return {
+    providers,
+    synthetic: providers.length > 0 && unreported === 0 && providers.every((p) => p.code === 'synthetic'),
+    unreported,
+  };
+}
+
 /** Parse a typed list of tickers: commas, spaces, semicolons or newlines. */
 export function parseTickers(text: string): string[] {
   const seen = new Set<string>();

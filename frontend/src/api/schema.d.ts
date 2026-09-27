@@ -598,6 +598,11 @@ export interface components {
             low: number;
             close: number;
             volume: number;
+            /**
+             * @description The market data provider that supplied this bar at ingest (e.g. yahoo, tiingo, fred, boe), or `synthetic` for generated data. Optional: absent from stores that do not record it.
+             * @example yahoo
+             */
+            source?: string | null;
         };
         PriceBarList: {
             total: number;

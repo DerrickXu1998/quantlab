@@ -148,6 +148,13 @@ def test_get_prices_ascending(client):
         check_price_bar(item)
 
 
+def test_get_prices_names_the_provider(client):
+    # The demo store is a generated seed, and every bar says so rather than
+    # passing for ingested market data.
+    body = client.get("/api/v1/instruments/ZZTRND/prices").json()
+    assert {item["source"] for item in body["items"]} == {"synthetic"}
+
+
 def test_get_prices_date_filter(client):
     body = client.get(
         "/api/v1/instruments/ZZTRND/prices",

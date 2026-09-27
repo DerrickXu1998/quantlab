@@ -173,6 +173,8 @@ def get_prices(
             "low": lo,
             "close": c,
             "volume": v,
+            # The SQLite store only ever holds the generated demo seed.
+            "source": "synthetic",
         }
         for s, d, o, h, lo, c, v in rows
     ]

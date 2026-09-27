@@ -12,6 +12,7 @@ import {
   computeStudies,
   daysOld,
   formatAge,
+  providerMix,
   INTERVAL_NOUN,
   resample,
   sliceRange,
@@ -25,7 +26,9 @@ import {
 import { SIM_TICK_MS, useDailyBars, useModelSignals, useSimulatedSeries } from './useMarketData';
 
 export const HISTORICAL_NOTE =
-  'Historical: end-of-day OHLCV bars stored in the warehouse. Nothing on this chart is simulated.';
+  'Historical: end-of-day OHLCV bars ingested from the market data provider named under Source, stored as delivered. Nothing on this chart is simulated.';
+export const SYNTHETIC_NOTE =
+  'Synthetic: these bars were generated for testing, not ingested from a market data provider. They are not real prices.';
 export const SIM_NOTE =
   'Simulated: a random walk seeded at the last stored close, one point per second. QuantLab has no live feed; these are not market prices.';
 
@@ -80,6 +83,13 @@ export function MarketChartCard({
     return { bars, studies };
   }, [historical, allDaily, interval, range, active]);
 
+  // Who supplied the bars in view -- counted on the daily bars, so a weekly
+  // chart reports the same provider split as the daily one.
+  const mix = useMemo(
+    () => (allDaily ? providerMix(sliceRange(allDaily, range)) : null),
+    [allDaily, range],
+  );
+
   const simStudies = useMemo(
     () => (historical ? {} : computeStudies(sim.map((point) => point.value), active)),
     [historical, sim, active],
@@ -100,7 +110,11 @@ export function MarketChartCard({
       simulated={historical ? undefined : SIM_NOTE}
       actions={
         <>
-          {historical ? (
+          {historical && mix?.synthetic ? (
+            <StatusBadge tone="bad" title={SYNTHETIC_NOTE} testId="provenance-synthetic">
+              Synthetic
+            </StatusBadge>
+          ) : historical ? (
             <StatusBadge tone="good" title={HISTORICAL_NOTE} testId="provenance-historical">
               Historical · EOD
             </StatusBadge>
@@ -138,7 +152,20 @@ export function MarketChartCard({
       >
         {historical ? (
           <>
-            <Fact label="Source" testId="fact-source">Warehouse EOD bars</Fact>
+            <Fact label="Source" testId="fact-source">
+              {!mix ? (
+                '—'
+              ) : mix.providers.length === 0 ? (
+                'Ingested EOD · provider not reported'
+              ) : (
+                <span title={HISTORICAL_NOTE}>
+                  {mix.providers.length === 1
+                    ? mix.providers[0].label
+                    : mix.providers.map((p) => `${p.label} ${p.bars}`).join(' · ')}
+                  {mix.synthetic ? ' (generated, not market data)' : ' (ingested EOD)'}
+                </span>
+              )}
+            </Fact>
             <Fact label="Bar" testId="fact-bar">
               {INTERVAL_NOUN[interval]}
               {interval === '1D' ? '' : ' (from daily)'}

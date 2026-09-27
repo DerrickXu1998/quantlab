@@ -251,7 +251,7 @@ export function MarketView({
             <Shuffle size={16} strokeWidth={1.5} aria-hidden="true" />
           )}
           {historical
-            ? `Historical · warehouse end-of-day bars · each bar = ${INTERVALS.find((i) => i.id === settings.interval)?.detail.toLowerCase()} · not real-time`
+            ? `Historical · end-of-day bars ingested from market data providers · each bar = ${INTERVALS.find((i) => i.id === settings.interval)?.detail.toLowerCase()} · not real-time`
             : 'Simulated · random walk seeded at the last stored close · 1 s ticks · not market data — QuantLab has no live feed'}
         </div>
 

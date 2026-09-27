@@ -55,6 +55,7 @@ function weekdayBars(count: number): PriceBar[] {
         low: close - 1,
         close,
         volume: 1000,
+        source: 'yahoo',
       } as PriceBar);
     }
     day.setUTCDate(day.getUTCDate() + 1);
@@ -237,7 +238,8 @@ describe('Market view', () => {
 
     expect(within(card).getByTestId('provenance-historical')).toHaveTextContent(/historical/i);
     expect(within(card).queryByTestId('simulated-tag')).toBeNull();
-    expect(within(card).getByTestId('fact-source')).toHaveTextContent(/warehouse EOD/i);
+    // Named for the provider that supplied the bars, not for where they are stored.
+    expect(within(card).getByTestId('fact-source')).toHaveTextContent('Yahoo Finance (ingested EOD)');
     expect(within(card).getByTestId('fact-bar')).toHaveTextContent('1 trading day');
     expect(within(card).getByTestId('fact-window')).toHaveTextContent(`→ ${last}`);
     expect(within(card).getByTestId('fact-latest')).toHaveTextContent(new RegExp(`${last} · \\d+ days? old|today`));
@@ -245,6 +247,45 @@ describe('Market view', () => {
     expect(within(card).getByTestId('readout-date')).toHaveTextContent(last);
     expect(within(card).getByTestId('readout-offset')).toHaveTextContent('T-0');
     expect(screen.getByTestId('market-provenance')).toHaveTextContent(/historical .* not real-time/i);
+  });
+
+  it('splits the source by provider when a window mixes them', async () => {
+    const mixed = BARS.map((bar, i) => ({ ...bar, source: i >= BARS.length - 5 ? 'tiingo' : 'yahoo' }));
+    vi.mocked(apiClient.getPrices).mockResolvedValue({ total: mixed.length, items: mixed });
+    window.location.hash = '#/market?symbols=AAPL.US&range=1M';
+    renderMarket();
+    const card = await screen.findByRole('region', { name: /AAPL\.US/ });
+    await within(card).findByTestId('market-chart');
+
+    expect(within(card).getByTestId('fact-source')).toHaveTextContent(/Yahoo Finance \d+ · Tiingo 5 \(ingested EOD\)/);
+  });
+
+  it('flags generated bars as synthetic instead of historical', async () => {
+    const generated = BARS.map((bar) => ({ ...bar, source: 'synthetic' }));
+    vi.mocked(apiClient.getPrices).mockResolvedValue({ total: generated.length, items: generated });
+    window.location.hash = '#/market?symbols=AAPL.US';
+    renderMarket();
+    const card = await screen.findByRole('region', { name: /AAPL\.US/ });
+    await within(card).findByTestId('market-chart');
+
+    expect(within(card).getByTestId('provenance-synthetic')).toHaveTextContent(/synthetic/i);
+    expect(within(card).queryByTestId('provenance-historical')).toBeNull();
+    expect(within(card).getByTestId('fact-source')).toHaveTextContent('Synthetic (generated, not market data)');
+  });
+
+  it('says so when an older backend does not report the provider', async () => {
+    const bare = BARS.map((bar) => {
+      const copy: Partial<PriceBar> = { ...bar };
+      delete copy.source;
+      return copy as PriceBar;
+    });
+    vi.mocked(apiClient.getPrices).mockResolvedValue({ total: bare.length, items: bare });
+    window.location.hash = '#/market?symbols=AAPL.US';
+    renderMarket();
+    const card = await screen.findByRole('region', { name: /AAPL\.US/ });
+    await within(card).findByTestId('market-chart');
+
+    expect(within(card).getByTestId('fact-source')).toHaveTextContent('provider not reported');
   });
 
   it('switches the bar size and says the bars are aggregated', async () => {
