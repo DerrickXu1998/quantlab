@@ -275,8 +275,30 @@ def run_experiment(
         else {}
     )
 
+    # Cross-instrument inputs (the macro gates' VIX and HY spread), loaded over
+    # the same warm-up window. Refused up front if the store does not have
+    # them: a gate reading an empty series stays shut, and a run that never
+    # trades for want of data is indistinguishable from one with no signals.
+    wanted_series = sorted(
+        {
+            name
+            for index, component in enumerate(spec.components)
+            for name in component.resolve(index).requires_series
+        }
+    )
+    series: dict[str, list] = {}
+    if wanted_series:
+        missing = backend.validate_symbols(wanted_series)
+        if missing:
+            raise errors.UnknownSymbolError(missing)
+        series = backend.load_bars_for(wanted_series, warmup_start, end_date)
+
     decisions, composition = compose(
-        spec, bars_by_symbol, requested_symbols, facts_by_symbol=facts_by_symbol
+        spec,
+        bars_by_symbol,
+        requested_symbols,
+        facts_by_symbol=facts_by_symbol,
+        series=series,
     )
     # Warm-up bars are inputs, not results: report only the requested window.
     in_window = [d for d in decisions if start_date <= d.date <= end_date]

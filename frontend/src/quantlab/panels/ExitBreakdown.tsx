@@ -71,6 +71,18 @@ export function ExitBreakdown({
                 <Numeric value={costs.slippage} format="currency" className="text-xs" />
               </dd>
             </div>
+            {/* Only when charged: a long-only run has no borrow, and a row of
+                zero would suggest shorts were costed when none were taken. */}
+            {costs.borrow ? (
+              <div className="flex gap-2" data-testid="run-costs-borrow">
+                <dt className={MICRO} title="Stock borrow paid on shorts, accrued daily.">
+                  Borrow
+                </dt>
+                <dd>
+                  <Numeric value={costs.borrow} format="currency" className="text-xs" />
+                </dd>
+              </div>
+            ) : null}
           </dl>
         ) : null}
 

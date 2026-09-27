@@ -117,6 +117,7 @@ class ExecutionSummary:
     dropped_no_bar: int = 0
     total_commission: float = 0.0
     total_slippage: float = 0.0
+    total_borrow: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -149,6 +150,8 @@ class _Position:
     #: Best close seen while held, for the trailing stop. Updated only after a
     #: bar has been tested, so today's close never sets today's trigger.
     best_close: float
+    #: Borrow charged so far on a short; folded into the trade's fees on close.
+    borrow_accrued: float = 0.0
 
 
 @dataclass
@@ -257,6 +260,7 @@ class ExecutionSimulator:
         self.closed_trades: list[ExecutedTrade] = []
         self._realized = 0.0
         self._commission = 0.0
+        self._borrow = 0.0
         self._slippage = 0.0
         self._counters = dict.fromkeys(
             (
@@ -563,10 +567,11 @@ class ExecutionSimulator:
             if position.side == "long"
             else position.qty * (position.entry_price - fill_price)
         )
-        net = gross - commission
+        # Borrow was debited from cash day by day; it is realised with the trade.
+        net = gross - commission - position.borrow_accrued
         self._realized += net
 
-        fees = position.entry_fees + commission
+        fees = position.entry_fees + commission + position.borrow_accrued
         self.closed_trades.append(
             ExecutedTrade(
                 symbol=symbol,
@@ -765,6 +770,21 @@ class ExecutionSimulator:
                 else min(position.best_close, close)
             )
 
+        # 5. Borrow on every short held through today's close, on today's
+        # market value. Charged per session the instrument traded, so a
+        # holiday on its exchange costs nothing -- the /252 convention.
+        rate = self.config.borrow_cost_bps * BPS / TRADING_DAYS_PER_YEAR
+        if rate:
+            for symbol in sorted(self._positions):
+                position = self._positions[symbol]
+                close = closes.get(symbol)
+                if position.side != "short" or close is None:
+                    continue
+                charge = position.qty * close * rate
+                self._credit(symbol, -charge)
+                position.borrow_accrued += charge
+                self._borrow += charge
+
         return DayState(
             date=date,
             closes=closes,
@@ -913,8 +933,8 @@ class ExecutionSimulator:
                     return_pct=self._return_pct(position.side, position.entry_price, last),
                     open=True,
                     exit_reason="end_of_window",
-                    pnl=gross - position.entry_fees,
-                    fees=position.entry_fees,
+                    pnl=gross - position.entry_fees - position.borrow_accrued,
+                    fees=position.entry_fees + position.borrow_accrued,
                 )
             )
         out.sort(key=lambda t: (t.symbol, t.entry_date))
@@ -924,6 +944,7 @@ class ExecutionSimulator:
         return ExecutionSummary(
             total_commission=self._commission,
             total_slippage=self._slippage,
+            total_borrow=self._borrow,
             **self._counters,
         )
 

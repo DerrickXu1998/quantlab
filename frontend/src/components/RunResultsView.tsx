@@ -6,6 +6,7 @@ import { navigate } from '../chrome/router';
 import { useRunPerformance } from '../quantlab/data/useRunPerformance';
 import { EquityCurve } from '../quantlab/charts/EquityCurve';
 import { Assumptions } from '../quantlab/panels/Assumptions';
+import { BenchmarkPanel } from '../quantlab/panels/BenchmarkPanel';
 import { ExitBreakdown } from '../quantlab/panels/ExitBreakdown';
 import { StatRow } from '../quantlab/panels/StatRow';
 import { TradeLog } from '../quantlab/panels/TradeLog';
@@ -245,6 +246,9 @@ export function RunResultsView({ run }: { run: RunDetailV2 }) {
                 benchmarkLabel="Buy & hold"
                 height={220}
               />
+              {/* Directly under the curve it describes: how much of that line
+                  is the benchmark's, and what the timing added. */}
+              <BenchmarkPanel regression={performance.performance.regression} />
               {/* Above the trade log, not below it: the assumptions are now
                   derived from the execution criteria this run was actually
                   given, so they are the context the numbers above are read in. */}

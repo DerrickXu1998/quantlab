@@ -194,7 +194,10 @@ def test_the_new_rules_are_all_served(client):
 
 def test_templates_are_public_and_complete(client):
     body = client.get("/api/v1/strategy-templates").json()
-    assert body["total"] == 4
+    assert body["total"] == 8
+    # The AI-quant-book presets (S1, S2, S6, S7) are one click, like the starters.
+    ids = {item["id"] for item in body["items"]}
+    assert {"regime-trend", "regime-reversion", "macro-gated-trend", "quality-momentum"} <= ids
     for item in body["items"]:
         assert item["components"], item["id"]
         assert item["execution"]["commission_bps"] > 0, "a starter must not teach free turnover"

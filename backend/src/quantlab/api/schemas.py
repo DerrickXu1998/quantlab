@@ -115,6 +115,8 @@ class Model(BaseModel):
     #: which of their instruments will never trade before they run, not after
     #: (docs/FUNDAMENTALS.md §5.1).
     requires_facts: list[str] = []
+    # Other instruments' series the rule reads (e.g. VIX.FRED for the macro gate).
+    requires_series: list[str] = []
 
 
 class ModelList(BaseModel):
@@ -255,6 +257,19 @@ class PerformanceMetrics(BaseModel):
 class CostBreakdown(BaseModel):
     commission: float = 0.0
     slippage: float = 0.0
+    borrow: float = 0.0
+
+
+class BenchmarkRegression(BaseModel):
+    """Daily strategy returns regressed on the run's equal-weight benchmark."""
+
+    alpha: float
+    beta: float
+    r_squared: float
+    correlation: float
+    tracking_error: float | None = None
+    information_ratio: float | None = None
+    observations: int
 
 
 class RunPerformance(BaseModel):
@@ -271,6 +286,8 @@ class RunPerformance(BaseModel):
     assumptions: list[str]
     costs: CostBreakdown = CostBreakdown()
     exit_reasons: dict[str, int] = {}
+    # Null when there are too few paired returns to estimate it.
+    regression: BenchmarkRegression | None = None
 
 
 # --- Historical replay ------------------------------------------------------
@@ -297,6 +314,7 @@ class ReplaySummary(BaseModel):
     exit_reasons: dict[str, int] | None = None
     total_commission: float = 0.0
     total_slippage: float = 0.0
+    total_borrow: float = 0.0
 
 
 # --- Identity ---------------------------------------------------------------
@@ -362,6 +380,7 @@ class ExecutionConfigModel(BaseModel):
     min_holding_days: int = 0
     cooldown_days: int = 0
     allow_shorts: bool = False
+    borrow_cost_bps: float = 0.0
 
 
 class StrategyRequest(BaseModel):
@@ -393,6 +412,7 @@ class StrategyList(BaseModel):
 
 class StrategyTemplate(StrategyRequest):
     id: str
+    collection: Literal["starter", "ai-quant-book"] = "starter"
 
 
 class StrategyTemplateList(BaseModel):
@@ -417,6 +437,7 @@ class ExecutionSummaryModel(BaseModel):
     dropped_no_bar: int = 0
     total_commission: float = 0.0
     total_slippage: float = 0.0
+    total_borrow: float = 0.0
     #: Dates where the entry logic said both "long" and "short", and so said
     #: nothing. Neither side was taken.
     contradictions: int = 0

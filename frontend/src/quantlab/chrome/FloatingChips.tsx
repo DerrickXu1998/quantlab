@@ -1,3 +1,4 @@
+import { cn } from '../../lib/utils';
 import type { ReactNode } from 'react';
 
 /**
@@ -36,15 +37,20 @@ export function Chip({
   label,
   children,
   title,
+  className,
 }: {
   label: string;
   children: ReactNode;
   title?: string;
+  className?: string;
 }) {
   return (
     <span
       title={title}
-      className="pointer-events-auto flex items-center gap-1.5 rounded-sm border border-border bg-card px-2 py-1"
+      className={cn(
+        'pointer-events-auto flex items-center gap-1.5 rounded-sm border border-border bg-card px-2 py-1',
+        className,
+      )}
     >
       <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
         {label}

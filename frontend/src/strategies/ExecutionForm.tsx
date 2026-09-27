@@ -481,6 +481,29 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
             />
           )}
         </Field>
+
+        {/* Only with shorts on: a long-only book borrows nothing, and a field
+            that does nothing is a field someone fills in and trusts. */}
+        {value.allow_shorts ? (
+          <Field
+            label="Short borrow"
+            explainer="Annual cost of borrowing the stock you short, as basis points of the short's market value, charged each day it is held. Liquid large caps: 25-50 bps; hard to borrow: hundreds. 0 means shorting is free — which it is not."
+            suffix="bps / yr"
+          >
+            {({ id, describedBy }) => (
+              <Input
+                id={id}
+                type="number"
+                min={0}
+                max={5000}
+                step="any"
+                aria-describedby={describedBy}
+                value={String(value.borrow_cost_bps ?? 0)}
+                onChange={(event) => patch({ borrow_cost_bps: Number(event.target.value) })}
+              />
+            )}
+          </Field>
+        ) : null}
       </Section>
     </div>
   );

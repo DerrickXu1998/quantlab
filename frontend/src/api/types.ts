@@ -97,6 +97,11 @@ export type CatalogModel = Omit<Model, 'parameters' | 'category'> & {
    * the data dependency, and it is what says which instruments can never trade.
    */
   requires_facts: string[];
+  /**
+   * Other instruments' series the rule reads — the macro gate's VIX.FRED and
+   * HYSPREAD.FRED. Empty for every single-instrument rule.
+   */
+  requires_series: string[];
 };
 
 /** What `/models` may actually answer with while the backend is mid-flight. */
@@ -186,7 +191,13 @@ export interface StrategyList {
  * stored strategy: it has no owner and no timestamps because nobody owns it
  * until they save a copy.
  */
-export type StrategyTemplate = StrategySpec & { id: string };
+export type TemplateCollection = 'starter' | 'ai-quant-book';
+
+export type StrategyTemplate = StrategySpec & {
+  id: string;
+  /** Which shelf it sits on. Absent from older backends: treated as a starter. */
+  collection?: TemplateCollection;
+};
 
 export interface StrategyTemplateList {
   total: number;
@@ -232,6 +243,8 @@ export interface ExecutionConfig {
   cooldown_days: number;
 
   allow_shorts: boolean;
+  /** Annual borrow on short market value, in bps. Read only with allow_shorts. */
+  borrow_cost_bps: number;
 }
 
 /** The contract's own defaults, §4, field for field. */
@@ -253,6 +266,7 @@ export const DEFAULT_EXECUTION: ExecutionConfig = {
   min_holding_days: 0,
   cooldown_days: 0,
   allow_shorts: false,
+  borrow_cost_bps: 0,
 };
 
 /** Which sizing modes read `sizing_value`, and what it means to each. */
@@ -301,6 +315,7 @@ export interface ExecutionSummary {
   dropped_no_bar?: number;
   total_commission?: number;
   total_slippage?: number;
+  total_borrow?: number;
   rejected_max_positions?: number;
   rejected_cooldown?: number;
   rejected_shorts_disabled?: number;
@@ -329,9 +344,26 @@ export type TradeV2 = Trade & {
 
 export type RunPerformanceV2 = Omit<RunPerformance, 'trades'> & {
   trades: TradeV2[];
-  costs?: { commission: number; slippage: number } | null;
+  costs?: { commission: number; slippage: number; borrow?: number } | null;
   exit_reasons?: Partial<Record<ExitReason, number>> | null;
+  /** Alpha/beta/R² against the run's own buy-and-hold; null when unmeasurable. */
+  regression?: BenchmarkRegression | null;
 };
+
+/**
+ * The strategy's daily returns regressed on its equal-weight benchmark's
+ * (book L08). Computed by the backend; the browser only renders it.
+ */
+export interface BenchmarkRegression {
+  /** Annualised, as a fraction. */
+  alpha: number;
+  beta: number;
+  r_squared: number;
+  correlation: number;
+  tracking_error?: number | null;
+  information_ratio?: number | null;
+  observations: number;
+}
 
 /** Runs recorded before the change carry none of these — hence nullable. */
 export type RunV2 = Run & {
@@ -580,6 +612,9 @@ export function asCatalogModel(model: RawCatalogModel): CatalogModel {
     // no fundamental component in it.
     requires_facts: (model.requires_facts ?? []).filter(
       (concept): concept is string => typeof concept === 'string',
+    ),
+    requires_series: (model.requires_series ?? []).filter(
+      (series): series is string => typeof series === 'string',
     ),
   };
 }

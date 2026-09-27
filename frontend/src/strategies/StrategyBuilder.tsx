@@ -74,6 +74,22 @@ export interface StrategySeed {
   symbols: string[];
 }
 
+/**
+ * Two shelves: generic starters, and the presets replicating the AI-quant-book
+ * plan. The book shelf says what those presets are for -- falsifiable
+ * baselines, each predicting its own failure mode -- and repeats the
+ * unadjusted-price caveat, because a long-horizon backtest of them is exactly
+ * where a split gap turns into a fake signal.
+ */
+const TEMPLATE_SHELVES: { id: 'starter' | 'ai-quant-book'; label: string; note?: string }[] = [
+  { id: 'starter', label: 'Starters' },
+  {
+    id: 'ai-quant-book',
+    label: 'AI Quant Book presets',
+    note: 'Regime-routed baselines from the strategy plan (S1, S2, S6, S7). Each description says where it should fail — a backtest that does not fail there is a bug signal. Prices are unadjusted: check trades on split dates before trusting a 2010–2026 result.',
+  },
+];
+
 export function StrategyBuilder({
   instruments,
   seed = null,
@@ -345,29 +361,55 @@ export function StrategyBuilder({
                 A worked strategy, loaded into the builder in one click. Nothing is saved until you
                 press Save, so these are safe to open and take apart.
               </p>
-              <ul data-testid="template-list" className="space-y-2">
-                {templates.items.map((template) => (
-                  <li key={template.id} className="border border-border p-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="font-mono text-[11px]">{template.name}</p>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        aria-label={`Load the ${template.name} template`}
-                        onClick={() => loadTemplate(template.id)}
-                      >
-                        Load
-                      </Button>
+              {TEMPLATE_SHELVES.map((shelf) => {
+                const items = templates.items.filter(
+                  (template) => (template.collection ?? 'starter') === shelf.id,
+                );
+                if (items.length === 0) return null;
+                return (
+                  <section
+                    key={shelf.id}
+                    aria-label={shelf.label}
+                    data-testid={`template-shelf-${shelf.id}`}
+                    className="space-y-2"
+                  >
+                    <div className="flex items-baseline justify-between gap-2">
+                      <h3 className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+                        {shelf.label}
+                      </h3>
+                      <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                        {items.length}
+                      </span>
                     </div>
-                    {template.description ? (
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {template.description}
-                      </p>
+                    {shelf.note ? (
+                      <p className="text-xs text-muted-foreground">{shelf.note}</p>
                     ) : null}
-                  </li>
-                ))}
-              </ul>
+                    <ul data-testid="template-list" className="space-y-2">
+                      {items.map((template) => (
+                        <li key={template.id} className="border border-border p-2">
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="font-mono text-[11px]">{template.name}</p>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              aria-label={`Load the ${template.name} template`}
+                              onClick={() => loadTemplate(template.id)}
+                            >
+                              Load
+                            </Button>
+                          </div>
+                          {template.description ? (
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {template.description}
+                            </p>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                );
+              })}
             </>
           )}
         </Panel>

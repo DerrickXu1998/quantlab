@@ -274,6 +274,30 @@ describe('StrategyBuilder', () => {
     ]);
   });
 
+  it('shelves the AI Quant Book presets apart from the starters, with their caveat', async () => {
+    vi.mocked(apiClient.listStrategyTemplates).mockResolvedValue({
+      total: templates.length + 1,
+      items: [
+        ...templates,
+        {
+          ...templates[0],
+          id: 'regime-trend',
+          name: 'S1 · Regime-gated trend following',
+          collection: 'ai-quant-book',
+        },
+      ],
+    });
+    await openBuilder();
+
+    const starters = await screen.findByTestId('template-shelf-starter');
+    const book = screen.getByTestId('template-shelf-ai-quant-book');
+    expect(within(starters).getAllByRole('listitem')).toHaveLength(templates.length);
+    expect(within(book).getAllByRole('listitem')).toHaveLength(1);
+    expect(book).toHaveTextContent('S1 · Regime-gated trend following');
+    // The unadjusted-price warning travels with the presets that need it most.
+    expect(book).toHaveTextContent(/unadjusted/i);
+  });
+
   it('loads a template into the builder as a working, unsaved strategy', async () => {
     const person = await openBuilder();
     await screen.findByTestId('template-list');

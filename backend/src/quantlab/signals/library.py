@@ -21,6 +21,8 @@ a long. A user who wants a directional filter inverts it in the strategy spec.
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 import numpy as np
 
 from quantlab.indicators import technical
@@ -47,23 +49,36 @@ def _crossover(previous_diff: float, diff: float) -> str | None:
     return None
 
 
-def _gate_events(bars, open_on: np.ndarray) -> list[SignalEvent]:
+def _gate_events(
+    bars, open_on: np.ndarray, defined: np.ndarray | None = None
+) -> list[SignalEvent]:
     """Turn a per-bar boolean gate into filter events.
 
     ``open_on`` is a boolean array as long as ``bars``, NaN-free, where True
-    means the gate is open. Bars before the indicator warms up must be False,
-    not True -- an undefined filter that defaults to open would silently let
-    every early entry through.
+    means the gate is open. ``defined`` marks the bars on which the gate's
+    state is actually known; on the others (indicator warm-up) no event is
+    emitted at all.
+
+    Emitting nothing, rather than a "shut" event, is what keeps an *inverted*
+    filter honest. The strategy spec inverts a filter by flipping its events,
+    so a warm-up bar reported as shut would be flipped to open and let every
+    early entry through -- an "ADX below 20" gate would pass the first thirty
+    bars of every series because ADX was not yet computed, not because it was
+    low. No event is shut whichever way the component is read.
     """
-    return [
-        SignalEvent(
-            date=bar.date,
-            direction="bullish" if bool(open_on[i]) else "bearish",
-            trigger_values={"gate": bool(open_on[i])},
-            data_window_end=bar.date,
+    events: list[SignalEvent] = []
+    for i, bar in enumerate(bars):
+        if defined is not None and not bool(defined[i]):
+            continue
+        events.append(
+            SignalEvent(
+                date=bar.date,
+                direction="bullish" if bool(open_on[i]) else "bearish",
+                trigger_values={"gate": bool(open_on[i])},
+                data_window_end=bar.date,
+            )
         )
-        for i, bar in enumerate(bars)
-    ]
+    return events
 
 
 # ---------------------------------------------------------------------------
@@ -149,11 +164,12 @@ def adx_trend_filter(bars, period: int = 14, threshold: float = 25.0) -> list[Si
         _series(bars, "high"), _series(bars, "low"), _series(bars, "close"), period=period
     )
     # NaN (not yet warmed up) is a shut gate, never an open one.
-    open_on = ~np.isnan(adx_values) & (adx_values > threshold)
-    events = _gate_events(bars, open_on)
-    for i, event in enumerate(events):
-        if not np.isnan(adx_values[i]):
-            event.trigger_values["adx"] = float(adx_values[i])
+    defined = ~np.isnan(adx_values)
+    open_on = defined & (adx_values > threshold)
+    events = _gate_events(bars, open_on, defined)
+    by_date = {bar.date: i for i, bar in enumerate(bars)}
+    for event in events:
+        event.trigger_values["adx"] = float(adx_values[by_date[event.date]])
     return events
 
 
@@ -211,6 +227,75 @@ def macd_crossover(
                     "signal": float(signal_line[i]),
                     "histogram": float(histogram[i]),
                 },
+                data_window_end=bars[i].date,
+            )
+        )
+    return events
+
+
+@register_signal_rule(
+    name="macd-histogram-slope",
+    version="1.0.0",
+    category="momentum",
+    summary="MACD histogram turning: momentum starting to build or fade, before the cross.",
+    roles=("entry", "exit"),
+    params={
+        "fast": ParamSpec(
+            name="fast", type="int", default=12, minimum=2, maximum=100,
+            description="Fast EMA window of the MACD line, in bars.",
+        ),
+        "slow": ParamSpec(
+            name="slow", type="int", default=26, minimum=3, maximum=200,
+            description="Slow EMA window of the MACD line, in bars.",
+        ),
+        "signal": ParamSpec(
+            name="signal", type="int", default=9, minimum=2, maximum=100,
+            description="EMA window of the signal line, in bars.",
+        ),
+        "require_sign": ParamSpec(
+            name="require_sign", type="bool", default=True,
+            description=(
+                "Only count a turn up while the histogram is still below zero (and a "
+                "turn down while above) -- momentum recovering from weakness, not "
+                "a wiggle at the top of an extended move."
+            ),
+        ),
+    },
+    lookback_days=37,  # histogram defined at slow + signal - 2; a turn needs T-2
+    scale_class="scale_free",
+    direction_semantics=(
+        "bullish: the histogram's one-bar slope turned from falling-or-flat to "
+        "rising on the signal date; bearish: from rising-or-flat to falling. "
+        "This is the book's preferred trend trigger: the slope of the histogram "
+        "leads the MACD/signal crossover, which is the histogram's zero-crossing."
+    ),
+)
+def macd_histogram_slope(
+    bars, fast: int = 12, slow: int = 26, signal: int = 9, require_sign: bool = True
+) -> list[SignalEvent]:
+    _, _, histogram = technical.macd(
+        _series(bars, "close"), fast=fast, slow=slow, signal=signal
+    )
+    events: list[SignalEvent] = []
+    for i in range(2, len(bars)):
+        window = histogram[i - 2 : i + 1]
+        if np.isnan(window).any():
+            continue
+        previous_slope = float(histogram[i - 1] - histogram[i - 2])
+        slope = float(histogram[i] - histogram[i - 1])
+        direction = _crossover(previous_slope, slope)
+        if direction is None:
+            continue
+        if require_sign and (
+            (direction == "bullish" and histogram[i] >= 0)
+            or (direction == "bearish" and histogram[i] <= 0)
+        ):
+            continue
+        events.append(
+            SignalEvent(
+                date=bars[i].date,
+                direction=direction,
+                trigger_values={"histogram": float(histogram[i]), "slope": slope},
                 data_window_end=bars[i].date,
             )
         )
@@ -490,11 +575,12 @@ def zscore_reversion(
 )
 def rsi_zone(bars, period: int = 14, floor: float = 0.0, ceiling: float = 50.0):
     values = rsi_indicator(_series(bars, "close"), period=period)
-    open_on = ~np.isnan(values) & (values >= floor) & (values <= ceiling)
-    events = _gate_events(bars, open_on)
-    for i, event in enumerate(events):
-        if not np.isnan(values[i]):
-            event.trigger_values["rsi"] = float(values[i])
+    defined = ~np.isnan(values)
+    open_on = defined & (values >= floor) & (values <= ceiling)
+    events = _gate_events(bars, open_on, defined)
+    by_date = {bar.date: i for i, bar in enumerate(bars)}
+    for event in events:
+        event.trigger_values["rsi"] = float(values[by_date[event.date]])
     return events
 
 
@@ -599,9 +685,138 @@ def volume_spike(bars, window: int = 20, multiple: float = 1.5) -> list[SignalEv
     ratio = np.full(volumes.shape, np.nan)
     usable = ~np.isnan(shifted) & (shifted > 0)
     ratio[usable] = volumes[usable] / shifted[usable]
-    open_on = ~np.isnan(ratio) & (ratio >= multiple)
-    events = _gate_events(bars, open_on)
-    for i, event in enumerate(events):
-        if not np.isnan(ratio[i]):
-            event.trigger_values["volume_ratio"] = float(ratio[i])
+    defined = ~np.isnan(ratio)
+    open_on = defined & (ratio >= multiple)
+    events = _gate_events(bars, open_on, defined)
+    by_date = {bar.date: i for i, bar in enumerate(bars)}
+    for event in events:
+        event.trigger_values["volume_ratio"] = float(ratio[by_date[event.date]])
+    return events
+
+
+# ---------------------------------------------------------------------------
+# Macro
+# ---------------------------------------------------------------------------
+
+#: The macro pseudo-instruments the risk-off gate reads. FRED's VIXCLS and the
+#: ICE BofA US high-yield option-adjusted spread, as ingested by the FRED
+#: provider (percent, e.g. 3.2 for 320 bps).
+VIX_SERIES = "VIX.FRED"
+HY_SPREAD_SERIES = "HYSPREAD.FRED"
+
+
+class _Point(NamedTuple):
+    """A dated value shaped like a bar, for as-of joins on derived series."""
+
+    date: str
+    close: float
+
+
+def _as_of(series_bars, dates: list[str], max_stale_days: int) -> np.ndarray:
+    """Each date's most recent series close on or before it, NaN when unknown.
+
+    Causal by construction: a value dated after the bar is never used, and a
+    value older than ``max_stale_days`` calendar days is treated as unknown
+    rather than carried forward indefinitely across a data gap.
+    """
+    from datetime import date as _date
+
+    points = sorted((bar.date, float(bar.close)) for bar in series_bars or [])
+    out = np.full(len(dates), np.nan)
+    j = -1
+    for i, day in enumerate(dates):
+        while j + 1 < len(points) and points[j + 1][0] <= day:
+            j += 1
+        if j < 0:
+            continue
+        seen, value = points[j]
+        age = (_date.fromisoformat(day) - _date.fromisoformat(seen)).days
+        if age <= max_stale_days:
+            out[i] = value
+    return out
+
+
+@register_signal_rule(
+    name="macro-risk-off",
+    version="1.0.0",
+    category="volatility",
+    summary="Gate that shuts every name in the universe when the market is in risk-off.",
+    roles=("filter",),
+    requires_series=(VIX_SERIES, HY_SPREAD_SERIES),
+    params={
+        "vix_max": ParamSpec(
+            name="vix_max", type="float", default=30.0, minimum=10.0, maximum=100.0,
+            description="VIX level above which the market counts as risk-off.",
+        ),
+        "use_hy_spread": ParamSpec(
+            name="use_hy_spread", type="bool", default=False,
+            description=(
+                "Also shut the gate when the high-yield spread is widening. Off by "
+                "default: FRED only serves the last three years of this series, so "
+                "with it on the gate stays shut for any date before that history."
+            ),
+        ),
+        "hy_window": ParamSpec(
+            name="hy_window", type="int", default=20, minimum=2, maximum=120,
+            description="Bars over which the HY spread's change is measured.",
+        ),
+        "hy_widen": ParamSpec(
+            name="hy_widen", type="float", default=0.5, minimum=0.05, maximum=10.0,
+            description="Widening, in percentage points over the window, that counts as risk-off.",
+        ),
+        "max_stale_days": ParamSpec(
+            name="max_stale_days", type="int", default=5, minimum=1, maximum=30,
+            description="Oldest macro print, in calendar days, still treated as current.",
+        ),
+    },
+    lookback_days=25,  # covers the default HY window's warm-up in the loaded series
+    scale_class="scale_free",
+    direction_semantics=(
+        "A filter, so it emits on every bar where the macro state is known: bullish "
+        "(gate open, risk-on) while VIX is at or below `vix_max` -- and, with "
+        "`use_hy_spread`, the HY spread has not widened by `hy_widen` points over "
+        "`hy_window` bars -- bearish (shut, risk-off) otherwise. The same macro "
+        "state gates every instrument, which is the portfolio-level regime switch "
+        "the book describes. Direction-agnostic; invert it to trade only in risk-off."
+    ),
+)
+def macro_risk_off(
+    bars,
+    *,
+    series=None,
+    vix_max: float = 30.0,
+    use_hy_spread: bool = False,
+    hy_window: int = 20,
+    hy_widen: float = 0.5,
+    max_stale_days: int = 5,
+) -> list[SignalEvent]:
+    series = series or {}
+    dates = [bar.date for bar in bars]
+    vix = _as_of(series.get(VIX_SERIES), dates, max_stale_days)
+    defined = ~np.isnan(vix)
+    risk_on = defined & (vix <= vix_max)
+
+    hy_change = np.full(len(dates), np.nan)
+    if use_hy_spread:
+        hy_points = sorted(series.get(HY_SPREAD_SERIES) or [], key=lambda b: b.date)
+        # The change is measured on the spread's own sessions, then joined as-of,
+        # so a bar's value never reads a print dated after it.
+        changes = [
+            _Point(
+                date=hy_points[k].date,
+                close=float(hy_points[k].close) - float(hy_points[k - hy_window].close),
+            )
+            for k in range(hy_window, len(hy_points))
+        ]
+        hy_change = _as_of(changes, dates, max_stale_days)
+        defined &= ~np.isnan(hy_change)
+        risk_on &= ~np.isnan(hy_change) & (hy_change < hy_widen)
+
+    events = _gate_events(bars, risk_on, defined)
+    by_date = {day: i for i, day in enumerate(dates)}
+    for event in events:
+        i = by_date[event.date]
+        event.trigger_values["vix"] = float(vix[i])
+        if use_hy_spread:
+            event.trigger_values["hy_change"] = round(float(hy_change[i]), 4)
     return events

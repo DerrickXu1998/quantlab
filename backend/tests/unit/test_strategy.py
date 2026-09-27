@@ -357,14 +357,153 @@ def test_an_unknown_top_level_field_is_refused():
 # --- templates --------------------------------------------------------------
 
 
+def _dated(bars, start="2020-01-01"):
+    """The same path on real session dates, for rules that join other series."""
+    from datetime import date, timedelta
+
+    day = date.fromisoformat(start)
+    out = []
+    for bar in bars:
+        while day.weekday() >= 5:
+            day += timedelta(days=1)
+        out.append(Bar(day.isoformat(), bar.open, bar.high, bar.low, bar.close, bar.volume))
+        day += timedelta(days=1)
+    return out
+
+
+def _ranging_path(seed: int, n: int = 400):
+    """Mean-reverting around 100: the regime a reversion strategy is built for.
+
+    The shared fixture drifts and trends; a gate that asks for "no trend" (ADX
+    below 20) rightly never opens on it, which says nothing about whether the
+    reversion template works where it should.
+    """
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    level = 100.0
+    out = []
+    for i in range(n):
+        level += 0.25 * (100.0 - level) + rng.normal(0, 1.6)
+        high = level * (1 + abs(rng.normal(0, 0.008)))
+        low = level * (1 - abs(rng.normal(0, 0.008)))
+        open_ = float(min(max(level * (1 + rng.normal(0, 0.004)), low), high))
+        out.append(Bar(f"d{i:04d}", open_, float(high), float(low), float(level), 1_000_000))
+    return out
+
+
+def _calm_vix(bars):
+    return [Bar(b.date, 15.0, 15.0, 15.0, 15.0, 0) for b in bars]
+
+
+def _healthy_facts(bars):
+    """A profitable, cheap, growing company: every S7 gate open, both triggers live.
+
+    Annual filings, 60 days after each year end -- the basis the fundamental
+    triggers compare. Revenue grows 12% a year and the operating margin widens
+    two points a year, so revenue-growth and margin-expansion fire on the same
+    filing date. P/E about 17, ROE 20%, margin from 14%.
+    """
+    from datetime import date, timedelta
+
+    from quantlab.storage.facts import build_series
+
+    first = date.fromisoformat(bars[0].date)
+    rows = []
+    for k, year in enumerate(range(first.year - 3, first.year + 3)):
+        start = date(year, 1, 1).isoformat()
+        end = date(year, 12, 31)
+        filed = (end + timedelta(days=60)).isoformat()
+        revenue = 5.0e9 * (1.12**k)
+        rows += [
+            {"concept": "net_income", "value": 6.0e8, "period_start": start,
+             "period_end": end.isoformat(), "filed_at": filed},
+            {"concept": "revenue", "value": revenue, "period_start": start,
+             "period_end": end.isoformat(), "filed_at": filed},
+            {"concept": "operating_income", "value": revenue * (0.14 + 0.02 * k),
+             "period_start": start, "period_end": end.isoformat(), "filed_at": filed},
+            {"concept": "shares_outstanding", "value": 1.0e8, "period_start": None,
+             "period_end": end.isoformat(), "filed_at": filed},
+            {"concept": "equity", "value": 3.0e9, "period_start": None,
+             "period_end": end.isoformat(), "filed_at": filed},
+        ]
+    return build_series(rows)
+
+
+def _inputs_for(template_id, series):
+    """Each template on the data it declares it needs -- nothing more."""
+    if template_id == "regime-reversion":
+        return {s: _ranging_path(i + 5) for i, s in enumerate(series)}, {}, None
+    if template_id == "macro-gated-trend":
+        dated = {s: _dated(bars) for s, bars in series.items()}
+        any_bars = next(iter(dated.values()))
+        return dated, {}, {"VIX.FRED": _calm_vix(any_bars)}
+    if template_id == "quality-momentum":
+        dated = {s: _dated(bars) for s, bars in series.items()}
+        return dated, {s: _healthy_facts(bars) for s, bars in dated.items()}, None
+    return series, {}, None
+
+
 @pytest.mark.parametrize("template_id", TEMPLATE_IDS)
 def test_every_template_validates_and_actually_trades(template_id, series):
     spec_under_test = template(template_id)
-    decisions, stats = compose(spec_under_test, series)
+    bars, facts, macro = _inputs_for(template_id, series)
+    decisions, stats = compose(spec_under_test, bars, facts_by_symbol=facts, series=macro)
     assert stats.entry_decisions > 0, "a starter template that never enters is useless"
 
-    result = simulate(list(series), series, decisions, spec_under_test.execution)
+    result = simulate(list(bars), bars, decisions, spec_under_test.execution)
     assert result.trades, "a starter template must produce trades on a live-ish path"
+
+
+def test_margin_expansion_fires_on_a_widening_margin(series):
+    """It used to raise ValueError on every name with enough filings."""
+    bars = _dated(series["AAA"])
+    events = get_rule("margin-expansion").compute(bars, facts=_healthy_facts(bars), periods=2)
+    assert events and all(e.direction == "bullish" for e in events)
+    assert events[0].trigger_values["change"] > 0
+
+
+def test_the_macro_gate_shuts_every_entry_in_a_crisis(series):
+    """S6 against S1 on the same path: a VIX of 45 throughout leaves no entry."""
+    dated = {s: _dated(bars) for s, bars in series.items()}
+    any_bars = next(iter(dated.values()))
+    panic = [Bar(b.date, 45.0, 45.0, 45.0, 45.0, 0) for b in any_bars]
+
+    calm_vix = {"VIX.FRED": _calm_vix(any_bars)}
+    _, calm = compose(template("macro-gated-trend"), dated, series=calm_vix)
+    _, crisis = compose(template("macro-gated-trend"), dated, series={"VIX.FRED": panic})
+    _, ungated = compose(template("regime-trend"), dated)
+
+    assert calm.entry_decisions == ungated.entry_decisions > 0
+    assert crisis.entry_decisions == 0
+
+
+def test_the_macro_gate_without_its_series_stays_shut(series):
+    """No VIX at all is not "calm": the gate emits nothing and stays shut."""
+    dated = {s: _dated(bars) for s, bars in series.items()}
+    _, stats = compose(template("macro-gated-trend"), dated)
+    assert stats.entry_decisions == 0
+
+
+def test_an_inverted_filter_stays_shut_while_its_indicator_warms_up(series):
+    """The regression the S2 template depends on.
+
+    An inverted ADX gate reads "no trend". Before ADX is defined it must stay
+    shut -- flipping a warm-up "shut" into "open" would admit every early entry
+    because the indicator had not been computed, not because it was low.
+    """
+    bars = {"AAA": _ranging_path(5)}
+    gate = StrategyComponent(
+        rule_name="adx-trend-filter", role="filter", parameters={"threshold": 20.0}, invert=True
+    )
+    entry = component("bollinger-reversion", "entry")
+    decisions, _ = compose(spec(entry, gate), bars)
+    adx_rule = get_rule("adx-trend-filter")
+    first_defined = next(
+        e.date for e in adx_rule.compute(bars["AAA"], period=14, threshold=20.0)
+    )
+    assert decisions, "the ranging path should produce some gated entries"
+    assert all(d.date >= first_defined for d in decisions)
 
 
 def test_every_template_charges_realistic_costs():

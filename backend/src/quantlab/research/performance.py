@@ -88,6 +88,37 @@ class PerformanceMetrics:
 class CostBreakdown:
     commission: float = 0.0
     slippage: float = 0.0
+    #: Short borrow charged over the run (``borrow_cost_bps``); 0 when long-only.
+    borrow: float = 0.0
+
+
+#: Fewer paired daily returns than this and a regression is noise: beta from a
+#: month of data swings with every bar. ~3 months of sessions.
+MIN_REGRESSION_OBSERVATIONS = 60
+
+
+@dataclass(frozen=True)
+class BenchmarkRegression:
+    """The strategy's daily returns regressed on its benchmark's (book L08).
+
+    ``r_t = alpha + beta * b_t + e_t`` by ordinary least squares, with the
+    risk-free rate taken as zero -- stated, not hidden, because excess returns
+    over cash would lower alpha by roughly the cash rate. The benchmark is the
+    run's own equal-weight buy-and-hold, not an index (data gap D1), so beta
+    here is exposure to *the names the strategy was pointed at*, and alpha is
+    what the timing added on top of simply holding them.
+    """
+
+    #: Annualised intercept (daily x 252), as a fraction.
+    alpha: float
+    beta: float
+    r_squared: float
+    correlation: float
+    #: Annualised standard deviation of the active return (strategy - benchmark).
+    tracking_error: float | None
+    #: Annualised mean active return over tracking error.
+    information_ratio: float | None
+    observations: int
 
 
 @dataclass(frozen=True)
@@ -105,6 +136,9 @@ class RunPerformance:
     #: doing the work.
     costs: CostBreakdown = field(default_factory=CostBreakdown)
     exit_reasons: dict[str, int] = field(default_factory=dict)
+    #: ``None`` when there are too few paired returns to estimate it, or the
+    #: benchmark never moved. A beta of 0.0 would read as "market-neutral".
+    regression: BenchmarkRegression | None = None
 
 
 def _closes(bars: list[Any]) -> dict[str, float]:
@@ -287,6 +321,58 @@ def _sharpe(equity: list[EquityPoint]) -> float | None:
     return (statistics.fmean(returns) / deviation) * (TRADING_DAYS_PER_YEAR**0.5)
 
 
+def _daily_returns(curve: list[EquityPoint]) -> dict[str, float]:
+    return {
+        curve[i].date: curve[i].value / curve[i - 1].value - 1.0
+        for i in range(1, len(curve))
+        if curve[i - 1].value != 0
+    }
+
+
+def regression(
+    equity: list[EquityPoint], benchmark: list[EquityPoint]
+) -> BenchmarkRegression | None:
+    """OLS of the strategy's daily returns on the benchmark's, on shared dates."""
+    strategy = _daily_returns(equity)
+    market = _daily_returns(benchmark)
+    dates = sorted(set(strategy) & set(market))
+    n = len(dates)
+    if n < MIN_REGRESSION_OBSERVATIONS:
+        return None
+    r = [strategy[d] for d in dates]
+    b = [market[d] for d in dates]
+    mean_r = statistics.fmean(r)
+    mean_b = statistics.fmean(b)
+    var_b = sum((x - mean_b) ** 2 for x in b)
+    var_r = sum((y - mean_r) ** 2 for y in r)
+    if var_b == 0:
+        return None
+    cov = sum((x - mean_b) * (y - mean_r) for x, y in zip(b, r, strict=True))
+    beta = cov / var_b
+    alpha_daily = mean_r - beta * mean_b
+    # A flat strategy (never traded) explains nothing and is explained by nothing.
+    r_squared = (cov * cov) / (var_b * var_r) if var_r > 0 else 0.0
+    correlation = cov / (var_b * var_r) ** 0.5 if var_r > 0 else 0.0
+
+    active = [y - x for x, y in zip(b, r, strict=True)]
+    deviation = statistics.stdev(active)
+    tracking_error = deviation * TRADING_DAYS_PER_YEAR**0.5 if deviation > 0 else None
+    information_ratio = (
+        statistics.fmean(active) * TRADING_DAYS_PER_YEAR / tracking_error
+        if tracking_error
+        else None
+    )
+    return BenchmarkRegression(
+        alpha=alpha_daily * TRADING_DAYS_PER_YEAR,
+        beta=beta,
+        r_squared=r_squared,
+        correlation=correlation,
+        tracking_error=tracking_error,
+        information_ratio=information_ratio,
+        observations=n,
+    )
+
+
 def metrics(equity: list[EquityPoint], trades: list[Trade]) -> PerformanceMetrics:
     """Summary statistics over the curve and the realised trades."""
     if equity and equity[0].value != 0:
@@ -410,11 +496,13 @@ def compute_performance(
     for trade in trades:
         reasons[trade.exit_reason] = reasons.get(trade.exit_reason, 0) + 1
 
+    benchmark = benchmark_series(in_window, symbols, config.initial_capital)
+
     return RunPerformance(
         run_id=run_id,
         initial_capital=config.initial_capital,
         equity=curve,
-        benchmark=benchmark_series(in_window, symbols, config.initial_capital),
+        benchmark=benchmark,
         metrics=metrics(curve, trades),
         trades=trades,
         # Generated from the config that actually ran, so the caveats can no
@@ -423,6 +511,8 @@ def compute_performance(
         costs=CostBreakdown(
             commission=result.summary.total_commission,
             slippage=result.summary.total_slippage,
+            borrow=result.summary.total_borrow,
         ),
         exit_reasons=dict(sorted(reasons.items())),
+        regression=regression(curve, benchmark),
     )

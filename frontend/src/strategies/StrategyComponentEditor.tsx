@@ -1,3 +1,4 @@
+import { RequiresSeries } from './RequiresSeries';
 import { Trash2, TriangleAlert } from 'lucide-react';
 import { useState } from 'react';
 import type { CatalogModel, FundamentalsCoverage, StrategyRole } from '../api/types';
@@ -215,6 +216,7 @@ export function StrategyComponentEditor({
               written down here — the FINRA short-volume concepts have one
               month of history, and a filter using them over an earlier window
               matches nothing at all. */}
+          <RequiresSeries model={model} testId={`requires-series-${component.rule_name}`} />
           {model.requires_facts.length > 0 ? (
             <div
               data-testid={`requires-facts-${component.rule_name}`}

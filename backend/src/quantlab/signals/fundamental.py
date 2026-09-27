@@ -31,6 +31,7 @@ filed after that date. The truncation sweep covers these rules automatically.
 
 from __future__ import annotations
 
+from itertools import pairwise
 from typing import Any
 
 from quantlab.signals.registry import ParamSpec, SignalEvent, register_signal_rule
@@ -84,8 +85,11 @@ def _gate_events(bars, open_on: list[bool], trigger: list[dict[str, Any]]):
     """Turn a per-bar boolean gate into filter events.
 
     Same contract as the technical filters in ``library.py``: bullish means the
-    gate is open on this date, bearish means shut, and a bar before the figure
-    is known is shut rather than open.
+    gate is open on this date, bearish means shut, and a bar on which the figure
+    is not known (no filing yet, stale, or undefined -- a loss-maker's P/E)
+    emits nothing. That reads as shut, and stays shut if the component is
+    inverted: "P/E outside the band" must not admit a company with no
+    earnings figure at all.
     """
     return [
         SignalEvent(
@@ -95,6 +99,7 @@ def _gate_events(bars, open_on: list[bool], trigger: list[dict[str, Any]]):
             data_window_end=bar.date,
         )
         for i, bar in enumerate(bars)
+        if any(value is not None for value in trigger[i].values())
     ]
 
 
@@ -515,7 +520,10 @@ def margin_expansion(
         window = margins[-(periods + 1) :]
         if window[-1][0] and facts.value("revenue", on, max_stale_days=max_stale_days) is None:
             return None
-        deltas = [b[1] - a[1] for a, b in zip(window, window[1:], strict=True)]
+        # Consecutive pairs. This was zip(window, window[1:], strict=True),
+        # which raises on every call -- the second list is always one shorter
+        # -- so the rule crashed any run that reached a name with enough filings.
+        deltas = [b[1] - a[1] for a, b in pairwise(window)]
         if all(delta > 0 for delta in deltas):
             direction = "bullish"
         elif all(delta < 0 for delta in deltas):

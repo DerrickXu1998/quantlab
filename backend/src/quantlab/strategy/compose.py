@@ -67,6 +67,7 @@ def _fire_map(
     index: int,
     bars: list[Any],
     facts: Any = None,
+    series: dict[str, list[Any]] | None = None,
 ) -> dict[str, _Firing]:
     """Run one component over one instrument's bars.
 
@@ -85,6 +86,12 @@ def _fire_map(
     parameters = rule.effective_params(component.parameters)
     if rule.requires_facts:
         parameters["facts"] = facts
+    if rule.requires_series:
+        # Only the series this rule declared, so a rule cannot come to depend on
+        # an input the runner happened to load for somebody else.
+        parameters["series"] = {
+            name: (series or {}).get(name) or [] for name in rule.requires_series
+        }
     out: dict[str, _Firing] = {}
     for event in rule.compute(bars, **parameters):
         direction = event.direction
@@ -162,6 +169,7 @@ def compose(
     bars_by_symbol: dict[str, list[Any]],
     symbols: Iterable[str] | None = None,
     facts_by_symbol: dict[str, Any] | None = None,
+    series: dict[str, list[Any]] | None = None,
 ) -> tuple[list[Decision], CompositionStats]:
     """Evaluate ``spec`` over each instrument and emit its decisions.
 
@@ -191,7 +199,7 @@ def compose(
 
         facts = (facts_by_symbol or {}).get(symbol)
         active_by_component = {
-            index: _active(_fire_map(component, index, bars, facts), dates, window)
+            index: _active(_fire_map(component, index, bars, facts, series), dates, window)
             for index, component in enumerate(spec.components)
         }
 

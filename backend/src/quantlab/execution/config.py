@@ -104,6 +104,12 @@ class ExecutionConfig:
     cooldown_days: int = 0
 
     allow_shorts: bool = False
+    #: Annualised cost of borrowing stock to short, in basis points of the
+    #: short's market value, accrued each session the short is held (/252).
+    #: Liquid large caps borrow for 25-50 bps a year; hard-to-borrow names can
+    #: cost hundreds. Zero -- the default -- means shorting is free, which is
+    #: exactly what the assumptions list says when it is left there.
+    borrow_cost_bps: float = 0.0
 
     def __post_init__(self) -> None:
         self.validate()
@@ -143,6 +149,10 @@ class ExecutionConfig:
 
         _positive("commission_bps", self.commission_bps, allow_zero=True)
         _positive("slippage_bps", self.slippage_bps, allow_zero=True)
+        _positive("borrow_cost_bps", self.borrow_cost_bps, allow_zero=True)
+        if self.borrow_cost_bps > 5_000:
+            # 50%/yr. Anything above is almost certainly a percent typed as bps.
+            raise ValueError("borrow_cost_bps is annual basis points; 50 means 0.5% a year")
 
         _fraction("stop_loss_pct", self.stop_loss_pct)
         _fraction("take_profit_pct", self.take_profit_pct)
@@ -187,9 +197,17 @@ class ExecutionConfig:
         out: list[str] = []
 
         if self.allow_shorts:
+            borrow = (
+                f"Shorts pay {self.borrow_cost_bps:g} bps a year of borrow on their market "
+                "value, accrued each session held; locate availability and short-sale "
+                "restrictions are not modelled."
+                if self.borrow_cost_bps
+                else "Borrow costs, locate availability and short-sale restrictions are not "
+                "modelled -- shorting is free here, which it is not in practice."
+            )
             out.append(
                 "Long and short: a bearish entry opens a short and a bullish signal covers it. "
-                "Borrow costs, locate availability and short-sale restrictions are not modelled."
+                + borrow
             )
         else:
             out.append("Long-only: a bearish signal closes a position, it never opens a short.")

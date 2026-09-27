@@ -920,6 +920,21 @@ export interface components {
             exit_reasons?: {
                 [key: string]: number;
             };
+            /** @description The strategy's daily returns regressed on the benchmark's (alpha, beta, R squared). Null when fewer than 60 paired daily returns exist or the benchmark never moved -- a fabricated beta of 0 would read as market-neutral. */
+            regression?: components["schemas"]["BenchmarkRegression"] | null;
+        };
+        /** @description Ordinary least squares of r_t = alpha + beta * b_t on shared dates, risk-free rate taken as zero. The benchmark is the run's own equal-weight buy-and-hold, so beta is exposure to the selected names and alpha is what the strategy's timing added over holding them. */
+        BenchmarkRegression: {
+            /** @description Annualised intercept (daily x 252), as a fraction. */
+            alpha: number;
+            beta: number;
+            r_squared: number;
+            correlation: number;
+            /** @description Annualised standard deviation of strategy minus benchmark returns. */
+            tracking_error?: number | null;
+            /** @description Annualised mean active return over tracking error. */
+            information_ratio?: number | null;
+            observations: number;
         };
         Credentials: {
             /** Format: email */
@@ -1008,7 +1023,13 @@ export interface components {
         };
         StrategyTemplate: components["schemas"]["StrategyRequest"] & {
             /** @enum {string} */
-            id: "rsi-mean-reversion" | "macd-trend-following" | "donchian-breakout" | "dual-confirmation";
+            id: "rsi-mean-reversion" | "macd-trend-following" | "donchian-breakout" | "dual-confirmation" | "regime-trend" | "regime-reversion" | "macro-gated-trend" | "quality-momentum";
+            /**
+             * @description Which shelf the template belongs on: the generic starters, or the presets replicating docs/AI_QUANT_BOOK_STRATEGY_PLAN.md (S1, S2, S6, S7). Presentation only; not part of the spec.
+             * @default starter
+             * @enum {string}
+             */
+            collection: "starter" | "ai-quant-book";
         };
         StrategyTemplateList: {
             total: number;
@@ -1067,6 +1088,11 @@ export interface components {
             cooldown_days: number;
             /** @default false */
             allow_shorts: boolean;
+            /**
+             * @description Annual cost of borrowing stock to short, in basis points of the short's market value, accrued per session held (/252). Only read when allow_shorts is true.
+             * @default 0
+             */
+            borrow_cost_bps: number;
         };
         /** @description What the engine did, including what it refused to do. The rejection counters matter as much as the fills: a strategy whose signals were mostly dropped for want of a free slot has not been tested, and without these it looks identical to one that simply signalled rarely. */
         ExecutionSummary: {
@@ -1079,12 +1105,14 @@ export interface components {
             dropped_no_bar?: number;
             total_commission?: number;
             total_slippage?: number;
+            total_borrow?: number;
             /** @description Dates where the entry logic said both "long" and "short", and so said nothing. Neither side was taken. */
             contradictions?: number;
         };
         CostBreakdown: {
             commission?: number;
             slippage?: number;
+            borrow?: number;
         };
         /**
          * @description Why a position closed. "The strategy said so" and "the stop caught it" are different facts about a strategy, and averaging them into one win rate hides which one is doing the work.
@@ -1120,6 +1148,8 @@ export interface components {
             total_commission: number;
             /** @default 0 */
             total_slippage: number;
+            /** @default 0 */
+            total_borrow: number;
         };
         FundamentalFact: {
             concept: string;

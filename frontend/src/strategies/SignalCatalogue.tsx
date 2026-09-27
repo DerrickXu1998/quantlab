@@ -1,3 +1,4 @@
+import { RequiresSeries } from './RequiresSeries';
 import { PackageOpen, Search } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { CatalogModel, FundamentalsCoverage, StrategyRole } from '../api/types';
@@ -67,6 +68,7 @@ function SignalCard({
             warehouse actually has them. A rule that reads a concept covering
             77 names is a different proposition from one that reads a concept
             covering 580, and that is not visible anywhere else. */}
+        <RequiresSeries model={model} testId={`requires-series-card-${model.name}`} />
         {model.requires_facts.length > 0 ? (
           <div data-testid={`requires-facts-card-${model.name}`} className="space-y-0.5">
             <p className={MICRO}>Reads filed facts</p>

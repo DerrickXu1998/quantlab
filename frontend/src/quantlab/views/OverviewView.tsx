@@ -187,6 +187,40 @@ export function OverviewView() {
                       className="text-xs"
                     />
                   </Chip>
+                  {/* Compact here, full on the run detail: the curve is this
+                      screen's subject, and three numbers say how much of it is
+                      simply the benchmark. */}
+                  {performance.performance.regression ? (
+                    <Chip
+                      label="Beta"
+                      // Laptop only: on a phone a sixth chip wraps the row over
+                      // the panel title. The run detail carries the full panel.
+                      className="hidden lg:flex"
+                      title={`Against buy & hold of the same names: alpha ${(
+                        performance.performance.regression.alpha * 100
+                      ).toFixed(1)}% a year, R² ${performance.performance.regression.r_squared.toFixed(2)}`}
+                    >
+                      <Numeric
+                        value={performance.performance.regression.beta}
+                        format="ratio"
+                        className="text-xs"
+                      />
+                    </Chip>
+                  ) : null}
+                  {performance.performance.regression ? (
+                    <Chip
+                      label="Alpha"
+                      className="hidden lg:flex"
+                      title="Annualised alpha against buy & hold of the same names"
+                    >
+                      <Numeric
+                        value={performance.performance.regression.alpha}
+                        format="signedPercent"
+                        tone="signed"
+                        className="text-xs"
+                      />
+                    </Chip>
+                  ) : null}
                 </FloatingChips>
                 <Panel title="Equity curve" fill className="border-0">
                   <StatRow metrics={performance.performance.metrics} />

@@ -98,6 +98,7 @@ class ReplaySummary:
     exit_reasons: dict[str, int] | None = None
     total_commission: float = 0.0
     total_slippage: float = 0.0
+    total_borrow: float = 0.0
 
 
 ReplayEvent = ReplayBar | ReplaySignal | ReplayFill | ReplayEquity | ReplaySummary
@@ -278,6 +279,7 @@ def summary_event(
         exit_reasons=dict(sorted(reasons.items())),
         total_commission=summary.total_commission,
         total_slippage=summary.total_slippage,
+        total_borrow=summary.total_borrow,
     )
 
 

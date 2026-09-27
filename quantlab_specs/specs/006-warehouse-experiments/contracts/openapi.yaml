@@ -2006,6 +2006,41 @@ components:
             type: integer
           description: >
             Closed-position counts by reason. Sums to the number of trades.
+        regression:
+          description: >
+            The strategy's daily returns regressed on the benchmark's (alpha,
+            beta, R squared). Null when fewer than 60 paired daily returns
+            exist or the benchmark never moved -- a fabricated beta of 0 would
+            read as market-neutral.
+          oneOf:
+            - $ref: "#/components/schemas/BenchmarkRegression"
+            - type: "null"
+
+    BenchmarkRegression:
+      type: object
+      additionalProperties: false
+      required: [alpha, beta, r_squared, correlation, observations]
+      description: >
+        Ordinary least squares of r_t = alpha + beta * b_t on shared dates,
+        risk-free rate taken as zero. The benchmark is the run's own
+        equal-weight buy-and-hold, so beta is exposure to the selected names
+        and alpha is what the strategy's timing added over holding them.
+      properties:
+        alpha:
+          type: number
+          description: Annualised intercept (daily x 252), as a fraction.
+        beta: { type: number }
+        r_squared: { type: number, minimum: 0, maximum: 1 }
+        correlation: { type: number, minimum: -1, maximum: 1 }
+        tracking_error:
+          type: [number, "null"]
+          description: Annualised standard deviation of strategy minus benchmark returns.
+        information_ratio:
+          type: [number, "null"]
+          description: Annualised mean active return over tracking error.
+        observations:
+          type: integer
+          minimum: 0
 
     Credentials:
       type: object
@@ -2186,6 +2221,18 @@ components:
                 - macd-trend-following
                 - donchian-breakout
                 - dual-confirmation
+                - regime-trend
+                - regime-reversion
+                - macro-gated-trend
+                - quality-momentum
+            collection:
+              type: string
+              enum: [starter, ai-quant-book]
+              default: starter
+              description: >
+                Which shelf the template belongs on: the generic starters, or
+                the presets replicating docs/AI_QUANT_BOOK_STRATEGY_PLAN.md
+                (S1, S2, S6, S7). Presentation only; not part of the spec.
 
     StrategyTemplateList:
       type: object
@@ -2306,6 +2353,15 @@ components:
         allow_shorts:
           type: boolean
           default: false
+        borrow_cost_bps:
+          type: number
+          minimum: 0
+          maximum: 5000
+          default: 0
+          description: >
+            Annual cost of borrowing stock to short, in basis points of the
+            short's market value, accrued per session held (/252). Only read
+            when allow_shorts is true.
 
     ExecutionSummary:
       type: object
@@ -2325,6 +2381,7 @@ components:
         dropped_no_bar: { type: integer }
         total_commission: { type: number }
         total_slippage: { type: number }
+        total_borrow: { type: number }
         contradictions:
           type: integer
           description: >
@@ -2337,6 +2394,7 @@ components:
       properties:
         commission: { type: number }
         slippage: { type: number }
+        borrow: { type: number }
 
     ExitReason:
       type: string
@@ -2419,6 +2477,9 @@ components:
           type: number
           default: 0
         total_slippage:
+          type: number
+          default: 0
+        total_borrow:
           type: number
           default: 0
 

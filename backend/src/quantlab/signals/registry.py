@@ -174,6 +174,12 @@ class SignalRule:
     #: them so a user can be told which of their instruments will never trade
     #: before they run rather than after (docs/FUNDAMENTALS.md §5.1).
     requires_facts: tuple[str, ...] = ()
+    #: Other instruments' bar series this rule reads alongside the symbol's own
+    #: -- the macro filters join VIX or the HY spread onto every member of the
+    #: universe. The runner loads exactly these and hands them over as
+    #: ``series={symbol: bars}``. Empty for every rule that reads one
+    #: instrument, which keeps the contract backwards compatible.
+    requires_series: tuple[str, ...] = ()
     #: What the compute function is handed: "bars", or "bars+fundamentals".
     #:
     #: Coarser than `requires_facts` and kept alongside it rather than derived
@@ -241,6 +247,7 @@ def register_signal_rule(
     summary: str = "",
     roles: tuple[str, ...] = ("entry", "exit"),
     requires_facts: tuple[str, ...] = (),
+    requires_series: tuple[str, ...] = (),
     windowed_lookback: Callable[[dict], int] | None = None,
 ) -> Callable:
     if lookback_days < 1:
@@ -291,6 +298,13 @@ def register_signal_rule(
                 f"'facts' keyword. Fundamental rules take compute(bars, *, facts=None, ...)."
             )
 
+        # Same guard for cross-instrument input: declared series must be accepted.
+        if requires_series and not accepts_kwargs and "series" not in signature.parameters:
+            raise ValueError(
+                f"{name}: declares requires_series but {fn.__name__}{signature} has no "
+                f"'series' keyword. Cross-series rules take compute(bars, *, series=None, ...)."
+            )
+
         key = (name, version)
         if key in _REGISTRY:
             raise ValueError(f"duplicate signal rule registration: {name} v{version}")
@@ -306,6 +320,7 @@ def register_signal_rule(
             summary=summary or (fn.__doc__ or "").strip().split("\n")[0],
             roles=tuple(roles),
             requires_facts=tuple(requires_facts),
+            requires_series=tuple(requires_series),
             windowed_lookback=windowed_lookback,
         )
         return fn
