@@ -178,19 +178,22 @@ class Warehouse:
 
 
 def health(wh: Warehouse) -> tuple[bool, int]:
-    """(has_data, signal_count). 'Seeded' means at least one bar is present."""
+    """(has_data, signal_count). 'Seeded' means at least one daily bar is present."""
     try:
         with wh.bars() as client:
-            # Daily bars only: the API serves nothing else, and the pipeline
-            # sharing this ClickHouse also stores minute bars in the same table.
+            # Existence, not a count, and the base table rather than the FINAL
+            # view: "is there a bar" does not need deduplication, and a
+            # count over `price_bars_current` merges every part of the table --
+            # including the minute bars the pipeline writes alongside -- on
+            # every call. That grew past the container probe's 5 s timeout.
+            # Daily only: the API serves nothing else.
             rows = client.query(
-                f"SELECT count() FROM {BARS_VIEW} WHERE frequency = '1d'"
+                "SELECT 1 FROM price_bars WHERE frequency = '1d' LIMIT 1"
             ).result_rows
-            bars = int(rows[0][0]) if rows else 0
     except Exception:
         return False, 0
 
-    if bars == 0:
+    if not rows:
         return False, 0
 
     try:

@@ -168,12 +168,16 @@ services:
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health', timeout=5)",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health', timeout=10)",
         ]
       interval: 10s
-      timeout: 5s
+      # /health is cached for 30 s, but its first call per process still asks
+      # the managed Postgres and ClickHouse; a 5 s ceiling on that failed a
+      # deploy whose backend was actually fine (it went healthy a minute later).
+      timeout: 12s
       retries: 12
-      start_period: 20s
+      # Probes failing during startup do not count toward `retries`. Was 20 s.
+      start_period: 60s
     deploy:
       resources:
         limits:

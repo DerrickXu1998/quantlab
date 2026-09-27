@@ -122,26 +122,34 @@ def auth_service(request: Request):
     return request.app.state.auth
 
 
-#: How long a "seeded" answer may be reused. health() on the warehouse runs a
-#: full ClickHouse count plus a Postgres count, so asking it per data request
-#: is the dominant cost of every guarded route; a few seconds of staleness on
-#: a 503-vs-serve decision is invisible next to an ingest cycle.
-_SEEDED_CACHE_TTL_SECONDS = 10.0
+#: How long a health() answer may be reused -- by the seeded guard on every data
+#: route and by GET /health itself. health() still costs a Postgres count of the
+#: signals table; asked per request, or per 10 s container probe, it was the
+#: dominant cost of every guarded route and, once it passed the probe's 5 s
+#: timeout on the managed databases, failed a deploy. Half a minute of
+#: staleness on "is there data" and a displayed signal count is invisible next
+#: to an ingest cycle.
+_HEALTH_CACHE_TTL_SECONDS = 30.0
 
 
-def require_seeded(request: Request) -> None:
-    """Guard for data routes: 503 until there is data to serve (FR-003)."""
+def _cached_health(request: Request) -> tuple[bool, int]:
+    """(has_data, signal_count), refreshed at most every TTL per app."""
     now = time.monotonic()
     # Cached per app, on its state: app instances have different backends (a
     # test seeds a private database per case), so a module-level cache would
     # leak one app's answer into another's. A racy double-refresh costs one
     # extra health() call -- benign next to a lock.
-    cache = getattr(request.app.state, "_seeded_cache", None)
+    cache = getattr(request.app.state, "_health_cache", None)
     if cache is None or cache[0] <= now:
-        has_data, _ = backend(request).health()
-        cache = (now + _SEEDED_CACHE_TTL_SECONDS, has_data)
-        request.app.state._seeded_cache = cache
-    if not cache[1]:
+        cache = (now + _HEALTH_CACHE_TTL_SECONDS, backend(request).health())
+        request.app.state._health_cache = cache
+    return cache[1]
+
+
+def require_seeded(request: Request) -> None:
+    """Guard for data routes: 503 until there is data to serve (FR-003)."""
+    has_data, _ = _cached_health(request)
+    if not has_data:
         raise HTTPException(status_code=503, detail="database is not seeded yet")
 
 
@@ -153,7 +161,7 @@ def require_seeded(request: Request) -> None:
 )
 def get_health(request: Request) -> schemas.Health:
     active = backend(request)
-    has_data, signal_count = active.health()
+    has_data, signal_count = _cached_health(request)
     return schemas.Health(
         dataset=active.name,
         seeded=has_data,
