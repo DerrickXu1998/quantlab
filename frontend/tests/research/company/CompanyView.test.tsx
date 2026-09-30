@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as apiClient from '../../../src/api/client';
 import CompanyView from '../../../src/research/company/CompanyView';
 import { shiftMonths } from '../../../src/research/company/RangeControl';
+import { READ_FRESH_MS } from '../../../src/research/company/useCompany';
 import { ThemeProvider } from '../../../src/theme/ThemeProvider';
 import { makeBar, makeInstrument } from '../../fixtures';
 import { makeFact, makeOverview } from './fixtures';
@@ -284,5 +285,41 @@ describe('CompanyView, while the backend is still being written', () => {
     expect(screen.getByTestId('company-coverage-none')).toHaveTextContent(
       /no fundamentals at all/i,
     );
+  });
+});
+
+describe('CompanyView, coming back from another tab', () => {
+  it('shows the last answer at once instead of re-downloading it', async () => {
+    const first = renderView('CAT');
+    await screen.findByTestId('company-identity');
+    await waitFor(() => expect(apiClient.getPrices).toHaveBeenCalledTimes(1));
+    first.view.unmount();
+
+    // The shell unmounts Research on the way out; this is the way back in.
+    renderView('CAT');
+
+    // Drawn from the cache: no loading state, and nothing asked again.
+    expect(screen.queryByTestId('company-price-state')).not.toBeInTheDocument();
+    expect(await screen.findByTestId('price-chart')).toBeInTheDocument();
+    expect(apiClient.getPrices).toHaveBeenCalledTimes(1);
+    expect(apiClient.listInstruments).toHaveBeenCalledTimes(1);
+    expect(apiClient.getCompanyOverview).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-reads a stale answer behind the one on screen', async () => {
+    const first = renderView('CAT');
+    await waitFor(() => expect(apiClient.getPrices).toHaveBeenCalledTimes(1));
+    first.view.unmount();
+
+    const later = Date.now() + READ_FRESH_MS + 1;
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(later);
+    try {
+      renderView('CAT');
+      // Still no loading state: the old answer stands while the new one comes.
+      expect(screen.queryByTestId('company-price-state')).not.toBeInTheDocument();
+      await waitFor(() => expect(apiClient.getPrices).toHaveBeenCalledTimes(2));
+    } finally {
+      clock.mockRestore();
+    }
   });
 });

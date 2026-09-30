@@ -40,18 +40,79 @@ function classify(caught: unknown): { status: ReadStatus; message: string } {
 }
 
 /**
+ * Answers already read, kept across unmounts.
+ *
+ * The shell mounts one destination at a time, so leaving Research drops every
+ * read with it, and coming back re-downloaded the catalogue and a full price
+ * history before anything drew. Kept here instead, a return shows the last
+ * answer at once. Module scope is the lifetime wanted: the tab, not the view.
+ *
+ * Only successes are kept -- an error must be retried, not replayed -- and the
+ * map is bounded, oldest first out, since one price history is ~0.5 MB.
+ */
+const readCache = new Map<string, { data: unknown; at: number }>();
+const READ_CACHE_LIMIT = 24;
+/** Older than this is shown at once but re-read behind it. */
+export const READ_FRESH_MS = 5 * 60 * 1000;
+
+function remember(key: string, data: unknown) {
+  readCache.delete(key);
+  readCache.set(key, { data, at: Date.now() });
+  while (readCache.size > READ_CACHE_LIMIT) {
+    const oldest = readCache.keys().next().value;
+    if (oldest === undefined) break;
+    readCache.delete(oldest);
+  }
+}
+
+/**
+ * Requests already on the wire. Two readers asking the same question at once
+ * -- a remount racing its predecessor, or React's development double effect --
+ * share one request instead of downloading the same price history twice.
+ */
+const inflight = new Map<string, Promise<unknown>>();
+
+function readShared<T>(key: string, load: () => Promise<T>): Promise<T> {
+  const pending = inflight.get(key);
+  if (pending) return pending as Promise<T>;
+  const request = load()
+    .then((result) => {
+      remember(key, result);
+      return result;
+    })
+    .finally(() => inflight.delete(key));
+  inflight.set(key, request);
+  return request;
+}
+
+/** For tests: each starts from an empty cache. */
+export function clearReadCache() {
+  readCache.clear();
+  inflight.clear();
+}
+
+/**
  * One request, keyed by the question it answers.
  *
- * `key` is the whole question written down — `AAPL@2024-06-30` — so a change of
- * symbol *or* of as-of date re-reads, and nothing else does. A null key is
- * "there is no question yet": it settles immediately on the empty value rather
- * than spending a request to discover that no symbol was chosen.
+ * `key` is the whole question written down — `prices:AAPL@..2024-06-30` — so a
+ * change of symbol *or* of as-of date re-reads, and nothing else does. A null
+ * key is "there is no question yet": it settles immediately on the empty value
+ * rather than spending a request to discover that no symbol was chosen.
+ *
+ * A key answered before is served from {@link readCache} without a loading
+ * state; if that answer is older than {@link READ_FRESH_MS} it is re-read
+ * quietly behind it. `reload` always goes to the network.
  */
 function useKeyedRead<T>(key: string | null, load: () => Promise<T>, empty: T): Read<T> {
-  const [data, setData] = useState<T>(empty);
-  const [status, setStatus] = useState<ReadStatus>(key ? 'loading' : 'ready');
+  const cachedAtMount = key ? readCache.get(key) : undefined;
+  const [data, setData] = useState<T>(cachedAtMount ? (cachedAtMount.data as T) : empty);
+  const [status, setStatus] = useState<ReadStatus>(
+    !key || cachedAtMount ? 'ready' : 'loading',
+  );
   const [message, setMessage] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
+  // A nonce the effect has not seen yet is an explicit reload.
+  const seenNonce = useRef(0);
 
   // The loader closes over the current symbol and date; `key` is those same
   // values, so the ref carries the fresh closure without widening the deps to a
@@ -69,9 +130,18 @@ function useKeyedRead<T>(key: string | null, load: () => Promise<T>, empty: T): 
       return;
     }
     let cancelled = false;
-    setStatus('loading');
-    loadRef
-      .current()
+    const forced = nonce !== seenNonce.current;
+    seenNonce.current = nonce;
+    const cached = forced ? undefined : readCache.get(key);
+    if (cached) {
+      setData(cached.data as T);
+      setMessage(null);
+      setStatus('ready');
+      if (Date.now() - cached.at < READ_FRESH_MS) return;
+    } else {
+      setStatus('loading');
+    }
+    readShared(key, loadRef.current)
       .then((result) => {
         if (cancelled) return;
         setData(result);
@@ -79,7 +149,8 @@ function useKeyedRead<T>(key: string | null, load: () => Promise<T>, empty: T): 
         setStatus('ready');
       })
       .catch((caught: unknown) => {
-        if (cancelled) return;
+        // A failed background re-read keeps the answer already on screen.
+        if (cancelled || cached) return;
         const classified = classify(caught);
         setData(emptyRef.current);
         setMessage(classified.message);
@@ -105,7 +176,7 @@ const NO_BARS: PriceBar[] = [];
  */
 export function useInstruments(): Read<Instrument[]> {
   return useKeyedRead<Instrument[]>(
-    'instruments',
+    'instruments:all',
     () => listInstruments().then((list) => list.items),
     NO_INSTRUMENTS,
   );
@@ -117,7 +188,7 @@ export function useCompanyOverview(
   asOf: string,
 ): Read<CompanyOverview | null> {
   return useKeyedRead<CompanyOverview | null>(
-    symbol && asOf ? `${symbol}@${asOf}` : null,
+    symbol && asOf ? `overview:${symbol}@${asOf}` : null,
     () => getCompanyOverview(symbol as string, asOf),
     null,
   );
@@ -138,7 +209,7 @@ export function useCompanyPrices(
   start: string | null = null,
 ): Read<PriceBar[]> {
   return useKeyedRead<PriceBar[]>(
-    symbol && asOf ? `${symbol}@${start ?? ''}..${asOf}` : null,
+    symbol && asOf ? `prices:${symbol}@${start ?? ''}..${asOf}` : null,
     () => getPrices(symbol as string, start ?? undefined, asOf).then((list) => list.items),
     NO_BARS,
   );
