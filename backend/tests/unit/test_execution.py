@@ -365,6 +365,100 @@ def test_a_next_open_signal_on_the_last_bar_has_nowhere_to_fill():
     assert result.trades == []
 
 
+def test_next_close_fills_at_the_following_sessions_close():
+    series = {"AAA": bars([100.0, 102.0, 104.0, 106.0], opens=[100.0, 101.0, 103.0, 105.0])}
+    result = simulate(
+        ["AAA"],
+        series,
+        [decision("d000", "entry", "bullish"), decision("d002", "exit", "bearish")],
+        ExecutionConfig(fill_timing="next_close"),
+    )
+    trade = result.trades[0]
+    assert (trade.entry_date, trade.entry_price) == ("d001", 102.0)
+    assert (trade.exit_date, trade.exit_price) == ("d003", 106.0)
+
+
+def test_next_typical_fills_inside_the_following_sessions_range():
+    """(high + low + close) / 3 -- a VWAP stand-in, never an extreme of the bar."""
+    series = {
+        "AAA": bars(
+            [100.0, 102.0, 104.0, 106.0],
+            high=[101.0, 108.0, 105.0, 110.0],
+            low=[99.0, 96.0, 103.0, 100.0],
+        )
+    }
+    result = simulate(
+        ["AAA"],
+        series,
+        [decision("d000", "entry", "bullish"), decision("d002", "exit", "bearish")],
+        ExecutionConfig(fill_timing="next_typical"),
+    )
+    trade = result.trades[0]
+    assert trade.entry_date == "d001"
+    assert trade.entry_price == pytest.approx((108.0 + 96.0 + 102.0) / 3)
+    assert trade.exit_date == "d003"
+    assert trade.exit_price == pytest.approx((110.0 + 100.0 + 106.0) / 3)
+
+
+def test_a_stop_hit_during_the_session_beats_an_exit_queued_for_its_close():
+    """The stop happened intraday; the queued exit would only have filled at the close."""
+    series = {
+        "AAA": bars(
+            [100.0, 100.0, 100.0, 99.0],
+            low=[99.0, 99.0, 99.0, 90.0],
+        )
+    }
+    result = simulate(
+        ["AAA"],
+        series,
+        [decision("d000", "entry", "bullish"), decision("d002", "exit", "bearish")],
+        ExecutionConfig(fill_timing="next_close", stop_loss_pct=0.05),
+    )
+    trade = result.trades[0]
+    assert trade.exit_date == "d003"
+    assert trade.exit_reason == "stop_loss"
+    assert trade.exit_price == pytest.approx(95.0)
+
+
+def test_a_position_filled_at_the_close_is_not_stopped_by_that_sessions_range():
+    """Entered at d001's close, it held none of d001's low -- stops start tomorrow."""
+    series = {"AAA": bars([100.0, 100.0, 100.0], low=[99.0, 80.0, 99.0])}
+    result = simulate(
+        ["AAA"],
+        series,
+        [decision("d000", "entry", "bullish")],
+        ExecutionConfig(fill_timing="next_close", stop_loss_pct=0.05),
+    )
+    trade = result.trades[0]
+    assert trade.entry_date == "d001"
+    assert trade.exit_reason == "end_of_window"
+
+
+@pytest.mark.parametrize("timing", ["next_close", "next_typical"])
+def test_a_deferred_signal_on_the_last_bar_has_nowhere_to_fill(timing):
+    series = {"AAA": bars([100.0, 102.0])}
+    result = simulate(
+        ["AAA"],
+        series,
+        [decision("d001", "entry", "bullish")],
+        ExecutionConfig(fill_timing=timing),
+    )
+    assert result.trades == []
+
+
+@pytest.mark.parametrize(
+    ("timing", "phrase"),
+    [
+        ("signal_close", "close of the signal date"),
+        ("next_open", "open of the session after"),
+        ("next_close", "close of the session after"),
+        ("next_typical", "stand-in for VWAP"),
+    ],
+)
+def test_every_fill_timing_states_its_price_in_the_assumptions(timing, phrase):
+    assert any(phrase in line for line in ExecutionConfig(fill_timing=timing).assumptions())
+
+
 # --- shorts -----------------------------------------------------------------
 
 

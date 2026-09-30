@@ -116,6 +116,8 @@ This is the part that is normally left vague. It is not vague here.
 | Rule input | every bar up to and including `T` | mostly `close`; `breakout-20d` reads `high`/`low` of the prior window | Rules are causal by construction: `data_window_end <= date` always. See §5. |
 | Signal entry, `fill_timing: "signal_close"` | the signal's own bar `T` | `close` | The decision is made from `T`'s close, so `T`'s close is the earliest price at which you could plausibly have acted. Filling at `T`'s open would be look-ahead: you did not know at the open what the close would say. |
 | Signal entry, `fill_timing: "next_open"` | bar `T+1` | `open` | The conservative reading: you saw the close, you placed the order overnight, you got the next print. A signal on the final bar has no `T+1`, is dropped, and is counted in `dropped_no_bar`. |
+| Signal entry, `fill_timing: "next_close"` | bar `T+1` | `close` | A market-on-close order placed the day after the signal. Fills *after* `T+1`'s protective checks, so a stop the session hit wins over an exit queued for its close. A position filled here is not exposed to `T+1`'s range; its stops start on `T+2`, exactly as for `signal_close`. |
+| Signal entry, `fill_timing: "next_typical"` | bar `T+1` | `(high + low + close) / 3` | A stand-in for VWAP -- an order worked through the session -- because a daily bar has no volume profile. Never an extreme of the bar. Same ordering and stop exposure as `next_close`. |
 | Stop / trailing stop / take-profit — *trigger* | the bar being tested | `low` (long stop), `high` (long target) — the bar's *range*, not its close | A stop that only checks the close is not a stop; it is a rule about closes. Intraday, price went where the high and low say it went. |
 | Stop / trailing stop — *fill price* | same bar | the level, or the `open` when the session gapped clean through it — whichever is **worse** (`min(stop, open)` long) | A resting order fills at its level. A gap fills at the first available print, which is the open. Pretending the stop held through a gap is how a backtest hides its worst days. |
 | Take-profit — *fill price* | same bar | **always the target level**, never the open, even when the open gapped past it | Deliberately asymmetric. See below. |
@@ -185,7 +187,8 @@ So the engine has to choose. The resolution order, from `ExecutionSimulator`:
 
 ```
   1. mark
-  2. fill orders queued yesterday          (next_open only)
+  2. fill orders queued yesterday          (next_open only; next_close and
+                                            next_typical fill after step 3)
   3. stop_loss -> trailing_stop -> take_profit -> max_holding_days
   4. signal exits
   5. signal entries

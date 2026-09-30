@@ -2,6 +2,7 @@ import { AlertTriangle, TriangleAlert } from 'lucide-react';
 import { useState } from 'react';
 import type { Run } from '../api/client';
 import type { ExecutionConfig, RunDetailV2 } from '../api/types';
+import { FILL_TIMING_SHORT } from '../api/types';
 import { navigate } from '../chrome/router';
 import { useRunPerformance } from '../quantlab/data/useRunPerformance';
 import { EquityCurve } from '../quantlab/charts/EquityCurve';
@@ -352,7 +353,7 @@ export function RunResultsView({ run }: { run: RunDetailV2 }) {
 /** The execution fields worth stating on a result, in one line. */
 function executionChips(execution: ExecutionConfig): string[] {
   const chips: string[] = [];
-  chips.push(execution.fill_timing === 'next_open' ? 'fills next open' : 'fills at signal close');
+  chips.push(FILL_TIMING_SHORT[execution.fill_timing]);
   chips.push(`${execution.position_sizing.replace(/_/g, ' ')} sizing`);
   if (execution.max_positions !== null) chips.push(`max ${execution.max_positions} positions`);
   if (execution.commission_bps > 0) chips.push(`${execution.commission_bps} bps commission`);

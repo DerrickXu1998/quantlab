@@ -1,6 +1,12 @@
 import { useId, type ReactNode } from 'react';
 import type { ExecutionConfig, FillTiming, PositionSizing } from '../api/types';
-import { FILL_TIMINGS, POSITION_SIZING_MODES, SIZING_VALUE_MEANING } from '../api/types';
+import {
+  FILL_TIMINGS,
+  FILL_TIMING_EXPLAINERS,
+  FILL_TIMING_LABELS,
+  POSITION_SIZING_MODES,
+  SIZING_VALUE_MEANING,
+} from '../api/types';
 import { Input, Select } from '../components/ui/field';
 
 /**
@@ -31,18 +37,6 @@ const SIZING_EXPLAINERS: Record<PositionSizing, string> = {
   fixed_fraction: 'Commits the same share of current equity to every position.',
   fixed_notional: 'Commits the same cash amount every time, however the book has grown.',
   volatility_target: 'Sizes each position so its own volatility hits a target.',
-};
-
-const FILL_TIMING_LABELS: Record<FillTiming, string> = {
-  signal_close: 'Close of the signal bar',
-  next_open: 'Next bar’s open',
-};
-
-const FILL_TIMING_EXPLAINERS: Record<FillTiming, string> = {
-  signal_close:
-    'Fills at the close of the bar that produced the signal. Optimistic: in reality you cannot know the close until it has happened.',
-  next_open:
-    'Fills at the next bar’s open, which is the first price you could genuinely have traded. A signal on the final bar has no bar to fill on and is dropped.',
 };
 
 /** Fractions on the wire, percentages on the screen. Rounded to kill 0.1+0.2. */

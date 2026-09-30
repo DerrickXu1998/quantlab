@@ -7,7 +7,22 @@ import {
   type ExperimentSignal,
   type Study,
 } from '../../api/client';
-import type { CatalogModel, RunPerformanceV2 } from '../../api/types';
+import type { CatalogModel, ExecutionConfig, RunPerformanceV2 } from '../../api/types';
+import { DEFAULT_EXECUTION } from '../../api/types';
+
+/**
+ * The execution assumptions the Models panel exposes: where a signal fills and
+ * what it costs. Everything else about execution stays at the engine default --
+ * one ticker, all in, no stops -- because this panel asks "does the model read
+ * this stock", not "how should I size it", which is the Strategies builder's.
+ */
+export type ExecutionChoice = Pick<ExecutionConfig, 'fill_timing' | 'commission_bps' | 'slippage_bps'>;
+
+export const DEFAULT_EXECUTION_CHOICE: ExecutionChoice = {
+  fill_timing: DEFAULT_EXECUTION.fill_timing,
+  commission_bps: DEFAULT_EXECUTION.commission_bps,
+  slippage_bps: DEFAULT_EXECUTION.slippage_bps,
+};
 
 /** One model applied to the ticker on screen. */
 export interface ModelOverlay {
@@ -16,6 +31,8 @@ export interface ModelOverlay {
   model: CatalogModel;
   /** The overrides sent, for the label: `fast=10, slow=30`. */
   parameters: Record<string, unknown>;
+  /** Where it filled and what it paid: the return below depends on both. */
+  execution: ExecutionChoice;
   status: 'running' | 'ready' | 'error';
   error: string | null;
   runId: string | null;
@@ -29,6 +46,7 @@ export interface ModelOverlay {
 export interface ApplyRequest {
   model: CatalogModel;
   parameters: Record<string, unknown>;
+  execution?: ExecutionChoice;
   symbol: string;
   start: string;
   end: string;
@@ -111,7 +129,14 @@ export function useModelOverlays(
   );
 
   const apply = useCallback(
-    async ({ model, parameters, symbol: subject, start, end }: ApplyRequest) => {
+    async ({
+      model,
+      parameters,
+      execution = DEFAULT_EXECUTION_CHOICE,
+      symbol: subject,
+      start,
+      end,
+    }: ApplyRequest) => {
       const key = `overlay-${(nextKey += 1)}`;
       // Captured now: the result belongs to this pair even if the reader has
       // moved to another ticker, window or tab by the time it lands.
@@ -126,6 +151,7 @@ export function useModelOverlays(
           key,
           model,
           parameters,
+          execution,
           status: 'running',
           error: null,
           runId: null,
@@ -142,6 +168,7 @@ export function useModelOverlays(
           symbols: [subject],
           start_date: start,
           end_date: end,
+          execution: { ...DEFAULT_EXECUTION, ...execution },
         });
         onRunCreated?.();
         if (run.status !== 'completed') {

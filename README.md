@@ -105,7 +105,8 @@ orders. Filters gate entries and never exits: a filter turning off must not trap
 a position in the book.
 
 **Execution criteria are fields, not assumptions.** Fill timing
-(`signal_close` or `next_open`), commission and slippage in basis points per
+(`signal_close`, `next_open`, `next_close`, or `next_typical` -- the next
+session's (high + low + close) / 3, a VWAP stand-in), commission and slippage in basis points per
 side, stops (fixed, trailing, or ATR-scaled), take-profits, holding-period
 bounds, cooldowns, sizing mode and position caps. Every one of them is reported
 back on the run, so a result carries the assumptions that produced it rather
