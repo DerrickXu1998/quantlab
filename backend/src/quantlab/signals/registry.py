@@ -66,6 +66,21 @@ class SignalEvent:
 
 
 @dataclass(frozen=True)
+class StudyLine:
+    """One series a rule is built from, for drawing beside its signals.
+
+    ``values`` aligns index-for-index with the bars the rule was handed, NaN
+    through warm-up -- the same convention as the indicators themselves. A
+    study is what the rule *compared*, so a reader can see why a marker sits
+    where it does; it is never an input to the rule.
+    """
+
+    key: str
+    label: str
+    values: Any
+
+
+@dataclass(frozen=True)
 class ParamSpec:
     """One configurable input of a rule, with enough metadata for a caller to
     build a form and validate a value without knowing the rule.
@@ -197,6 +212,11 @@ class SignalRule:
     #: replay uses it to compute over a fixed-size tail instead of the whole
     #: growing window; None keeps the whole-window behaviour.
     windowed_lookback: Callable[[dict], int] | None = None
+    #: Price-scale series the rule compares, as ``studies(bars, **params) ->
+    #: list[StudyLine]``. Presentation only: the engine never calls it. None
+    #: for a rule with nothing drawable on the price axis (RSI lives on its own
+    #: 0-100 scale).
+    studies: Callable[..., list[StudyLine]] | None = None
 
     @property
     def needs_facts(self) -> bool:
@@ -249,6 +269,7 @@ def register_signal_rule(
     requires_facts: tuple[str, ...] = (),
     requires_series: tuple[str, ...] = (),
     windowed_lookback: Callable[[dict], int] | None = None,
+    studies: Callable[..., list[StudyLine]] | None = None,
 ) -> Callable:
     if lookback_days < 1:
         raise ValueError("lookback_days must be >= 1")
@@ -322,6 +343,7 @@ def register_signal_rule(
             requires_facts=tuple(requires_facts),
             requires_series=tuple(requires_series),
             windowed_lookback=windowed_lookback,
+            studies=studies,
         )
         return fn
 

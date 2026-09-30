@@ -1,6 +1,6 @@
 import { Search } from 'lucide-react';
 import { useMemo, useState, type ReactNode } from 'react';
-import type { ChartSignal } from '../../components/CandlestickChart';
+import type { ChartLine, ChartLineLook, ChartSignal } from '../../components/CandlestickChart';
 import { EmptyState } from '../../components/ui/empty-state';
 import { FillColumn, ScrollRegion, StatGrid } from '../../components/ui/layout';
 import { StatusBadge } from '../../components/ui/status-badge';
@@ -12,6 +12,7 @@ import { AsOfControl } from './AsOfControl';
 import { CoveragePanel } from './CoveragePanel';
 import { ModelsPanel } from './ModelsPanel';
 import { PricePanel } from './PricePanel';
+import { RangeControl, rangeStart, type RangeId } from './RangeControl';
 import { SignalHistoryPanel } from './SignalHistoryPanel';
 import { SymbolPicker, SymbolPickerRetry } from './SymbolPicker';
 import { markerLabel, useModelOverlays } from './useModelOverlays';
@@ -23,6 +24,9 @@ import {
   useInstruments,
   type ReadStatus,
 } from './useCompany';
+
+/** One stroke per applied model, in the order they were applied. */
+const LINE_STROKES: ChartLineLook['style'][] = ['solid', 'dashed', 'dotted'];
 
 export interface CompanyViewProps {
   symbol: string | null;
@@ -61,7 +65,11 @@ export function CompanyView({ symbol, onSelectSymbol, asOf: asOfProp, onAsOfChan
 
   const instruments = useInstruments();
   const overview = useCompanyOverview(symbol, asOf);
-  const prices = useCompanyPrices(symbol, asOf);
+  // How far back from the as-of date. The chart and every model run cover this
+  // window, so a backtest's return is measured over exactly what is on screen.
+  const [range, setRange] = useState<RangeId>('MAX');
+  const start = rangeStart(asOf, range);
+  const prices = useCompanyPrices(symbol, asOf, start);
 
   // While `/overview` is being written it answers 404, and the accounts are
   // still reachable through the thin fundamentals route. The fallback fires
@@ -90,7 +98,7 @@ export function CompanyView({ symbol, onSelectSymbol, asOf: asOfProp, onAsOfChan
   // Models applied to this ticker. The run store is optional so the view
   // still renders on its own (tests, embeds); without it there is no panel.
   const runs = useOptionalRuns();
-  const models = useModelOverlays(symbol, runs?.reloadRuns);
+  const models = useModelOverlays(symbol, runs?.reloadRuns, `${start ?? ''}..${asOf}`);
   const firstBar = prices.data.length > 0 ? prices.data[0].date : null;
   const chartSignals = useMemo<ChartSignal[]>(
     () =>
@@ -101,6 +109,28 @@ export function CompanyView({ symbol, onSelectSymbol, asOf: asOfProp, onAsOfChan
             date: signal.date,
             direction: signal.direction,
             label: markerLabel(overlay.model.name),
+          })),
+        ),
+    [models.overlays],
+  );
+  // What each model compared -- sma-crossover's two averages -- under its
+  // markers. The first line of a model is its fast one, drawn thin; each
+  // further model gets its own stroke so two crossovers stay tellable apart.
+  const chartLines = useMemo<ChartLine[]>(
+    () =>
+      models.overlays
+        .filter((overlay) => overlay.visible && overlay.status === 'ready')
+        .filter((overlay) => overlay.studies.length > 0)
+        .flatMap((overlay, modelIndex) =>
+          overlay.studies.map((study, lineIndex) => ({
+            key: `${overlay.key}:${study.key}`,
+            label: study.label,
+            points: study.points,
+            look: {
+              tone: lineIndex === 0 ? 'foreground' : 'muted',
+              width: lineIndex === 0 ? 1 : 2,
+              style: LINE_STROKES[modelIndex % LINE_STROKES.length],
+            },
           })),
         ),
     [models.overlays],
@@ -136,6 +166,7 @@ export function CompanyView({ symbol, onSelectSymbol, asOf: asOfProp, onAsOfChan
           />
           <SymbolPickerRetry status={instruments.status} onRetry={instruments.reload} />
           <AsOfControl value={asOf} onChange={setAsOf} today={today} resolved={company?.as_of} />
+          <RangeControl value={range} onChange={setRange} asOf={asOf} />
         </div>
       </div>
 
@@ -188,6 +219,7 @@ export function CompanyView({ symbol, onSelectSymbol, asOf: asOfProp, onAsOfChan
                 currency={currency}
                 onRetry={prices.reload}
                 signals={chartSignals}
+                lines={chartLines}
               />
               <AsFiledPanel
                 symbol={symbol}

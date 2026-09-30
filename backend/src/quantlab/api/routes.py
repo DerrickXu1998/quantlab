@@ -23,7 +23,7 @@ from quantlab.api import schemas, security
 from quantlab.api.security import CurrentUser, owner_scope
 from quantlab.replay import engine as replay_engine
 from quantlab.research import errors as research_errors
-from quantlab.research import performance, runner
+from quantlab.research import performance, runner, studies
 from quantlab.signals import registry as signal_registry
 from quantlab.signals import templates as signal_templates
 from quantlab.storage import facts as fact_defs
@@ -751,6 +751,53 @@ def get_run_performance(request: Request, run_id: str, user: CurrentUser) -> dic
         bars_by_symbol=bars,
         symbols=symbols,
         execution=runner.execution_config_for(run),
+        window_start=run["start_date"],
+        window_end=run["end_date"],
+    )
+    return asdict(result)
+
+
+@router.get(
+    "/runs/{run_id}/studies",
+    response_model=schemas.RunStudies,
+    tags=["runs"],
+    operation_id="getRunStudies",
+    dependencies=[Depends(require_seeded)],
+)
+def get_run_studies(
+    request: Request,
+    run_id: str,
+    user: CurrentUser,
+    symbol: Annotated[str | None, Query(pattern=SYMBOL_PATTERN)] = None,
+) -> dict:
+    """The lines the run's rules compared, for one of its symbols. Analytics in
+    research.studies, as with performance (Constitution V)."""
+    store = experiments(request)
+    run = store.get_run(run_id, owner_scope(user))
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
+    if run["status"] != "completed":
+        raise HTTPException(status_code=409, detail=f"run {run_id} failed; it has no studies")
+
+    symbols = list(run["symbols"])
+    if symbol is None:
+        # Guessing which member of a universe was meant would draw one name's
+        # averages under another's candles.
+        if len(symbols) != 1:
+            raise HTTPException(status_code=422, detail="symbol is required for a multi-symbol run")
+        symbol = symbols[0]
+    elif symbol not in symbols:
+        raise HTTPException(status_code=404, detail=f"{symbol} is not in run {run_id}")
+
+    # From the warm-up start, as performance loads them: the first session of
+    # the window needs the bars behind it to have an average at all.
+    _, bars = replay_engine.load_replay_inputs(
+        backend(request), store, {**run, "symbols": [symbol]}
+    )
+    result = studies.compute_studies(
+        run=run,
+        symbol=symbol,
+        bars=bars.get(symbol) or [],
         window_start=run["start_date"],
         window_end=run["end_date"],
     )

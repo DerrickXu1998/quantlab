@@ -180,6 +180,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/runs/{run_id}/studies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * The price-scale lines a run's rules compared, for one symbol
+         * @description What the rules compared, so a chart can show why each marker sits where it does -- for sma-crossover, its fast and slow averages. Computed from the rule's own declared studies with the parameters the run recorded, so the lines agree with the signals' trigger_values on every signal date. Reported over the run's window only; the warm-up is an input.
+         *     A rule with nothing on the price axis (RSI's 0-100 scale, say) contributes no study, so `studies` may be empty.
+         */
+        get: operations["getRunStudies"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/runs/{run_id}/replay/stream": {
         parameters: {
             query?: never;
@@ -850,6 +873,29 @@ export interface components {
         };
         RunDetail: components["schemas"]["Run"] & {
             signals: components["schemas"]["ExperimentSignal"][];
+        };
+        StudyPoint: {
+            /** Format: date */
+            date: string;
+            /** @description The line's value at that session's close, in price units. */
+            value: number;
+        };
+        Study: {
+            /**
+             * @description Stable within a run, `<component index>.<line key>` -- e.g. `0.sma_fast`, whose line key matches the trigger_values name.
+             * @example 0.sma_fast
+             */
+            key: string;
+            /** @example SMA 20 */
+            label: string;
+            /** @example sma-crossover */
+            rule_name: string;
+            points: components["schemas"]["StudyPoint"][];
+        };
+        RunStudies: {
+            run_id: string;
+            symbol: string;
+            studies: components["schemas"]["Study"][];
         };
         EquityPoint: {
             /** Format: date */
@@ -1622,6 +1668,58 @@ export interface operations {
             };
             /** @description The run failed, so it has no performance. Zeroed figures would read as a flat book rather than as an absent result. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getRunStudies: {
+        parameters: {
+            query?: {
+                /** @description Which of the run's symbols to draw. Required when the run has more than one; guessing would put one name's averages under another's candles. */
+                symbol?: string;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Studies of the run on that symbol */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunStudies"];
+                };
+            };
+            /** @description Unknown run, or a symbol the run did not cover */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The run failed, so it has no studies. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The run covers several symbols and none was named. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

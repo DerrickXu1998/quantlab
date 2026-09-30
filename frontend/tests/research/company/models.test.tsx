@@ -13,7 +13,13 @@ import { adxFilter, catalog, rsiThreshold } from '../../strategies/fixtures';
 
 vi.mock('../../../src/api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof apiClient>();
-  return { ...actual, createRun: vi.fn(), getRun: vi.fn(), getRunPerformance: vi.fn() };
+  return {
+    ...actual,
+    createRun: vi.fn(),
+    getRun: vi.fn(),
+    getRunPerformance: vi.fn(),
+    getRunStudies: vi.fn(),
+  };
 });
 
 const signal = (symbol: string, date: string, direction: 'bullish' | 'bearish') => ({
@@ -37,6 +43,18 @@ beforeEach(() => {
     }),
   );
   vi.mocked(apiClient.getRunPerformance).mockResolvedValue(makePerformance());
+  vi.mocked(apiClient.getRunStudies).mockResolvedValue({
+    run_id: 'run-7',
+    symbol: 'AAPL.US',
+    studies: [
+      {
+        key: '0.sma_fast',
+        label: 'SMA 20',
+        rule_name: 'sma-crossover',
+        points: [{ date: '2024-01-02', value: 185.1 }],
+      },
+    ],
+  });
 });
 
 describe('signal models', () => {
@@ -79,6 +97,30 @@ describe('useModelOverlays', () => {
     expect(overlay).toMatchObject({ status: 'ready', runId: 'run-7', visible: true });
     expect(overlay.signals).toHaveLength(2);
     expect(overlay.performance?.metrics).toBeDefined();
+    // The lines come from the run, for the ticker on screen -- never computed here.
+    expect(apiClient.getRunStudies).toHaveBeenCalledWith('run-7', 'AAPL.US');
+    expect(overlay.studies.map((study) => study.label)).toEqual(['SMA 20']);
+  });
+
+  it('clears the overlays when the window changes', async () => {
+    const { result, rerender } = renderHook(
+      ({ scope }) => useModelOverlays('AAPL.US', undefined, scope),
+      { initialProps: { scope: '..2026-09-18' } },
+    );
+    await act(() =>
+      result.current.apply({
+        model: rsiThreshold,
+        parameters: {},
+        symbol: 'AAPL.US',
+        start: '2015-01-02',
+        end: '2026-09-18',
+      }),
+    );
+    expect(result.current.overlays).toHaveLength(1);
+
+    // A ten-year return printed under a one-year chart describes what is not shown.
+    rerender({ scope: '2025-09-18..2026-09-18' });
+    expect(result.current.overlays).toHaveLength(0);
   });
 
   it('clears the overlays when the ticker changes, and drops results that land late', async () => {

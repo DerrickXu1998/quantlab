@@ -131,10 +131,15 @@ export function useCompanyOverview(
  * point-in-time table, and the purpose of this screen is to make that
  * distinction visible rather than to demonstrate it by accident.
  */
-export function useCompanyPrices(symbol: string | null, asOf: string): Read<PriceBar[]> {
+export function useCompanyPrices(
+  symbol: string | null,
+  asOf: string,
+  /** First date to read; null for the whole history. */
+  start: string | null = null,
+): Read<PriceBar[]> {
   return useKeyedRead<PriceBar[]>(
-    symbol && asOf ? `${symbol}@${asOf}` : null,
-    () => getPrices(symbol as string, undefined, asOf).then((list) => list.items),
+    symbol && asOf ? `${symbol}@${start ?? ''}..${asOf}` : null,
+    () => getPrices(symbol as string, start ?? undefined, asOf).then((list) => list.items),
     NO_BARS,
   );
 }

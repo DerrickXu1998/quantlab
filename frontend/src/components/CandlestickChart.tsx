@@ -4,11 +4,14 @@ import {
   ColorType,
   CrosshairMode,
   HistogramSeries,
+  LineSeries,
+  LineStyle,
   createChart,
   createSeriesMarkers,
   type CandlestickData,
   type HistogramData,
   type IChartApi,
+  type LineData,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
   type MouseEventParams,
@@ -28,11 +31,28 @@ export interface ChartSignal {
   label: string;
 }
 
+/** How a line is drawn: which design token, and its stroke. */
+export interface ChartLineLook {
+  tone: 'foreground' | 'muted';
+  width: 1 | 2;
+  style: 'solid' | 'dashed' | 'dotted';
+}
+
+/** A price-scale series drawn over the candles, e.g. a model's moving average. */
+export interface ChartLine {
+  key: string;
+  label: string;
+  points: { date: string; value: number }[];
+  look: ChartLineLook;
+}
+
 interface CandlestickChartProps {
   bars: PriceBar[];
   markerDate?: string;
   /** Model signals: bullish below the bar pointing up, bearish above pointing down. */
   signals?: ChartSignal[];
+  /** Lines over the candles, on the price axis. */
+  lines?: ChartLine[];
   /**
    * Size from container observation instead of dock-panel events. Only safe
    * outside the dock — see the note at the creation site (FR-009).
@@ -63,8 +83,16 @@ function readPalette(host: Element | null) {
     down: token(host, '--destructive'),
     volume: token(host, '--muted-foreground', 0.35),
     marker: token(host, '--primary'),
+    foreground: token(host, '--foreground'),
+    muted: token(host, '--muted-foreground'),
   };
 }
+
+const LINE_STYLES: Record<ChartLineLook['style'], LineStyle> = {
+  solid: LineStyle.Solid,
+  dashed: LineStyle.Dashed,
+  dotted: LineStyle.Dotted,
+};
 
 function toCandle(bar: PriceBar): CandlestickData<Time> {
   return {
@@ -102,11 +130,13 @@ function isVolumePoint(data: unknown): data is { value: number } {
 }
 
 const NO_SIGNALS: ChartSignal[] = [];
+const NO_LINES: ChartLine[] = [];
 
 export function CandlestickChart({
   bars,
   markerDate,
   signals = NO_SIGNALS,
+  lines = NO_LINES,
   autoSize = false,
 }: CandlestickChartProps) {
   const { theme } = useTheme();
@@ -117,6 +147,7 @@ export function CandlestickChart({
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
   const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const lineSeriesRef = useRef<ISeriesApi<'Line'>[]>([]);
   const [hover, setHover] = useState<HoverReadout | null>(null);
 
   const hasBars = bars.length > 0;
@@ -192,6 +223,7 @@ export function CandlestickChart({
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
       markersRef.current = null;
+      lineSeriesRef.current = [];
       setHover(null);
     };
     // The chart is created once per mount; theme changes repaint it in place below.
@@ -242,6 +274,37 @@ export function CandlestickChart({
     // the series reaches back further.
     chartRef.current?.timeScale().fitContent();
   }, [bars, markedBar, signals, theme]);
+
+  // Lines are rebuilt rather than patched: an overlay applied or removed
+  // changes how many there are, and a handful of series is cheap to recreate.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    for (const series of lineSeriesRef.current) chart.removeSeries(series);
+    const palette = readPalette(containerRef.current);
+    // Points only on bars the chart has, as with markers: a line reaching past
+    // the candles would stretch the time axis beyond the price history.
+    const onChart = new Set(bars.map((bar) => bar.date));
+    lineSeriesRef.current = lines.map((line) => {
+      const series = chart.addSeries(LineSeries, {
+        color: palette[line.look.tone],
+        lineWidth: line.look.width,
+        lineStyle: LINE_STYLES[line.look.style],
+        // Named in the legend under the chart; five labels stacked on the
+        // price axis are unreadable.
+        title: '',
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      });
+      series.setData(
+        line.points
+          .filter((point) => onChart.has(point.date))
+          .map((point): LineData<Time> => ({ time: point.date as Time, value: point.value })),
+      );
+      return series;
+    });
+  }, [bars, lines, theme]);
 
   // Apply the panel's size, but only while the panel is actually visible. A
   // hidden panel reports a box we must not draw to; on the hidden -> visible
@@ -302,6 +365,11 @@ export function CandlestickChart({
       {markedBar && (
         <span data-testid="signal-marker" className="sr-only">
           Signal marked on {markedBar.date}
+        </span>
+      )}
+      {lines.length > 0 && (
+        <span data-testid="chart-line-count" className="sr-only">
+          {lines.length} model lines drawn on the chart
         </span>
       )}
       {signals.length > 0 && (

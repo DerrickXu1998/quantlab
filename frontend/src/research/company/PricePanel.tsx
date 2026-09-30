@@ -1,6 +1,11 @@
 import { ChartCandlestick } from 'lucide-react';
 import type { PriceBar } from '../../api/client';
-import { CandlestickChart, type ChartSignal } from '../../components/CandlestickChart';
+import {
+  CandlestickChart,
+  type ChartLine,
+  type ChartSignal,
+} from '../../components/CandlestickChart';
+import { cn } from '../../lib/utils';
 import { formatCount, formatPrice } from '../format';
 import { Panel, PanelEmpty, PanelState } from './Panel';
 import type { ReadStatus } from './useCompany';
@@ -15,6 +20,8 @@ export interface PricePanelProps {
   onRetry: () => void;
   /** Signals from the models applied in the Models panel. */
   signals?: ChartSignal[];
+  /** Lines the applied models compared, e.g. sma-crossover's two averages. */
+  lines?: ChartLine[];
 }
 
 /**
@@ -37,6 +44,7 @@ export function PricePanel({
   currency,
   onRetry,
   signals,
+  lines,
 }: PricePanelProps) {
   const last = bars.length > 0 ? bars[bars.length - 1] : null;
 
@@ -73,7 +81,7 @@ export function PricePanel({
       ) : (
         <div className="flex min-h-0 flex-1 flex-col gap-2 p-3">
           <div className="min-h-[320px] flex-1">
-            <CandlestickChart bars={bars} signals={signals} autoSize />
+            <CandlestickChart bars={bars} signals={signals} lines={lines} autoSize />
           </div>
           <p className="shrink-0 font-mono text-xs uppercase tracking-[0.12em] text-muted-foreground">
             {formatCount(bars.length)} bars · {bars[0].date} → {last?.date}
@@ -86,8 +94,37 @@ export function PricePanel({
               </>
             ) : null}
           </p>
+          {lines && lines.length > 0 ? (
+            <ul
+              aria-label="Model lines"
+              className="flex shrink-0 flex-wrap gap-x-4 gap-y-1 font-mono text-xs text-muted-foreground"
+            >
+              {lines.map((line) => (
+                <li key={line.key} className="flex items-center gap-1.5">
+                  <LineSwatch line={line} />
+                  {line.label}
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </div>
       )}
     </Panel>
+  );
+}
+
+/** A short stroke in the line's own colour, weight and dash. */
+function LineSwatch({ line }: { line: ChartLine }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        'inline-block w-5',
+        line.look.tone === 'foreground' ? 'border-foreground' : 'border-muted-foreground',
+        line.look.width === 1 ? 'border-t' : 'border-t-2',
+        line.look.style === 'dashed' && 'border-dashed',
+        line.look.style === 'dotted' && 'border-dotted',
+      )}
+    />
   );
 }

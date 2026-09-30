@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { createRun, getRun, getRunPerformance, type ExperimentSignal } from '../../api/client';
+import {
+  createRun,
+  getRun,
+  getRunPerformance,
+  getRunStudies,
+  type ExperimentSignal,
+  type Study,
+} from '../../api/client';
 import type { CatalogModel, RunPerformanceV2 } from '../../api/types';
 
 /** One model applied to the ticker on screen. */
@@ -14,6 +21,8 @@ export interface ModelOverlay {
   runId: string | null;
   signals: ExperimentSignal[];
   performance: RunPerformanceV2 | null;
+  /** The lines the model compared, drawn under its markers. Empty for RSI. */
+  studies: Study[];
   visible: boolean;
 }
 
@@ -36,18 +45,27 @@ let nextKey = 0;
  * one that trades (Constitution V). Each overlay is therefore replayable and
  * listed with every other run.
  *
- * Overlays belong to the ticker: picking another one clears them, because
- * markers from one name drawn on another's chart are simply wrong.
+ * Overlays belong to the ticker and the window: changing either clears them,
+ * because markers from one name drawn on another's chart are simply wrong.
  */
-export function useModelOverlays(symbol: string | null, onRunCreated?: () => void) {
+export function useModelOverlays(
+  symbol: string | null,
+  onRunCreated?: () => void,
+  /**
+   * The window on screen, e.g. `2025-09-30..2026-09-30`. Overlays belong to it
+   * as they belong to the ticker: a return measured over ten years printed
+   * under a one-year chart is a number about something that is not shown.
+   */
+  scope: string = '',
+) {
   const [overlays, setOverlays] = useState<ModelOverlay[]>([]);
-  // Results that land after the ticker changed must not be applied to the new one.
+  // Results that land after the ticker or window changed must not be applied.
   const generation = useRef(0);
 
   useEffect(() => {
     generation.current += 1;
     setOverlays([]);
-  }, [symbol]);
+  }, [symbol, scope]);
 
   const patch = useCallback((key: string, change: Partial<ModelOverlay>) => {
     setOverlays((current) => current.map((o) => (o.key === key ? { ...o, ...change } : o)));
@@ -68,6 +86,7 @@ export function useModelOverlays(symbol: string | null, onRunCreated?: () => voi
           runId: null,
           signals: [],
           performance: null,
+          studies: [],
           visible: true,
         },
       ]);
@@ -83,9 +102,10 @@ export function useModelOverlays(symbol: string | null, onRunCreated?: () => voi
         if (run.status !== 'completed') {
           throw new Error(run.error ?? `the run ended as ${run.status}`);
         }
-        const [detail, performance] = await Promise.all([
+        const [detail, performance, studies] = await Promise.all([
           getRun(run.id),
           getRunPerformance(run.id),
+          getRunStudies(run.id, subject),
         ]);
         if (generation.current !== mine) return;
         patch(key, {
@@ -93,6 +113,7 @@ export function useModelOverlays(symbol: string | null, onRunCreated?: () => voi
           runId: run.id,
           signals: detail.signals.filter((signal) => signal.symbol === subject),
           performance,
+          studies: studies.studies,
         });
       } catch (caught: unknown) {
         if (generation.current !== mine) return;
