@@ -197,6 +197,9 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("experiment_runs", "strategy", "TEXT"),
     ("experiment_runs", "execution", "TEXT"),
     ("experiment_runs", "execution_summary", "TEXT"),
+    # Which requested names had the filings the run's fundamental rules read.
+    # Null on runs without such rules, and on runs recorded before it was kept.
+    ("experiment_runs", "fact_coverage", "TEXT"),
     # Whether a stored signal opens, closes, or (for a single-model run) does
     # both. Defaulted so existing rows keep their meaning exactly.
     ("experiment_signals", "kind", "TEXT NOT NULL DEFAULT 'both'"),

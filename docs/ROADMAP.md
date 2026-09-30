@@ -140,6 +140,60 @@ ClickHouse for history. Full design discussion from September 2026; summary:
 - **Order**: paper account first. Pacing and reconnect behavior are where this
   design breaks, and finding that out should be free.
 
+## Fundamentals coverage (parallel track)
+
+**Goal**: a fundamental rule's silence always means "the numbers said no",
+never "there were no numbers". Independent of the phases above; each item can
+land on its own. Measured against the live warehouse on 2026-09-30 with
+`GET /api/v1/fundamentals/coverage` — re-measure before starting any item.
+
+Done:
+
+- [x] Runs record fact coverage (`coverage.facts`: concepts read, missing count
+      per concept, the names that lacked one) and the results view warns when
+      any name's gates could never open. A run where *no* selected name has any
+      filing for the concepts its rules read is refused with 422 instead of
+      recorded as an empty result — on the synthetic demo (which has no
+      fundamentals) and on the warehouse alike. Migration
+      `007_run_fact_coverage.sql`.
+
+What is missing:
+
+- [ ] **UK accounts (data gap D6).** 0 of 99 `.LON` names have any accounts
+      concept; the only UK fundamental is FCA short interest (77 names).
+      `make ingest-ch-fundamentals` exists but has never populated this
+      database. First establish whether Companies House returns *structured*
+      accounts for listed plcs at all — many file in forms the ingest may not
+      parse. **Open**: if not, the fallback is to exclude `.LON` names from
+      fundamental strategies by design and say so in the StrategyLab coverage
+      warning, rather than let the gate sit shut.
+- [ ] **US accounts gaps (data gap D7).** Per rule, the share of the 534 `.US`
+      names with every concept it reads: accrual-reversal 438,
+      profitability-filter 437, pe-filter 425, pb-filter 399,
+      revenue-growth 376, liquidity-filter 370, margin-filter /
+      margin-expansion 334, leverage-filter 292. Before re-ingesting,
+      split the gap into (a) structural — banks and REITs do not report
+      revenue / gross profit / current assets under the tags we map — and (b)
+      ingest-limited — names never fetched (`SEC_LIMIT` rather than
+      `SEC_ALL=--all`) or tags not mapped in `tag_rank`. Only (b) is a fix;
+      (a) becomes documentation.
+- [ ] **Explain sparse fundamental signals in the UI.** All three are by
+      design, and all three read as bugs:
+      - filter-role rules never emit signals — they only gate another rule's
+        entries (a filters-only strategy is rejected);
+      - change rules fire about once per annual filing (AAPL revenue-growth:
+        once in 6.7 years), so a short window can hold zero events;
+      - defaults are real screens (pe-filter max 25, min ROE 10%, ±10% YoY,
+        `max_stale_days` 455), so over an expensive universe a gate can
+        legitimately never open.
+      One line per case in StrategyLab next to the rule picker, and in the
+      "No signals" empty state when the run read fundamentals.
+- [ ] **Local-run guard.** Outside Compose the backend silently falls back to
+      the synthetic demo unless both `QUANTLAB_DB_URL` and `QUANTLAB_CH_URL`
+      are set (the root `.env` has both commented out). Fundamental runs are
+      now refused there, but the fallback itself should log a warning at
+      startup naming the missing variable.
+
 ## Phase 5 — Revisit infra scale-out (conditional)
 
 Only when one of these is true: live trading with real money, a second human

@@ -328,6 +328,28 @@ def test_studies_of_an_unknown_run_is_404(client):
     assert client.get("/api/v1/runs/does-not-exist/studies").status_code == 404
 
 
+# --- POST /runs: fundamental coverage ---------------------------------------
+
+
+def test_a_fundamental_run_on_the_demo_is_refused_rather_than_recorded_empty(client, symbols):
+    """Every gate would stay shut; a completed run with no signals would hide why."""
+    before = client.get("/api/v1/runs").json()["total"]
+
+    response = client.post("/api/v1/runs", json=_run_body(symbols, model_name="revenue-growth"))
+
+    assert response.status_code == 422
+    assert set(SCHEMAS["Error"]["required"]) <= set(response.json())
+    assert "synthetic demo" in response.json()["detail"]
+    assert client.get("/api/v1/runs").json()["total"] == before
+
+
+def test_a_run_without_fundamental_rules_carries_null_fact_coverage(client, symbols):
+    run = client.post("/api/v1/runs", json=_run_body(symbols)).json()
+
+    assert "facts" in SCHEMAS["RunCoverage"]["properties"]
+    assert run["coverage"]["facts"] is None
+
+
 def test_performance_of_a_failed_run_is_409_rather_than_a_zeroed_body(client):
     """A failed run has no performance. Returning zeros would render as a flat
     book -- exactly the empty-vs-failed ambiguity the UI already guards."""

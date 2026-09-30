@@ -54,10 +54,30 @@ MAX_SELECTION_INSTRUMENT_DAYS = 2_000_000
 
 
 @dataclass(frozen=True)
+class FactCoverage:
+    """How much of the selection had the filings the run's rules read.
+
+    A fundamental gate with no facts holds shut and says nothing, so a name
+    missing its revenue looks exactly like a name whose revenue never grew.
+    This is the part of that silence the result can carry.
+    """
+
+    concepts: list[str]
+    #: Instruments with at least one filing for *every* concept in ``concepts``.
+    instruments_with_facts: int
+    #: Per concept, how many requested instruments have no filing for it.
+    missing_by_concept: dict[str, int]
+    #: The requested instruments lacking at least one concept, in request order.
+    instruments_missing_facts: list[str]
+
+
+@dataclass(frozen=True)
 class RunCoverage:
     instruments_requested: int
     instruments_with_data: int
     instruments_full_warmup: int
+    #: None when no rule in the run reads fundamentals.
+    facts: FactCoverage | None = None
 
 
 @dataclass(frozen=True)
@@ -274,6 +294,17 @@ def run_experiment(
         if wanted_concepts
         else {}
     )
+    fact_coverage = _fact_coverage(requested_symbols, wanted_concepts, facts_by_symbol)
+    if fact_coverage is not None and all(
+        missing == len(requested_symbols) for missing in fact_coverage.missing_by_concept.values()
+    ):
+        # Not one filing for any concept the rules read: every fundamental gate
+        # would hold shut, and the result would be indistinguishable from a
+        # strategy that ran and found nothing. Refuse, naming the cause.
+        requirement = f"fundamentals ({', '.join(wanted_concepts)})"
+        if getattr(backend, "name", None) == "sqlite":
+            raise errors.DatasetUnsupportedError(requirement, "synthetic demo")
+        raise errors.NoFactCoverageError(wanted_concepts, len(requested_symbols), end_date)
 
     # Cross-instrument inputs (the macro gates' VIX and HY spread), loaded over
     # the same warm-up window. Refused up front if the store does not have
@@ -323,9 +354,7 @@ def run_experiment(
     # the window makes the series jump in a way that is an artefact.
     actions = backend.corporate_actions(requested_symbols, start_date, end_date)
     instruments_with_facts = (
-        sum(1 for symbol in requested_symbols if facts_by_symbol.get(symbol))
-        if wanted_concepts
-        else None
+        fact_coverage.instruments_with_facts if fact_coverage is not None else None
     )
     instruments_with_data = sum(1 for symbol in requested_symbols if bars_by_symbol.get(symbol))
     instruments_full_warmup = sum(
@@ -356,6 +385,7 @@ def run_experiment(
             instruments_requested=len(requested_symbols),
             instruments_with_data=instruments_with_data,
             instruments_full_warmup=instruments_full_warmup,
+            facts=fact_coverage,
         ),
         signals=in_window,
         dataset=getattr(backend, "name", "sqlite"),
@@ -396,6 +426,26 @@ def run_experiment(
         },
     )
     return run
+
+
+def _fact_coverage(
+    symbols: list[str], concepts: list[str], facts_by_symbol: dict
+) -> FactCoverage | None:
+    """Which requested instruments had each concept the run's rules read."""
+    if not concepts:
+        return None
+
+    def has(symbol: str, concept: str) -> bool:
+        series = facts_by_symbol.get(symbol)
+        return bool(series) and series.has(concept)
+
+    missing = [s for s in symbols if not all(has(s, c) for c in concepts)]
+    return FactCoverage(
+        concepts=list(concepts),
+        instruments_with_facts=len(symbols) - len(missing),
+        missing_by_concept={c: sum(1 for s in symbols if not has(s, c)) for c in concepts},
+        instruments_missing_facts=missing,
+    )
 
 
 def execution_config_for(run: dict) -> ExecutionConfig:

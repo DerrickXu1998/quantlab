@@ -805,6 +805,32 @@ export interface components {
             instruments_with_data: number;
             /** @description How many had the model's full lookback before start_date. The remainder may under-report early in the window. */
             instruments_full_warmup: number;
+            /** @description Present when a rule in the run reads fundamentals; null otherwise, and on runs recorded before this was kept. A fundamental gate with no filing holds shut without saying so, so this is how a caller tells "never fired" from "could not fire". */
+            facts?: components["schemas"]["FactCoverage"] | null;
+        };
+        FactCoverage: {
+            /**
+             * @description The fundamental concepts the run's rules read.
+             * @example [
+             *       "net_income",
+             *       "shares_outstanding"
+             *     ]
+             */
+            concepts: string[];
+            /** @description Requested instruments with a filing for every concept. */
+            instruments_with_facts: number;
+            /**
+             * @description Per concept, how many requested instruments have no filing for it.
+             * @example {
+             *       "net_income": 12,
+             *       "shares_outstanding": 31
+             *     }
+             */
+            missing_by_concept: {
+                [key: string]: number;
+            };
+            /** @description Requested instruments lacking at least one concept -- their fundamental gates never opened. */
+            instruments_missing_facts: string[];
         };
         Run: {
             id: string;
@@ -1529,7 +1555,10 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Parameter outside its declared range, window shorter than the model's lookback, start_date after end_date, or a selection larger than the permitted bound. The offending field is named. */
+            /**
+             * @description Parameter outside its declared range, window shorter than the model's lookback, start_date after end_date, or a selection larger than the permitted bound. The offending field is named.
+             *     Also returned when the strategy reads fundamentals and not one selected instrument has a filing for any concept it reads -- on the synthetic demo, which has none, or on names that never filed them. Every gate would stay shut, and a recorded run with no signals would hide why.
+             */
             422: {
                 headers: {
                     [name: string]: unknown;
