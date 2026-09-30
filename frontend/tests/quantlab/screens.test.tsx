@@ -299,14 +299,99 @@ describe('Overview', () => {
     renderApp();
     const rail = await screen.findByTestId('runs-rail');
 
-    await user.click(within(rail).getByRole('button', { name: /delete run base case/i }));
-    // Armed, not fired: the first click only reveals the confirm step.
-    expect(apiClient.deleteRun).not.toHaveBeenCalled();
+    // Nothing selected: the one delete icon stays disarmed.
+    expect(within(rail).getByRole('button', { name: /delete selected runs/i })).toBeDisabled();
 
-    await user.click(within(rail).getByRole('button', { name: /confirm/i }));
+    await user.click(within(rail).getByRole('checkbox', { name: /select run base case/i }));
+    await user.click(within(rail).getByRole('button', { name: /delete selected runs/i }));
+    // Armed, not fired: the first click only opens the confirmation dialog.
+    expect(apiClient.deleteRun).not.toHaveBeenCalled();
+    const dialog = await screen.findByTestId('bulk-delete-dialog');
+    expect(within(dialog).getByText('base case')).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: /^delete$/i }));
 
     await waitFor(() => expect(apiClient.deleteRun).toHaveBeenCalledWith('run-1'));
     await waitFor(() => expect(within(rail).queryByText('base case')).toBeNull());
+  });
+
+  it('lets the bulk-delete dialog be cancelled without deleting anything', async () => {
+    vi.mocked(apiClient.listRuns).mockResolvedValue({
+      total: 1,
+      items: [makeRun({ name: 'base case' })],
+    });
+
+    const user = userEvent.setup();
+    renderApp();
+    const rail = await screen.findByTestId('runs-rail');
+
+    await user.click(within(rail).getByRole('checkbox', { name: /select run base case/i }));
+    await user.click(within(rail).getByRole('button', { name: /delete selected runs/i }));
+    const dialog = await screen.findByTestId('bulk-delete-dialog');
+    await user.click(within(dialog).getByRole('button', { name: /cancel/i }));
+
+    expect(screen.queryByTestId('bulk-delete-dialog')).toBeNull();
+    expect(apiClient.deleteRun).not.toHaveBeenCalled();
+    expect(within(rail).getByText('base case')).toBeInTheDocument();
+  });
+
+  it('removes several ticked runs in bulk behind the one delete icon', async () => {
+    vi.mocked(apiClient.listRuns).mockResolvedValue({
+      total: 3,
+      items: [
+        makeRun({ id: 'run-1', name: 'keep me' }),
+        makeRun({ id: 'run-2', name: 'stale a' }),
+        makeRun({ id: 'run-3', name: 'stale b' }),
+      ],
+    });
+    vi.mocked(apiClient.getRun).mockImplementation((id: string) =>
+      Promise.resolve(makeRun({ id, name: 'keep me' })),
+    );
+    vi.mocked(apiClient.deleteRun).mockResolvedValue(undefined);
+
+    const user = userEvent.setup();
+    renderApp();
+    const rail = await screen.findByTestId('runs-rail');
+
+    await user.click(within(rail).getByRole('checkbox', { name: /select run stale a/i }));
+    await user.click(within(rail).getByRole('checkbox', { name: /select run stale b/i }));
+    expect(within(rail).getByTestId('runs-selected-count')).toHaveTextContent('2 selected');
+
+    await user.click(within(rail).getByRole('button', { name: /delete selected runs/i }));
+    const dialog = await screen.findByTestId('bulk-delete-dialog');
+    expect(within(dialog).getByText('stale a')).toBeInTheDocument();
+    expect(within(dialog).getByText('stale b')).toBeInTheDocument();
+    expect(within(dialog).queryByText('keep me')).toBeNull();
+    await user.click(within(dialog).getByRole('button', { name: /^delete$/i }));
+
+    await waitFor(() => {
+      expect(apiClient.deleteRun).toHaveBeenCalledWith('run-2');
+      expect(apiClient.deleteRun).toHaveBeenCalledWith('run-3');
+    });
+    expect(apiClient.deleteRun).not.toHaveBeenCalledWith('run-1');
+    await waitFor(() => {
+      expect(within(rail).queryByText('stale a')).toBeNull();
+      expect(within(rail).queryByText('stale b')).toBeNull();
+    });
+    expect(within(rail).getByText('keep me')).toBeInTheDocument();
+  });
+
+  it('select-all ticks every listed run, and unticks them again', async () => {
+    vi.mocked(apiClient.listRuns).mockResolvedValue({
+      total: 2,
+      items: [makeRun({ id: 'run-1', name: 'one' }), makeRun({ id: 'run-2', name: 'two' })],
+    });
+
+    const user = userEvent.setup();
+    renderApp();
+    const rail = await screen.findByTestId('runs-rail');
+
+    const selectAll = within(rail).getByRole('checkbox', { name: /select all listed runs/i });
+    await user.click(selectAll);
+    expect(within(rail).getByTestId('runs-selected-count')).toHaveTextContent('2 selected');
+
+    await user.click(selectAll);
+    expect(within(rail).queryByTestId('runs-selected-count')).toBeNull();
   });
 
   it('guides the first run when no runs exist at all', async () => {
