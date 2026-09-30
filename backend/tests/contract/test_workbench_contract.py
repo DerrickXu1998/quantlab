@@ -255,6 +255,79 @@ def test_the_frontend_is_not_asked_to_compute_any_of_this():
     assert SCHEMAS["RunPerformance"]["properties"]["equity"]["type"] == "array"
 
 
+# --- GET /runs/{run_id}/studies --------------------------------------------
+
+
+def test_studies_match_the_contract(client, symbols):
+    run = client.post("/api/v1/runs", json=_run_body(symbols[:1])).json()
+
+    payload = client.get(f"/api/v1/runs/{run['id']}/studies").json()
+
+    assert set(SCHEMAS["RunStudies"]["required"]) <= set(payload)
+    assert payload["run_id"] == run["id"]
+    assert payload["symbol"] == symbols[0]
+    assert [study["label"] for study in payload["studies"]] == ["SMA 20", "SMA 50"]
+    for study in payload["studies"]:
+        assert set(SCHEMAS["Study"]["required"]) <= set(study)
+        assert study["points"], "the window is a year long; every session has an average"
+        for point in study["points"]:
+            assert set(SCHEMAS["StudyPoint"]["required"]) <= set(point)
+            assert run["start_date"] <= point["date"] <= run["end_date"]
+
+
+def test_studies_are_the_values_the_signals_fired_on(client, symbols):
+    """The lines exist to explain the markers, so they must be the same numbers."""
+    body = _run_body(symbols[:1], parameters={"fast": 10, "slow": 30})
+    run = client.post("/api/v1/runs", json=body).json()
+    signals = client.get(f"/api/v1/runs/{run['id']}").json()["signals"]
+    assert signals, "the seeded trend name crosses at least once in a year"
+
+    payload = client.get(f"/api/v1/runs/{run['id']}/studies").json()
+    lines = {
+        study["key"]: {point["date"]: point["value"] for point in study["points"]}
+        for study in payload["studies"]
+    }
+    assert [study["label"] for study in payload["studies"]] == ["SMA 10", "SMA 30"]
+
+    # A single-model run is an entry and an exit component running the same
+    # rule; the identical second pair of lines is dropped.
+    assert set(lines) == {"0.sma_fast", "0.sma_slow"}
+    for signal in signals:
+        fired = signal["trigger_values"]
+        assert lines["0.sma_fast"][signal["date"]] == pytest.approx(fired["sma-crossover.sma_fast"])
+        assert lines["0.sma_slow"][signal["date"]] == pytest.approx(fired["sma-crossover.sma_slow"])
+
+
+def test_studies_need_a_symbol_on_a_multi_symbol_run(client, symbols):
+    run = client.post("/api/v1/runs", json=_run_body(symbols)).json()
+
+    assert client.get(f"/api/v1/runs/{run['id']}/studies").status_code == 422
+    named = client.get(f"/api/v1/runs/{run['id']}/studies", params={"symbol": symbols[1]})
+    assert named.status_code == 200
+    assert named.json()["symbol"] == symbols[1]
+
+
+def test_studies_refuse_a_symbol_outside_the_run(client, symbols):
+    run = client.post("/api/v1/runs", json=_run_body(symbols[:1])).json()
+
+    response = client.get(f"/api/v1/runs/{run['id']}/studies", params={"symbol": symbols[1]})
+
+    assert response.status_code == 404
+
+
+def test_studies_of_a_rule_with_nothing_on_the_price_axis_are_empty(client, symbols):
+    body = _run_body(symbols[:1], model_name="rsi-threshold")
+    run = client.post("/api/v1/runs", json=body).json()
+
+    payload = client.get(f"/api/v1/runs/{run['id']}/studies").json()
+
+    assert payload["studies"] == []
+
+
+def test_studies_of_an_unknown_run_is_404(client):
+    assert client.get("/api/v1/runs/does-not-exist/studies").status_code == 404
+
+
 def test_performance_of_a_failed_run_is_409_rather_than_a_zeroed_body(client):
     """A failed run has no performance. Returning zeros would render as a flat
     book -- exactly the empty-vs-failed ambiguity the UI already guards."""

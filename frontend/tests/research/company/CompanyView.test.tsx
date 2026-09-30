@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as apiClient from '../../../src/api/client';
 import CompanyView from '../../../src/research/company/CompanyView';
+import { shiftMonths } from '../../../src/research/company/RangeControl';
 import { ThemeProvider } from '../../../src/theme/ThemeProvider';
 import { makeBar, makeInstrument } from '../../fixtures';
 import { makeFact, makeOverview } from './fixtures';
@@ -143,6 +144,20 @@ describe('CompanyView, with a name', () => {
     const [, firstAsOf] = vi.mocked(apiClient.getCompanyOverview).mock.calls[0];
     expect(secondAsOf).not.toBe(firstAsOf);
     expect(apiClient.getPrices).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads only the chosen range of history back from the as-of date', async () => {
+    const user = userEvent.setup();
+    renderView('CAT');
+    await screen.findByTestId('company-identity');
+
+    await user.click(screen.getByRole('button', { name: '1Y' }));
+
+    await waitFor(() => expect(apiClient.getPrices).toHaveBeenCalledTimes(2));
+    const [, start, end] = vi.mocked(apiClient.getPrices).mock.calls[1];
+    // The same as-of date, one year earlier: the accounts are not re-read.
+    expect(start).toBe(shiftMonths(end as string, 12));
+    expect(apiClient.getCompanyOverview).toHaveBeenCalledTimes(1);
   });
 
   it('shows the accounts the overview already resolved, with filing dates', async () => {

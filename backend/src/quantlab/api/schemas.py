@@ -272,6 +272,24 @@ class BenchmarkRegression(BaseModel):
     observations: int
 
 
+class StudyPoint(BaseModel):
+    date: str
+    value: float
+
+
+class Study(BaseModel):
+    key: str
+    label: str
+    rule_name: str
+    points: list[StudyPoint]
+
+
+class RunStudies(BaseModel):
+    run_id: str
+    symbol: str
+    studies: list[Study]
+
+
 class RunPerformance(BaseModel):
     run_id: str
     initial_capital: float

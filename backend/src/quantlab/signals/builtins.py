@@ -10,7 +10,16 @@ import numpy as np
 
 from quantlab.indicators.builtins import rsi as rsi_indicator
 from quantlab.indicators.builtins import sma as sma_indicator
-from quantlab.signals.registry import ParamSpec, SignalEvent, register_signal_rule
+from quantlab.signals.registry import ParamSpec, SignalEvent, StudyLine, register_signal_rule
+
+
+def _sma_crossover_studies(bars, fast: int = 20, slow: int = 50) -> list[StudyLine]:
+    """The two averages sma-crossover compares, from the same indicator it reads."""
+    closes = np.array([bar.close for bar in bars], dtype=float)
+    return [
+        StudyLine(key="sma_fast", label=f"SMA {fast}", values=sma_indicator(closes, window=fast)),
+        StudyLine(key="sma_slow", label=f"SMA {slow}", values=sma_indicator(closes, window=slow)),
+    ]
 
 
 @register_signal_rule(
@@ -33,6 +42,7 @@ from quantlab.signals.registry import ParamSpec, SignalEvent, register_signal_ru
     # SMA is a bounded window, not a recursion: the last slow + 1 bars fully
     # determine every value a crossover check can read.
     windowed_lookback=lambda p: p["slow"] + 1,
+    studies=_sma_crossover_studies,
     scale_class="scale_free",
     direction_semantics=(
         "bullish: SMA(fast) crossed above SMA(slow) on the signal date; "

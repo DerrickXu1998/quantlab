@@ -227,6 +227,19 @@ export function getRunPerformance(runId: string): Promise<RunPerformanceV2> {
   return request<RunPerformanceV2>(`/runs/${encodeURIComponent(runId)}/performance`);
 }
 
+// --- Run studies -----------------------------------------------------------
+// The lines a run's rules compared (sma-crossover's two averages), computed by
+// the backend from the run's own parameters so they agree with its markers.
+
+export type StudyPoint = components['schemas']['StudyPoint'];
+export type Study = components['schemas']['Study'];
+export type RunStudies = components['schemas']['RunStudies'];
+
+export function getRunStudies(runId: string, symbol: string): Promise<RunStudies> {
+  const query = new URLSearchParams({ symbol });
+  return request<RunStudies>(`/runs/${encodeURIComponent(runId)}/studies?${query}`);
+}
+
 // --- Identity (contract v2 §1) ---------------------------------------------
 // The credential endpoints are `anonymous`: their 401 means "wrong email or
 // password" and must not tear down a session that is still valid.

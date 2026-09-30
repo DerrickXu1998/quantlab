@@ -385,6 +385,61 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /runs/{run_id}/studies:
+    parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [runs]
+      operationId: getRunStudies
+      summary: The price-scale lines a run's rules compared, for one symbol
+      description: >
+        What the rules compared, so a chart can show why each marker sits where
+        it does -- for sma-crossover, its fast and slow averages. Computed from
+        the rule's own declared studies with the parameters the run recorded,
+        so the lines agree with the signals' trigger_values on every signal
+        date. Reported over the run's window only; the warm-up is an input.
+
+        A rule with nothing on the price axis (RSI's 0-100 scale, say)
+        contributes no study, so `studies` may be empty.
+      parameters:
+        - name: symbol
+          in: query
+          required: false
+          description: >
+            Which of the run's symbols to draw. Required when the run has more
+            than one; guessing would put one name's averages under another's
+            candles.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Studies of the run on that symbol
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunStudies"
+        "404":
+          description: Unknown run, or a symbol the run did not cover
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: The run failed, so it has no studies.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: The run covers several symbols and none was named.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /runs/{run_id}/replay/stream:
     parameters:
       - name: run_id
@@ -1838,6 +1893,54 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/ExperimentSignal"
+
+    StudyPoint:
+      type: object
+      additionalProperties: false
+      required: [date, value]
+      properties:
+        date:
+          type: string
+          format: date
+        value:
+          type: number
+          description: The line's value at that session's close, in price units.
+
+    Study:
+      type: object
+      additionalProperties: false
+      required: [key, label, rule_name, points]
+      properties:
+        key:
+          type: string
+          description: >
+            Stable within a run, `<component index>.<line key>` -- e.g.
+            `0.sma_fast`, whose line key matches the trigger_values name.
+          example: 0.sma_fast
+        label:
+          type: string
+          example: SMA 20
+        rule_name:
+          type: string
+          example: sma-crossover
+        points:
+          type: array
+          items:
+            $ref: "#/components/schemas/StudyPoint"
+
+    RunStudies:
+      type: object
+      additionalProperties: false
+      required: [run_id, symbol, studies]
+      properties:
+        run_id:
+          type: string
+        symbol:
+          type: string
+        studies:
+          type: array
+          items:
+            $ref: "#/components/schemas/Study"
 
     EquityPoint:
       type: object
