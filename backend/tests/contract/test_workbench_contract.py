@@ -375,3 +375,16 @@ def test_performance_of_a_failed_run_is_409_rather_than_a_zeroed_body(client):
 
     assert response.status_code == 409
     assert set(SCHEMAS["Error"]["required"]) <= set(response.json())
+
+
+# --- GET /universes/{name} ---------------------------------------------------
+
+
+def test_an_unknown_universe_is_404_in_the_error_shape(client):
+    """The demo has no universe history at all, so every name is unknown."""
+    response = client.get("/api/v1/universes/no-such-universe")
+
+    assert response.status_code == 404
+    assert set(SCHEMAS["Error"]["required"]) <= set(response.json())
+    assert "no-such-universe" in response.json()["detail"]
+    assert set(SCHEMAS["UniverseMembers"]["required"]) == {"name", "as_of", "symbols"}

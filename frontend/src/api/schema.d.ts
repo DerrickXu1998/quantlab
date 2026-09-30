@@ -543,6 +543,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/universes/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * The members of a saved universe
+         * @description The newest snapshot of `name` captured on or before `as_of` (today when omitted) -- the same point-in-time rule a screen applies. What a strategy picker loads when the reader chooses a universe saved earlier.
+         */
+        get: operations["getUniverseMembers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/screen": {
         parameters: {
             query?: never;
@@ -1329,6 +1351,15 @@ export interface components {
             as_of: string;
             /** @description Counted from members rather than trusting a stored count. */
             size: number;
+        };
+        UniverseMembers: {
+            name: string;
+            /**
+             * Format: date
+             * @description The snapshot's own date, never the date asked for.
+             */
+            as_of: string;
+            symbols: string[];
         };
         UniversePublishRequest: {
             name: string;
@@ -2556,6 +2587,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    getUniverseMembers: {
+        parameters: {
+            query?: {
+                as_of?: string;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The snapshot's members */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UniverseMembers"];
+                };
+            };
+            /** @description No such universe, or none of its snapshots reaches back to `as_of`. The synthetic demo has no universes at all. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
             };
         };
     };

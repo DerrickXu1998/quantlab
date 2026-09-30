@@ -1187,6 +1187,43 @@ paths:
         "422":
           description: Unknown symbols or duplicate snapshot
 
+  /universes/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [instruments]
+      operationId: getUniverseMembers
+      summary: The members of a saved universe
+      description: >
+        The newest snapshot of `name` captured on or before `as_of` (today when
+        omitted) -- the same point-in-time rule a screen applies. What a
+        strategy picker loads when the reader chooses a universe saved earlier.
+      parameters:
+        - name: as_of
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: The snapshot's members
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UniverseMembers"
+        "404":
+          description: >
+            No such universe, or none of its snapshots reaches back to
+            `as_of`. The synthetic demo has no universes at all.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /screen:
     get:
       tags: [research]
@@ -2878,6 +2915,22 @@ components:
         size:
           type: integer
           description: Counted from members rather than trusting a stored count.
+
+    UniverseMembers:
+      type: object
+      additionalProperties: false
+      required: [name, as_of, symbols]
+      properties:
+        name:
+          type: string
+        as_of:
+          type: string
+          format: date
+          description: The snapshot's own date, never the date asked for.
+        symbols:
+          type: array
+          items:
+            type: string
 
     UniversePublishRequest:
       type: object

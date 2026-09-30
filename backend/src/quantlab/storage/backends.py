@@ -61,6 +61,7 @@ class StorageBackend(Protocol):
         self, name: str, symbols: list[str], snapshot_date: str | None = None
     ) -> dict: ...
     def ensure_default_universe(self) -> None: ...
+    def universe_members(self, name: str, as_of: str) -> dict | None: ...
     def company_overview(self, symbol: str, as_of: str) -> dict | None: ...
     def screen(self, **kwargs) -> dict | None: ...
 
@@ -185,6 +186,10 @@ class SqliteBackend:
 
     def ensure_default_universe(self) -> None:
         pass
+
+    def universe_members(self, name: str, as_of: str) -> dict | None:
+        # No universe history, so no universe to resolve.
+        return None
 
     def company_overview(self, symbol: str, as_of: str) -> dict | None:
         """The same page, minus the half the demo has no data for.
@@ -353,6 +358,12 @@ class WarehouseBackend:
 
     def ensure_default_universe(self) -> None:
         warehouse.ensure_default_universe(self.wh)
+
+    def universe_members(self, name: str, as_of: str) -> dict | None:
+        snapshot = warehouse.resolve_universe(self.wh, name, as_of)
+        if snapshot is None:
+            return None
+        return {"name": snapshot.universe, "as_of": snapshot.as_of, "symbols": snapshot.symbols}
 
     def company_overview(self, symbol: str, as_of: str) -> dict | None:
         return warehouse.company_overview(self.wh, symbol, as_of)

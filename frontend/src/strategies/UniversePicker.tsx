@@ -1,9 +1,9 @@
 import { Bookmark, Plus, Search, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import type { Instrument } from '../api/client';
-import { usePublishUniverse } from '../api/UniversesProvider';
+import { getUniverseMembers, type Instrument, type Universe } from '../api/client';
+import { usePublishUniverse, useUniverses } from '../api/UniversesProvider';
 import { Button } from '../components/ui/button';
-import { fieldClasses } from '../components/ui/field';
+import { Select, fieldClasses } from '../components/ui/field';
 import { StatusBadge } from '../components/ui/status-badge';
 import { cn } from '../lib/utils';
 
@@ -44,6 +44,20 @@ const PRESETS: Preset[] = [
   },
 ];
 
+/**
+ * One entry per saved universe: its newest snapshot. The list endpoint returns
+ * every dated snapshot (newest first within a name), which is right for a
+ * screen's as-of question and noise for "load the list I saved".
+ */
+export function latestSnapshots(universes: Universe[]): Universe[] {
+  const newest = new Map<string, Universe>();
+  for (const universe of universes) {
+    const held = newest.get(universe.name);
+    if (!held || universe.as_of > held.as_of) newest.set(universe.name, universe);
+  }
+  return [...newest.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
 /** How many chips to draw before collapsing the rest behind "show all". */
 const CHIP_LIMIT = 40;
 const MATCH_LIMIT = 8;
@@ -72,6 +86,12 @@ export function UniversePicker({
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const publish = usePublishUniverse();
+  const { universes } = useUniverses();
+  const saved = useMemo(() => latestSnapshots(universes), [universes]);
+  const [loadingSaved, setLoadingSaved] = useState(false);
+  const [loadNotice, setLoadNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(
+    null,
+  );
 
   const tradable = useMemo(() => instruments.filter(isTradable), [instruments]);
   const chosen = useMemo(() => new Set(selected), [selected]);
@@ -107,6 +127,34 @@ export function UniversePicker({
 
   const visible = showAll ? selected : selected.slice(0, CHIP_LIMIT);
 
+  // A saved universe replaces the selection, as a preset does. Members this
+  // catalogue does not carry as tradable (a delisted name, a macro series) are
+  // left out and counted, rather than sent to a run that would refuse them.
+  const loadSaved = async (universe: Universe) => {
+    setLoadingSaved(true);
+    setLoadNotice(null);
+    try {
+      const members = await getUniverseMembers(universe.name, universe.as_of);
+      const known = new Set(tradable.map((instrument) => instrument.symbol));
+      const usable = members.symbols.filter((symbol) => known.has(symbol));
+      const skipped = members.symbols.length - usable.length;
+      onChange(usable);
+      setLoadNotice({
+        type: 'success',
+        text:
+          `Loaded "${universe.name}" as of ${members.as_of}: ${usable.length} tickers` +
+          (skipped > 0 ? `, ${skipped} not in this catalogue left out.` : '.'),
+      });
+    } catch (caught: unknown) {
+      setLoadNotice({
+        type: 'error',
+        text: caught instanceof Error ? caught.message : 'Could not load the universe.',
+      });
+    } finally {
+      setLoadingSaved(false);
+    }
+  };
+
   return (
     <div className="space-y-3" data-testid="universe-picker">
       <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Universe presets">
@@ -135,6 +183,46 @@ export function UniversePicker({
           Clear
         </Button>
       </div>
+
+      {saved.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <label
+            htmlFor="saved-universe"
+            className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground"
+          >
+            Saved universes
+          </label>
+          <Select
+            id="saved-universe"
+            className="w-auto min-w-[14rem]"
+            value=""
+            disabled={loadingSaved}
+            onChange={(event) => {
+              const universe = saved.find((u) => u.name === event.target.value);
+              if (universe) void loadSaved(universe);
+            }}
+          >
+            <option value="">{loadingSaved ? 'Loading…' : 'Load a saved universe…'}</option>
+            {saved.map((universe) => (
+              <option key={universe.name} value={universe.name}>
+                {universe.name} · {universe.size} · {universe.as_of}
+              </option>
+            ))}
+          </Select>
+          {loadNotice ? (
+            <p
+              data-testid="saved-universe-notice"
+              className={cn(
+                'basis-full text-xs',
+                loadNotice.type === 'error' ? 'text-destructive' : 'text-primary',
+              )}
+              role={loadNotice.type === 'error' ? 'alert' : 'status'}
+            >
+              {loadNotice.text}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="relative">
         <label htmlFor="universe-search" className="sr-only">
