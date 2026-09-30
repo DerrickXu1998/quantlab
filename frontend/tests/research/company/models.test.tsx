@@ -102,6 +102,50 @@ describe('useModelOverlays', () => {
     expect(overlay.studies.map((study) => study.label)).toEqual(['SMA 20']);
   });
 
+  it('keeps applied models when the reader leaves the tab and comes back', async () => {
+    const first = renderHook(() => useModelOverlays('AAPL.US'));
+    await act(() =>
+      first.result.current.apply({
+        model: rsiThreshold,
+        parameters: {},
+        symbol: 'AAPL.US',
+        start: '2015-01-02',
+        end: '2026-09-18',
+      }),
+    );
+    first.unmount();
+
+    const back = renderHook(() => useModelOverlays('AAPL.US'));
+    expect(back.result.current.overlays).toHaveLength(1);
+    expect(back.result.current.overlays[0]).toMatchObject({ status: 'ready', runId: 'run-7' });
+  });
+
+  it('lands a run that finished while the reader was on another tab', async () => {
+    let finish: (run: apiClient.RunDetail) => void = () => {};
+    vi.mocked(apiClient.getRun).mockReturnValue(new Promise((resolve) => (finish = resolve)));
+    const first = renderHook(() => useModelOverlays('AAPL.US'));
+    let pending: Promise<void> = Promise.resolve();
+    act(() => {
+      pending = first.result.current.apply({
+        model: rsiThreshold,
+        parameters: {},
+        symbol: 'AAPL.US',
+        start: '2015-01-02',
+        end: '2026-09-18',
+      });
+    });
+    first.unmount();
+
+    await act(async () => {
+      finish(makeRun({ id: 'run-7', signals: [signal('AAPL.US', '2024-01-02', 'bullish')] }));
+      await pending;
+    });
+
+    const back = renderHook(() => useModelOverlays('AAPL.US'));
+    expect(back.result.current.overlays[0]).toMatchObject({ status: 'ready', runId: 'run-7' });
+    expect(back.result.current.overlays[0].signals).toHaveLength(1);
+  });
+
   it('clears the overlays when the window changes', async () => {
     const { result, rerender } = renderHook(
       ({ scope }) => useModelOverlays('AAPL.US', undefined, scope),

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
 import {
   createRun,
   getRun,
@@ -37,6 +37,50 @@ export interface ApplyRequest {
 let nextKey = 0;
 
 /**
+ * Applied overlays, kept per ticker and window across unmounts.
+ *
+ * The shell mounts one destination at a time, so overlays held in component
+ * state were lost on every trip to another tab -- and a run still going when
+ * the reader left had nowhere to land. Held here, a return finds them as they
+ * were, and a result lands in the bucket of the ticker and window it was run
+ * for, whatever is on screen by then. Bounded: a performance payload carries a
+ * whole equity curve.
+ */
+const overlayStore = new Map<string, ModelOverlay[]>();
+const OVERLAY_SCOPES_KEPT = 12;
+const listeners = new Set<() => void>();
+const NO_OVERLAYS: ModelOverlay[] = [];
+
+function readOverlays(bucket: string): ModelOverlay[] {
+  return overlayStore.get(bucket) ?? NO_OVERLAYS;
+}
+
+function writeOverlays(bucket: string, change: (current: ModelOverlay[]) => ModelOverlay[]) {
+  const next = change(readOverlays(bucket));
+  overlayStore.delete(bucket);
+  if (next.length > 0) overlayStore.set(bucket, next);
+  while (overlayStore.size > OVERLAY_SCOPES_KEPT) {
+    const oldest = overlayStore.keys().next().value;
+    if (oldest === undefined) break;
+    overlayStore.delete(oldest);
+  }
+  for (const listener of listeners) listener();
+}
+
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+/** For tests: each starts with nothing applied anywhere. */
+export function clearOverlayStore() {
+  overlayStore.clear();
+  for (const listener of listeners) listener();
+}
+
+/**
  * Models applied to one ticker, each a real run over that ticker's history.
  *
  * A run rather than anything computed here: the signals on the chart have to
@@ -45,8 +89,9 @@ let nextKey = 0;
  * one that trades (Constitution V). Each overlay is therefore replayable and
  * listed with every other run.
  *
- * Overlays belong to the ticker and the window: changing either clears them,
- * because markers from one name drawn on another's chart are simply wrong.
+ * Overlays belong to the ticker and the window: changing either shows that
+ * pair's own overlays, because markers from one name drawn on another's chart
+ * are simply wrong. Coming back to a pair -- or to the tab -- shows them again.
  */
 export function useModelOverlays(
   symbol: string | null,
@@ -58,24 +103,24 @@ export function useModelOverlays(
    */
   scope: string = '',
 ) {
-  const [overlays, setOverlays] = useState<ModelOverlay[]>([]);
-  // Results that land after the ticker or window changed must not be applied.
-  const generation = useRef(0);
-
-  useEffect(() => {
-    generation.current += 1;
-    setOverlays([]);
-  }, [symbol, scope]);
-
-  const patch = useCallback((key: string, change: Partial<ModelOverlay>) => {
-    setOverlays((current) => current.map((o) => (o.key === key ? { ...o, ...change } : o)));
-  }, []);
+  const bucket = `${symbol ?? ''}|${scope}`;
+  const overlays = useSyncExternalStore(
+    subscribe,
+    () => readOverlays(bucket),
+    () => readOverlays(bucket),
+  );
 
   const apply = useCallback(
     async ({ model, parameters, symbol: subject, start, end }: ApplyRequest) => {
       const key = `overlay-${(nextKey += 1)}`;
-      const mine = generation.current;
-      setOverlays((current) => [
+      // Captured now: the result belongs to this pair even if the reader has
+      // moved to another ticker, window or tab by the time it lands.
+      const home = bucket;
+      const patch = (change: Partial<ModelOverlay>) =>
+        writeOverlays(home, (current) =>
+          current.map((o) => (o.key === key ? { ...o, ...change } : o)),
+        );
+      writeOverlays(home, (current) => [
         ...current,
         {
           key,
@@ -107,8 +152,7 @@ export function useModelOverlays(
           getRunPerformance(run.id),
           getRunStudies(run.id, subject),
         ]);
-        if (generation.current !== mine) return;
-        patch(key, {
+        patch({
           status: 'ready',
           runId: run.id,
           signals: detail.signals.filter((signal) => signal.symbol === subject),
@@ -116,25 +160,27 @@ export function useModelOverlays(
           studies: studies.studies,
         });
       } catch (caught: unknown) {
-        if (generation.current !== mine) return;
-        patch(key, {
+        patch({
           status: 'error',
           error: caught instanceof Error ? caught.message : 'the model could not be run',
         });
       }
     },
-    [onRunCreated, patch],
+    [bucket, onRunCreated],
   );
 
-  const toggle = useCallback((key: string) => {
-    setOverlays((current) =>
-      current.map((o) => (o.key === key ? { ...o, visible: !o.visible } : o)),
-    );
-  }, []);
+  const toggle = useCallback(
+    (key: string) =>
+      writeOverlays(bucket, (current) =>
+        current.map((o) => (o.key === key ? { ...o, visible: !o.visible } : o)),
+      ),
+    [bucket],
+  );
 
-  const remove = useCallback((key: string) => {
-    setOverlays((current) => current.filter((o) => o.key !== key));
-  }, []);
+  const remove = useCallback(
+    (key: string) => writeOverlays(bucket, (current) => current.filter((o) => o.key !== key)),
+    [bucket],
+  );
 
   return { overlays, apply, toggle, remove };
 }
