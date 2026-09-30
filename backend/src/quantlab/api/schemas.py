@@ -679,6 +679,12 @@ class UniverseList(BaseModel):
     items: list[UniverseSummary]
 
 
+class UniverseMembers(BaseModel):
+    name: str
+    as_of: str
+    symbols: list[str]
+
+
 class UniversePublishRequest(BaseModel):
     name: str
     symbols: list[str]

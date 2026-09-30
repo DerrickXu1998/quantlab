@@ -179,12 +179,8 @@ export function draftHasErrors(draft: Draft, catalog: CatalogModel[]): boolean {
 export function draftWarnings(draft: Draft): string[] {
   const warnings: string[] = [];
   const exits = draft.components.filter((component) => component.role === 'exit');
-  const entries = draft.components.filter((component) => component.role === 'entry');
   const execution = draft.execution;
 
-  if (entries.length === 0) {
-    warnings.push('No entry signal: nothing will ever open a position.');
-  }
   if (exits.length === 0) {
     const protective =
       execution.stop_loss_pct !== null ||
@@ -198,26 +194,53 @@ export function draftWarnings(draft: Draft): string[] {
         : 'No exit signal and no stop, target or holding limit. Every position will stay open to the end of the window.',
     );
   }
-  if (draft.components.length > 0 && draft.components.every((c) => c.role === 'filter')) {
-    warnings.push('Filters only gate entries — a strategy of nothing but filters never trades.');
+  return warnings;
+}
+
+/**
+ * Why this draft cannot run, in the order a reader should fix them. Empty when
+ * it can.
+ *
+ * These are the strategy-level refusals of `StrategySpec.validate` on the
+ * backend, checked here so Run is disabled with the reason beside it rather
+ * than enabled into a server error. Warnings (above) are things the engine
+ * will do that the reader may not expect; blockers are things it will not do
+ * at all. Parameter ranges are {@link draftHasErrors}' and are marked on the
+ * fields themselves.
+ */
+export function draftBlockers(draft: Draft): string[] {
+  const blockers: string[] = [];
+  const entries = draft.components.filter((component) => component.role === 'entry');
+  const exits = draft.components.filter((component) => component.role === 'exit');
+
+  if (draft.components.length === 0) {
+    blockers.push('Add at least one rule — start with an entry signal from the catalogue.');
+    return blockers;
   }
-  if (draft.entry_logic === 'weighted') {
+  if (entries.length === 0) {
+    blockers.push(
+      draft.components.every((component) => component.role === 'filter')
+        ? 'Filters only gate entries — add an entry signal, or nothing will ever open a position.'
+        : 'No entry signal: add one, or nothing will ever open a position.',
+    );
+  }
+  if (draft.entry_logic === 'weighted' && entries.length > 0) {
     const available = entries.reduce((total, component) => total + component.weight, 0);
     if (draft.entry_threshold > available) {
-      warnings.push(
+      blockers.push(
         `Entry threshold ${draft.entry_threshold} is above the ${available} of weight available, so entries can never fire.`,
       );
     }
   }
-  if (draft.exit_logic === 'weighted') {
+  if (draft.exit_logic === 'weighted' && exits.length > 0) {
     const available = exits.reduce((total, component) => total + component.weight, 0);
-    if (exits.length > 0 && draft.exit_threshold > available) {
-      warnings.push(
+    if (draft.exit_threshold > available) {
+      blockers.push(
         `Exit threshold ${draft.exit_threshold} is above the ${available} of weight available, so signal exits can never fire.`,
       );
     }
   }
-  return warnings;
+  return blockers;
 }
 
 export function draftToSpec(draft: Draft, catalog: CatalogModel[]): StrategySpec {

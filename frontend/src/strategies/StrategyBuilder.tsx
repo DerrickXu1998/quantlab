@@ -27,6 +27,7 @@ import {
   describeStrategy,
   draftHasErrors,
   draftToSpec,
+  draftBlockers,
   draftWarnings,
   emptyDraft,
   findModel,
@@ -127,6 +128,7 @@ export function StrategyBuilder({
     [draft, serverWarnings],
   );
   const hasErrors = useMemo(() => draftHasErrors(draft, catalog), [draft, catalog]);
+  const blockers = useMemo(() => draftBlockers(draft), [draft]);
 
   const addComponent = useCallback((model: CatalogModel, role: StrategyRole) => {
     setDraft((current) => ({ ...current, components: [...current.components, componentFor(model, role)] }));
@@ -200,7 +202,7 @@ export function StrategyBuilder({
   };
 
   const run = () => {
-    if (symbols.length === 0 || hasErrors) return;
+    if (symbols.length === 0 || hasErrors || blockers.length > 0) return;
     // The inline spec, never the stored id: what runs is what is on screen,
     // including edits that have not been saved. A run pinned to an id would
     // quietly execute the last saved version instead.
@@ -753,13 +755,20 @@ export function StrategyBuilder({
             <Button
               type="button"
               className="px-4"
-              disabled={inFlight || symbols.length === 0 || hasErrors}
+              disabled={inFlight || symbols.length === 0 || hasErrors || blockers.length > 0}
               onClick={run}
             >
               <Play size={16} strokeWidth={1.5} aria-hidden="true" />
               {inFlight ? 'Running…' : 'Run backtest'}
             </Button>
           </div>
+          {blockers.length > 0 ? (
+            <ul data-testid="strategy-blockers" role="alert" className="space-y-1 text-xs text-destructive">
+              {blockers.map((blocker) => (
+                <li key={blocker}>{blocker}</li>
+              ))}
+            </ul>
+          ) : null}
           {hasErrors ? (
             <p role="alert" className="text-xs text-destructive">
               One or more component parameters is out of range. Fix the fields marked above before

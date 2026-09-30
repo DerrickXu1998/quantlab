@@ -373,6 +373,27 @@ describe('StrategyBuilder', () => {
     expect(spec.entry_logic).toBe('all');
   });
 
+  it('will not run a strategy the engine would refuse, and says why beside Run', async () => {
+    const person = await openBuilder();
+    await person.type(screen.getByLabelText(/add tickers/i), 'ZZTRND{Enter}');
+    const run = screen.getByRole('button', { name: /run backtest/i });
+
+    // Nothing added yet: disabled with the reason, not enabled into a 422.
+    expect(run).toBeDisabled();
+    expect(screen.getByTestId('strategy-blockers')).toHaveTextContent(/add at least one rule/i);
+
+    // A filter alone still cannot open a position.
+    await person.click(addFrom('adx-trend-filter', 'Filter'));
+    expect(run).toBeDisabled();
+    expect(screen.getByTestId('strategy-blockers')).toHaveTextContent(/filters only gate entries/i);
+
+    // An entry signal is what makes it runnable.
+    await person.click(addFrom('rsi-threshold', 'Entry'));
+    expect(screen.queryByTestId('strategy-blockers')).not.toBeInTheDocument();
+    expect(run).toBeEnabled();
+    expect(apiClient.createStrategyRun).not.toHaveBeenCalled();
+  });
+
   it('runs the strategy that is on screen, not the last one that was saved', async () => {
     vi.mocked(apiClient.createStrategyRun).mockRejectedValue(
       new apiClient.ApiError(0, 'no backend'),

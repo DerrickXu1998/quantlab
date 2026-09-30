@@ -35,6 +35,7 @@ export type SignalList = components['schemas']['SignalList'];
 export type Universe = components['schemas']['Universe'];
 export type UniverseList = components['schemas']['UniverseList'];
 export type UniversePublishRequest = components['schemas']['UniversePublishRequest'];
+export type UniverseMembers = components['schemas']['UniverseMembers'];
 
 export type SignalQuery = NonNullable<paths['/signals']['get']['parameters']['query']>;
 export type PriceQuery = NonNullable<
@@ -394,6 +395,12 @@ export function screen(params: {
 /** The universes a screen may be run over. */
 export function listUniverses(): Promise<UniverseList> {
   return request<UniverseList>('/universes');
+}
+
+/** A saved universe's members, as its newest snapshot on or before `asOf`. */
+export function getUniverseMembers(name: string, asOf?: string): Promise<UniverseMembers> {
+  const query = asOf ? `?${new URLSearchParams({ as_of: asOf })}` : '';
+  return request<UniverseMembers>(`/universes/${encodeURIComponent(name)}${query}`);
 }
 
 /** Publish the current symbol list as a named universe snapshot. */

@@ -362,6 +362,26 @@ def publish_universe(request: Request, body: schemas.UniversePublishRequest) -> 
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.get(
+    "/universes/{name}",
+    response_model=schemas.UniverseMembers,
+    tags=["instruments"],
+    operation_id="getUniverseMembers",
+    dependencies=[Depends(require_seeded)],
+)
+def get_universe_members(request: Request, name: str, as_of: date | None = None) -> dict:
+    """The members of a saved universe, as its newest snapshot on or before
+    ``as_of`` (today when omitted) recorded them -- what a strategy picker
+    loads when the reader chooses a universe they saved earlier."""
+    members = backend(request).universe_members(name, _as_of(as_of))
+    if members is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no universe {name!r} with a snapshot on or before {_as_of(as_of)}",
+        )
+    return members
+
+
 #: The metric vocabulary, taken from the response schema so the request cannot
 #: accept a metric the response has no column for.
 SCREEN_METRICS: tuple[str, ...] = get_args(schemas.ScreenMetric)
