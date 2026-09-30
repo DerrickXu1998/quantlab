@@ -1,7 +1,15 @@
 import { Eye, EyeOff, Hourglass, Play, Sigma, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import type { CatalogModel, ParamSpecV2 } from '../../api/types';
-import { CATEGORY_LABELS, UNIT_PRESENTATION, unitOf } from '../../api/types';
+import type { CatalogModel, FillTiming, ParamSpecV2 } from '../../api/types';
+import {
+  CATEGORY_LABELS,
+  FILL_TIMINGS,
+  FILL_TIMING_EXPLAINERS,
+  FILL_TIMING_LABELS,
+  FILL_TIMING_SHORT,
+  UNIT_PRESENTATION,
+  unitOf,
+} from '../../api/types';
 import { Button } from '../../components/ui/button';
 import { Label, Select, fieldClasses } from '../../components/ui/field';
 import { StatusBadge } from '../../components/ui/status-badge';
@@ -16,7 +24,12 @@ import {
 } from '../../workbench/paramSpec';
 import { formatCount, formatPercent } from '../format';
 import { Panel } from './Panel';
-import { markerLabel, type ModelOverlay } from './useModelOverlays';
+import {
+  DEFAULT_EXECUTION_CHOICE,
+  markerLabel,
+  type ExecutionChoice,
+  type ModelOverlay,
+} from './useModelOverlays';
 
 /**
  * Models that say *when*: the ones with an entry or exit role. Filters are
@@ -29,6 +42,24 @@ export function signalModels(catalog: CatalogModel[]): CatalogModel[] {
 }
 
 const DEFAULT_MODEL = 'sma-crossover';
+
+/** How the overlay traded, beside its parameters: the return depends on both. */
+function executionSummary(execution: ExecutionChoice): string {
+  const parts = [FILL_TIMING_SHORT[execution.fill_timing]];
+  if (execution.commission_bps > 0) parts.push(`${execution.commission_bps} bps commission`);
+  if (execution.slippage_bps > 0) parts.push(`${execution.slippage_bps} bps slippage`);
+  if (execution.commission_bps === 0 && execution.slippage_bps === 0) parts.push('no costs');
+  return parts.join(' · ');
+}
+
+/** A cost in basis points: blank or a non-negative number. */
+function bpsError(raw: string): string | null {
+  if (raw.trim() === '') return null;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) return 'A cost cannot be negative.';
+  if (value > 1000) return 'Over 1000 bps (10%) per side is not a cost, it is a typo.';
+  return null;
+}
 
 function paramSummary(parameters: Record<string, unknown>): string {
   const entries = Object.entries(parameters);
@@ -98,6 +129,9 @@ function OverlayRow({
         </p>
         <p className="truncate font-mono text-xs text-muted-foreground">
           {paramSummary(overlay.parameters)}
+        </p>
+        <p className="truncate font-mono text-xs text-muted-foreground" data-testid="overlay-execution">
+          {executionSummary(overlay.execution)}
         </p>
         {overlay.status === 'running' ? (
           <p role="status" className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -174,6 +208,42 @@ function ParamInput({
   );
 }
 
+/** A per-side cost in basis points; blank reads as zero. */
+function BpsInput({
+  id,
+  label,
+  value,
+  error,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  error: string | null;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <Label htmlFor={id} title="Charged on every fill, entry and exit, on notional.">
+      <span>
+        {label}
+        <span className="normal-case"> (bps per side)</span>
+      </span>
+      <input
+        id={id}
+        type="number"
+        inputMode="decimal"
+        min={0}
+        step="any"
+        className={cn(fieldClasses, error && 'border-destructive')}
+        value={value}
+        aria-invalid={error ? true : undefined}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      {error ? <span className="normal-case tracking-normal text-destructive">{error}</span> : null}
+    </Label>
+  );
+}
+
 /**
  * Research's model workbench: pick a model, tune it, and see on the price
  * chart exactly where it would have fired on this one name.
@@ -199,7 +269,11 @@ export function ModelsPanel({
   start: string | null;
   end: string;
   overlays: ModelOverlay[];
-  onApply: (model: CatalogModel, parameters: Record<string, unknown>) => void;
+  onApply: (
+    model: CatalogModel,
+    parameters: Record<string, unknown>,
+    execution: ExecutionChoice,
+  ) => void;
   onToggle: (key: string) => void;
   onRemove: (key: string) => void;
 }) {
@@ -222,7 +296,16 @@ export function ModelsPanel({
   const errors = Object.fromEntries(
     (model?.parameters ?? []).map((spec) => [spec.name, localError(spec, values[spec.name] ?? '')]),
   );
-  const invalid = Object.values(errors).some(Boolean);
+  // Execution survives a change of model: it describes the trading, not the
+  // rule, and re-picking it for every model would be busywork.
+  const [fillTiming, setFillTiming] = useState<FillTiming>(DEFAULT_EXECUTION_CHOICE.fill_timing);
+  const [commission, setCommission] = useState(String(DEFAULT_EXECUTION_CHOICE.commission_bps));
+  const [slippage, setSlippage] = useState(String(DEFAULT_EXECUTION_CHOICE.slippage_bps));
+  const commissionError = bpsError(commission);
+  const slippageError = bpsError(slippage);
+
+  const invalid =
+    Object.values(errors).some(Boolean) || Boolean(commissionError) || Boolean(slippageError);
 
   const apply = () => {
     if (!model || invalid) return;
@@ -232,7 +315,11 @@ export function ModelsPanel({
       if (raw !== undefined && raw !== String(spec.default))
         parameters[spec.name] = coerce(spec, raw);
     }
-    onApply(model, parameters);
+    onApply(model, parameters, {
+      fill_timing: fillTiming,
+      commission_bps: commission.trim() === '' ? 0 : Number(commission),
+      slippage_bps: slippage.trim() === '' ? 0 : Number(slippage),
+    });
   };
 
   const byCategory = useMemo(() => {
@@ -294,6 +381,50 @@ export function ModelsPanel({
             ))}
           </div>
         ) : null}
+
+        <fieldset className="space-y-3 border-t border-border pt-3" aria-label="Execution">
+          <legend className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+            Execution
+          </legend>
+          <Label htmlFor="model-fill-timing">
+            Fills at
+            <Select
+              id="model-fill-timing"
+              value={fillTiming}
+              aria-describedby="model-fill-timing-explainer"
+              onChange={(event) => setFillTiming(event.target.value as FillTiming)}
+            >
+              {FILL_TIMINGS.map((timing) => (
+                <option key={timing} value={timing}>
+                  {FILL_TIMING_LABELS[timing]}
+                </option>
+              ))}
+            </Select>
+          </Label>
+          <p
+            id="model-fill-timing-explainer"
+            data-testid="fill-timing-explainer"
+            className="text-xs leading-relaxed text-muted-foreground"
+          >
+            {FILL_TIMING_EXPLAINERS[fillTiming]}
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <BpsInput
+              id="model-commission"
+              label="Commission"
+              value={commission}
+              error={commissionError}
+              onChange={setCommission}
+            />
+            <BpsInput
+              id="model-slippage"
+              label="Slippage"
+              value={slippage}
+              error={slippageError}
+              onChange={setSlippage}
+            />
+          </div>
+        </fieldset>
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
           <p className="font-mono text-xs text-muted-foreground">

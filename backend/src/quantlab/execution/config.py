@@ -28,7 +28,11 @@ POSITION_SIZING: tuple[str, ...] = (
     "volatility_target",
 )
 
-FILL_TIMING: tuple[str, ...] = ("signal_close", "next_open")
+FILL_TIMING: tuple[str, ...] = ("signal_close", "next_open", "next_close", "next_typical")
+
+#: Fill timings that queue the order for the session after the signal. The
+#: rest of the engine asks this rather than comparing names.
+DEFERRED_FILL_TIMING: tuple[str, ...] = ("next_open", "next_close", "next_typical")
 
 #: Why a position was closed. Recorded per trade, because "the strategy said so"
 #: and "the stop caught it" are different facts about a strategy and averaging
@@ -246,10 +250,18 @@ class ExecutionConfig:
         if self.fill_timing == "signal_close":
             out.append("Signal entries and exits are marked at the close of the signal date.")
         else:
+            where = {
+                "next_open": "the open of the session after the signal date",
+                "next_close": "the close of the session after the signal date",
+                "next_typical": (
+                    "the typical price, (high + low + close) / 3, of the session after the "
+                    "signal date -- a stand-in for VWAP, since daily bars carry no intraday "
+                    "volume profile"
+                ),
+            }[self.fill_timing]
             out.append(
-                "Signal entries and exits are filled at the open of the session after the "
-                "signal date; a signal on the last bar of the window has no session to fill in "
-                "and is dropped."
+                f"Signal entries and exits are filled at {where}; a signal on the last bar "
+                "of the window has no session to fill in and is dropped."
             )
 
         if self.commission_bps or self.slippage_bps:

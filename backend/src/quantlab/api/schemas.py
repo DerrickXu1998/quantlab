@@ -394,7 +394,9 @@ class ExecutionConfigModel(BaseModel):
     sizing_value: float | None = None
     max_positions: int | None = None
     max_position_pct: float = 1.0
-    fill_timing: Literal["signal_close", "next_open"] = "signal_close"
+    fill_timing: Literal["signal_close", "next_open", "next_close", "next_typical"] = (
+        "signal_close"
+    )
     commission_bps: float = 0.0
     slippage_bps: float = 0.0
     stop_loss_pct: float | None = None

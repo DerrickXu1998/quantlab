@@ -215,9 +215,37 @@ export const POSITION_SIZING_MODES = [
 
 export type PositionSizing = (typeof POSITION_SIZING_MODES)[number];
 
-export const FILL_TIMINGS = ['signal_close', 'next_open'] as const;
+export const FILL_TIMINGS = ['signal_close', 'next_open', 'next_close', 'next_typical'] as const;
 
 export type FillTiming = (typeof FILL_TIMINGS)[number];
+
+/** Where a signal's order fills, named for a picker. */
+export const FILL_TIMING_LABELS: Record<FillTiming, string> = {
+  signal_close: 'Close of the signal bar',
+  next_open: 'Next bar’s open',
+  next_close: 'Next bar’s close',
+  next_typical: 'Next bar’s typical price (≈VWAP)',
+};
+
+/** Why each fill timing is or is not a price you could have traded. */
+export const FILL_TIMING_EXPLAINERS: Record<FillTiming, string> = {
+  signal_close:
+    'Fills at the close of the bar that produced the signal. Optimistic: in reality you cannot know the close until it has happened.',
+  next_open:
+    'Fills at the next bar’s open, which is the first price you could genuinely have traded. A signal on the final bar has no bar to fill on and is dropped.',
+  next_close:
+    'Fills at the next bar’s close, like a market-on-close order placed the day after the signal. A stop hit during that session wins over a queued exit.',
+  next_typical:
+    'Fills at the next bar’s (high + low + close) / 3, a stand-in for VWAP: an order worked through the session rather than at either extreme. Daily bars carry no volume profile, so it is not true VWAP.',
+};
+
+/** The same, in the few words a result line has room for. */
+export const FILL_TIMING_SHORT: Record<FillTiming, string> = {
+  signal_close: 'fills at signal close',
+  next_open: 'fills next open',
+  next_close: 'fills next close',
+  next_typical: 'fills next typical price',
+};
 
 export interface ExecutionConfig {
   initial_capital: number;

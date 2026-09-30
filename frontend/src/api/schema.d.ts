@@ -1127,10 +1127,11 @@ export interface components {
             /** @default 1 */
             max_position_pct: number;
             /**
+             * @description Where signal entries and exits fill. `signal_close`: the close of the bar that produced the signal (optimistic -- that close is also the rule's input). `next_open` / `next_close`: the open or close of the following session. `next_typical`: (high + low + close) / 3 of the following session, a stand-in for VWAP. The `next_*` timings drop a signal on the window's last bar. Protective exits (stops, targets) are unaffected: they fill against the bar that hit them.
              * @default signal_close
              * @enum {string}
              */
-            fill_timing: "signal_close" | "next_open";
+            fill_timing: "signal_close" | "next_open" | "next_close" | "next_typical";
             /**
              * @description Charged per side, on notional.
              * @default 0

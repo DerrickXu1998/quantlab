@@ -240,9 +240,16 @@ export function CompanyView({ symbol, onSelectSymbol, asOf: asOfProp, onAsOfChan
                   start={firstBar}
                   end={asOf}
                   overlays={models.overlays}
-                  onApply={(model, parameters) => {
+                  onApply={(model, parameters, execution) => {
                     if (firstBar) {
-                      void models.apply({ model, parameters, symbol, start: firstBar, end: asOf });
+                      void models.apply({
+                        model,
+                        parameters,
+                        execution,
+                        symbol,
+                        start: firstBar,
+                        end: asOf,
+                      });
                     }
                   }}
                   onToggle={models.toggle}

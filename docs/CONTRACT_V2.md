@@ -262,7 +262,7 @@ assumptions that produced it.
   "max_positions": null,               // cap on concurrent open positions
   "max_position_pct": 1.0,             // cap per name, as a fraction of equity
 
-  "fill_timing": "signal_close",       // signal_close | next_open
+  "fill_timing": "signal_close",       // signal_close | next_open | next_close | next_typical
   "commission_bps": 0.0,               // charged per side, on notional
   "slippage_bps": 0.0,                 // adverse price move applied per side
 

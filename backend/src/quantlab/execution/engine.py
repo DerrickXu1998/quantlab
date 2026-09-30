@@ -31,7 +31,12 @@ from typing import Any
 
 import numpy as np
 
-from quantlab.execution.config import BPS, TRADING_DAYS_PER_YEAR, ExecutionConfig
+from quantlab.execution.config import (
+    BPS,
+    DEFERRED_FILL_TIMING,
+    TRADING_DAYS_PER_YEAR,
+    ExecutionConfig,
+)
 from quantlab.indicators.technical import atr as atr_indicator
 
 #: Resolution order within one date; mirrors the composer's own ordering.
@@ -154,9 +159,27 @@ class _Position:
     borrow_accrued: float = 0.0
 
 
+def _deferred_fill_price(fill_timing: str, bar: Any) -> float:
+    """Where a queued order fills on the session after its signal.
+
+    ``next_typical`` is (high + low + close) / 3: the usual stand-in for VWAP
+    when all there is is a daily bar. It is not VWAP -- that needs the volume
+    at each price -- but it sits inside the session's range the way a patiently
+    worked order does, rather than at either extreme.
+    """
+    if fill_timing == "next_open":
+        return float(bar.open)
+    if fill_timing == "next_close":
+        return float(bar.close)
+    if fill_timing == "next_typical":
+        return (float(bar.high) + float(bar.low) + float(bar.close)) / 3.0
+    raise ValueError(f"{fill_timing!r} does not queue orders")
+
+
 @dataclass
 class _PendingOrder:
-    """An order waiting for the next session's open (``fill_timing``)."""
+    """An order waiting for the next session (``fill_timing`` other than
+    ``signal_close``): its open, its close, or its typical price."""
 
     symbol: str
     #: Already resolved to "open" or "close": what the decision meant given the
@@ -723,8 +746,10 @@ class ExecutionSimulator:
 
         fills_today: list[Fill] = []
 
-        # 1. Orders queued yesterday fill at today's open.
-        fills_today.extend(self._drain_pending(date, bars_today, indices))
+        # 1. Orders queued yesterday for today's open fill before anything else
+        #    can happen in the session.
+        if self.config.fill_timing == "next_open":
+            fills_today.extend(self._drain_pending(date, bars_today, indices))
 
         # 2. Protective exits, against this bar's own range.
         for symbol in sorted(self._positions):
@@ -749,6 +774,12 @@ class ExecutionSimulator:
                 fill = self._close(date, symbol, price, index, reason)
                 if fill is not None:
                     fills_today.append(fill)
+
+        # 2b. Orders queued yesterday for today's close or typical price fill
+        #     only now: a stop the session hit on the way happened first, and
+        #     re-checking the book below means it wins over the queued exit.
+        if self.config.fill_timing in ("next_close", "next_typical"):
+            fills_today.extend(self._drain_pending(date, bars_today, indices))
 
         # 3 and 4. Today's decisions: closers first, then openers.
         for decision in sorted(
@@ -823,7 +854,7 @@ class ExecutionSimulator:
                 still_waiting.append(order)
                 continue
             index = indices[order.symbol]
-            price = float(bar.open)
+            price = _deferred_fill_price(self.config.fill_timing, bar)
             if order.kind == "close":
                 # Re-checked against the book rather than assumed still valid:
                 # a stop may have taken this position out in the meantime.
@@ -833,7 +864,11 @@ class ExecutionSimulator:
                         fills.append(fill)
             elif order.symbol not in self._positions:
                 side = "long" if order.direction == "bullish" else "short"
-                fill = self._open(date, order.symbol, side, price, index, at_open=True)
+                # Only an open fill has the whole session ahead of it; one at
+                # the close or through the day is not exposed to this bar's
+                # range, so stops start tomorrow -- as for signal_close.
+                at_open = self.config.fill_timing == "next_open"
+                fill = self._open(date, order.symbol, side, price, index, at_open=at_open)
                 if fill is not None:
                     fills.append(fill)
         self._pending = still_waiting
@@ -885,7 +920,7 @@ class ExecutionSimulator:
             self._counters["dropped_no_bar"] += 1
             return None
 
-        if config.fill_timing == "next_open":
+        if config.fill_timing in DEFERRED_FILL_TIMING:
             self._pending.append(
                 _PendingOrder(
                     symbol=symbol,

@@ -91,6 +91,13 @@ describe('useModelOverlays', () => {
       symbols: ['AAPL.US'],
       start_date: '2015-01-02',
       end_date: '2026-09-18',
+      // Nothing chosen: the engine's own defaults, sent explicitly so the run
+      // records what it assumed.
+      execution: expect.objectContaining({
+        fill_timing: 'signal_close',
+        commission_bps: 0,
+        slippage_bps: 0,
+      }),
     });
     expect(onRunCreated).toHaveBeenCalled();
     const [overlay] = result.current.overlays;
@@ -248,7 +255,46 @@ describe('ModelsPanel', () => {
     await user.type(period, '21');
     await user.click(screen.getByRole('button', { name: /apply to aapl\.us/i }));
 
-    expect(onApply).toHaveBeenCalledWith(rsiThreshold, { period: 21 });
+    expect(onApply).toHaveBeenCalledWith(rsiThreshold, { period: 21 }, {
+      fill_timing: 'signal_close',
+      commission_bps: 0,
+      slippage_bps: 0,
+    });
+  });
+
+  it('sends the chosen fill timing and costs with the model', async () => {
+    const user = userEvent.setup();
+    const onApply = renderPanel();
+
+    await user.selectOptions(screen.getByLabelText('Fills at'), 'next_typical');
+    // Each choice says what price it means, and why.
+    expect(screen.getByTestId('fill-timing-explainer')).toHaveTextContent(/stand-in for VWAP/);
+    const commission = screen.getByLabelText(/commission/i);
+    await user.clear(commission);
+    await user.type(commission, '5');
+    const slippage = screen.getByLabelText(/slippage/i);
+    await user.clear(slippage);
+    await user.type(slippage, '2.5');
+    await user.click(screen.getByRole('button', { name: /apply to aapl\.us/i }));
+
+    expect(onApply).toHaveBeenCalledWith(expect.anything(), {}, {
+      fill_timing: 'next_typical',
+      commission_bps: 5,
+      slippage_bps: 2.5,
+    });
+  });
+
+  it('will not apply a negative cost', async () => {
+    const user = userEvent.setup();
+    const onApply = renderPanel();
+
+    const commission = screen.getByLabelText(/commission/i);
+    await user.clear(commission);
+    await user.type(commission, '-3');
+
+    expect(screen.getByText('A cost cannot be negative.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /apply to aapl\.us/i })).toBeDisabled();
+    expect(onApply).not.toHaveBeenCalled();
   });
 
   it('will not apply an out-of-range parameter', async () => {
@@ -270,11 +316,13 @@ describe('ModelsPanel', () => {
         key: 'a',
         model: rsiThreshold,
         parameters: { period: 21 },
+        execution: { fill_timing: 'next_open', commission_bps: 5, slippage_bps: 0 },
         status: 'ready',
         error: null,
         runId: 'run-7',
         signals: [signal('AAPL.US', '2024-01-02', 'bullish')],
         performance: makePerformance() as never,
+        studies: [],
         visible: true,
       },
     ]);
@@ -284,6 +332,10 @@ describe('ModelsPanel', () => {
     expect(within(row).getByText('period=21')).toBeInTheDocument();
     expect(row).toHaveTextContent(/1 signals · \d+ trades/);
     expect(row).toHaveTextContent(/vs hold/);
+    // The return depends on where it filled, so the row says.
+    expect(within(row).getByTestId('overlay-execution')).toHaveTextContent(
+      'fills next open · 5 bps commission',
+    );
   });
 
   it('does not offer filters, which belong in Strategies', () => {
