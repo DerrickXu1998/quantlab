@@ -29,9 +29,13 @@ class ParameterValidationError(ExperimentError):
     """Carries the offending parameter so the UI can report against that field
     rather than as a form-level banner."""
 
-    def __init__(self, parameter: str, message: str) -> None:
+    def __init__(self, parameter: str, message: str, *, qualified: bool = False) -> None:
         self.parameter = parameter
-        super().__init__(f"{parameter}: {message}")
+        # A qualified message already says what it is about -- a strategy
+        # error names its own path -- so prefixing the field again would read
+        # "fast: components[0].parameters.fast: ..." or, with no path at all,
+        # repeat the whole sentence twice.
+        super().__init__(message if qualified else f"{parameter}: {message}")
 
 
 class InvalidWindowError(ExperimentError):

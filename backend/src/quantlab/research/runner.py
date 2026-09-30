@@ -192,7 +192,9 @@ def resolve_spec(
         if execution:
             spec = spec.with_execution(spec.execution.merged_with(execution))
     except StrategyValidationError as exc:
-        raise errors.ParameterValidationError(_offending_field(str(exc)), str(exc)) from exc
+        raise errors.ParameterValidationError(
+            _offending_field(str(exc)), str(exc), qualified=True
+        ) from exc
     except ValueError as exc:
         if isinstance(exc, errors.ExperimentError):
             raise
@@ -208,7 +210,12 @@ def _offending_field(message: str) -> str:
     error already names its path -- ``components[0].parameters.fast: must be
     <= 200`` -- so the leaf of that path is the field, and for a single-model
     run it is exactly the parameter name the pre-strategy code reported.
+
+    A message with no path -- "a strategy needs at least one entry component"
+    -- is about the strategy as a whole, not a field named after its text.
     """
+    if ":" not in message:
+        return "strategy"
     path = message.split(":", 1)[0]
     leaf = path.rsplit(".", 1)[-1].strip()
     return leaf or "strategy"

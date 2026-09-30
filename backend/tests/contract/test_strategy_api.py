@@ -582,3 +582,47 @@ def test_with_auth_disabled_the_api_needs_no_token(db_path, monkeypatch):  # noq
 
         created = anonymous.post("/api/v1/strategies", json=rsi_plus_adx())
         assert created.status_code == 201
+
+
+# --- refusals read once, and say what to do ---------------------------------
+
+
+def test_a_run_with_no_components_says_so_once(client, token, window):
+    body = run_body(window, strategy=dict(rsi_plus_adx(), components=[]))
+    response = client.post("/api/v1/runs", json=body, headers=auth(token))
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail == "a strategy needs at least one component -- add an entry signal"
+
+
+def test_a_run_of_filters_only_is_refused_without_repeating_itself(client, token, window):
+    strategy = dict(
+        rsi_plus_adx(),
+        components=[{"rule_name": "adx-trend-filter", "role": "filter"}],
+    )
+    response = client.post(
+        "/api/v1/runs", json=run_body(window, strategy=strategy), headers=auth(token)
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail.startswith("a strategy needs at least one entry component")
+    assert detail.count("at least one entry component") == 1
+
+
+def test_a_run_with_a_bad_parameter_names_its_path_once(client, token, window):
+    strategy = dict(
+        rsi_plus_adx(),
+        components=[
+            {"rule_name": "rsi-threshold", "role": "entry", "parameters": {"period": 9999}}
+        ],
+    )
+    response = client.post(
+        "/api/v1/runs", json=run_body(window, strategy=strategy), headers=auth(token)
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail.startswith("components[0].parameters.period:")
+    assert detail.count("period") == 1

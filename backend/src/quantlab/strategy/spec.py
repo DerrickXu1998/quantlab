@@ -276,7 +276,9 @@ class StrategySpec:
 
         raw_components = data.get("components")
         if not isinstance(raw_components, list) or not raw_components:
-            raise StrategyValidationError("components must be a non-empty list")
+            raise StrategyValidationError(
+                "a strategy needs at least one component -- add an entry signal"
+            )
 
         try:
             execution = ExecutionConfig.from_dict(data.get("execution"))
