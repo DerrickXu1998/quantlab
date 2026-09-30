@@ -667,6 +667,10 @@ def create_run(request: Request, body: schemas.RunRequest, user: CurrentUser) ->
         research_errors.InvalidWindowError,
         research_errors.WindowTooShortError,
         research_errors.SelectionTooLargeError,
+        # A strategy whose fundamental gates can never open. Refused rather
+        # than recorded as a run that found nothing.
+        research_errors.DatasetUnsupportedError,
+        research_errors.NoFactCoverageError,
     ) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

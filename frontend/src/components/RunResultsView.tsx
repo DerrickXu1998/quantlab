@@ -57,7 +57,53 @@ function Coverage({ run }: { run: Run }) {
           <Numeric value={instruments_requested} format="integer" />
         </dd>
       </div>
+      {run.coverage.facts ? (
+        <div className="flex gap-1">
+          <dt className="text-muted-foreground">With filings</dt>
+          <dd data-testid="fact-coverage-count">
+            <Numeric value={run.coverage.facts.instruments_with_facts} format="integer" />
+            <span className="text-muted-foreground">/</span>
+            <Numeric value={instruments_requested} format="integer" />
+          </dd>
+        </div>
+      ) : null}
     </dl>
+  );
+}
+
+/** How many missing names to list before summarising the rest. */
+const MISSING_SHOWN = 8;
+
+/**
+ * Names whose fundamental gates could never open. A gate with no filing holds
+ * shut and says nothing, so without this a name that never filed revenue reads
+ * exactly like one whose revenue never grew.
+ */
+function FactCoverageWarning({ run }: { run: Run }) {
+  const facts = run.coverage.facts;
+  if (!facts || facts.instruments_missing_facts.length === 0) return null;
+  const requested = run.coverage.instruments_requested;
+  const byConcept = Object.entries(facts.missing_by_concept)
+    .filter(([, missing]) => missing > 0)
+    .map(([concept, missing]) => `${concept} for ${missing} of ${requested}`)
+    .join(', ');
+  const missing = facts.instruments_missing_facts;
+  const shown = missing.slice(0, MISSING_SHOWN).join(', ');
+  const rest = missing.length - MISSING_SHOWN;
+  return (
+    <div
+      role="alert"
+      data-testid="run-fact-coverage"
+      className="mt-3 flex gap-2 rounded-sm border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive"
+    >
+      <TriangleAlert size={16} strokeWidth={1.5} className="mt-px shrink-0" />
+      <span>
+        No filings for {byConcept}. The fundamental gates on {missing.length}{' '}
+        {missing.length === 1 ? 'name' : 'names'} never opened, so their silence is missing data,
+        not a verdict: {shown}
+        {rest > 0 ? ` and ${rest} more` : ''}.
+      </span>
+    </div>
   );
 }
 
@@ -207,6 +253,8 @@ export function RunResultsView({ run }: { run: RunDetailV2 }) {
           </span>
         </div>
       ) : null}
+
+      <FactCoverageWarning run={run} />
 
       {run.strategy ? <StrategyProvenance run={run} /> : null}
 

@@ -250,3 +250,132 @@ def test_oversized_selection_is_rejected_up_front(conn):
             start_date="2024-01-01",
             end_date="2024-12-31",
         )
+
+
+# --- fundamental coverage ---------------------------------------------------
+#
+# A fundamental gate with no facts holds shut and says nothing. These pin the
+# two halves of making that visible: a run that could never fire is refused,
+# and one that could partly fire says which names it could not read.
+
+
+def _annual_revenue(first_year: int, last_year: int):
+    from quantlab.storage.facts import build_series
+
+    rows = []
+    for k, year in enumerate(range(first_year, last_year + 1)):
+        rows.append(
+            {
+                "concept": "revenue",
+                "value": 1.0e9 * (1.2**k),
+                "period_start": f"{year}-01-01",
+                "period_end": f"{year}-12-31",
+                "filed_at": f"{year + 1}-03-01",
+            }
+        )
+    return build_series(rows)
+
+
+class _FactsBackend:
+    """The demo's bars with a warehouse's name and some filings: exactly the
+    store the fallback hides, and exactly the one these tests need."""
+
+    name = "warehouse"
+
+    def __init__(self, inner, facts):
+        self._inner = inner
+        self._facts = facts
+
+    def __getattr__(self, attr):
+        return getattr(self._inner, attr)
+
+    def load_facts_for(self, symbols, concepts, start, end):
+        return {s: self._facts[s] for s in symbols if s in self._facts}
+
+
+def test_a_fundamental_run_on_the_demo_is_refused_naming_the_dataset(conn):
+    """The demo has no filings. An empty run would look like a model that never fired."""
+    with pytest.raises(errors.DatasetUnsupportedError, match="synthetic demo"):
+        run_experiment(
+            conn,
+            model_name="revenue-growth",
+            symbols=_symbols(conn),
+            start_date="2024-01-01",
+            end_date="2024-12-31",
+        )
+
+
+def test_a_fundamental_run_where_no_name_has_filed_is_refused(conn):
+    backend = _FactsBackend(conn, facts={})
+    with pytest.raises(errors.NoFactCoverageError, match="revenue on or before 2024-12-31"):
+        run_experiment(
+            backend,
+            model_name="revenue-growth",
+            symbols=_symbols(conn),
+            start_date="2024-01-01",
+            end_date="2024-12-31",
+        )
+
+
+def test_partial_fact_coverage_is_reported_and_persisted(conn):
+    from quantlab.storage.experiments import SqliteExperimentStore
+
+    covered, uncovered = _symbols(conn)
+    backend = _FactsBackend(conn, facts={covered: _annual_revenue(2018, 2023)})
+
+    result = run_experiment(
+        backend,
+        model_name="revenue-growth",
+        symbols=[covered, uncovered],
+        start_date="2024-01-01",
+        end_date="2024-12-31",
+    )
+
+    facts = result.coverage.facts
+    assert facts is not None
+    assert facts.concepts == ["revenue"]
+    assert facts.instruments_with_facts == 1
+    assert facts.missing_by_concept == {"revenue": 1}
+    assert facts.instruments_missing_facts == [uncovered]
+
+    store = SqliteExperimentStore(conn.db_path)
+    store.save_run(result)
+    stored = store.get_run(result.id, None)
+    assert stored["coverage"]["facts"] == {
+        "concepts": ["revenue"],
+        "instruments_with_facts": 1,
+        "missing_by_concept": {"revenue": 1},
+        "instruments_missing_facts": [uncovered],
+    }
+
+
+def test_a_run_without_fundamental_rules_reports_no_fact_coverage(conn):
+    result = run_experiment(
+        conn,
+        model_name="sma-crossover",
+        symbols=_symbols(conn),
+        start_date="2024-01-01",
+        end_date="2024-12-31",
+    )
+
+    assert result.coverage.facts is None
+
+
+def test_a_name_missing_one_of_two_concepts_counts_as_missing():
+    """pe-filter reads net_income and shares_outstanding; half a P/E is none."""
+    from quantlab.research.runner import _fact_coverage
+    from quantlab.storage.facts import build_series
+
+    only_income = build_series(
+        [
+            {"concept": "net_income", "value": 1.0, "period_start": "2023-01-01",
+             "period_end": "2023-12-31", "filed_at": "2024-03-01"},
+        ]
+    )
+    coverage = _fact_coverage(
+        ["AAA", "BBB"], ["net_income", "shares_outstanding"], {"AAA": only_income}
+    )
+
+    assert coverage.instruments_with_facts == 0
+    assert coverage.missing_by_concept == {"net_income": 1, "shares_outstanding": 2}
+    assert coverage.instruments_missing_facts == ["AAA", "BBB"]

@@ -78,3 +78,23 @@ class DatasetUnsupportedError(ExperimentError):
         super().__init__(
             f"model requires {requirement}, which the {dataset} dataset does not have"
         )
+
+
+class NoFactCoverageError(ExperimentError):
+    """None of the selection has filed anything the run's rules read.
+
+    The warehouse counterpart of :class:`DatasetUnsupportedError`: the store
+    has fundamentals, just none for these names by the window's end -- a
+    UK-only selection against a valuation filter, say (docs/ROADMAP.md, data
+    gaps). Refused for the same reason: an empty result would hide the cause.
+    """
+
+    def __init__(self, concepts: list[str], instruments: int, end_date: str) -> None:
+        self.concepts = list(concepts)
+        self.instruments = instruments
+        self.end_date = end_date
+        super().__init__(
+            f"none of the {instruments} selected instruments has any filing for "
+            f"{', '.join(concepts)} on or before {end_date}, so every fundamental "
+            "gate in this strategy would stay shut"
+        )

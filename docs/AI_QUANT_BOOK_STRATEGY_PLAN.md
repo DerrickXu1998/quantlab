@@ -152,6 +152,8 @@ No options data, no Greeks, no plans. Skip.
 | D3 | Adjusted prices / total-return series | S4, S5 (quietly) | Corporate actions "reported, never applied" — return computation over splits is wrong; needed before trusting long-horizon ML labels |
 | D4 | Intraday bars | S9 (skipped), book's open-range breakout | Stooq caps ~2k 5-min bars; would need Polygon/Alpaca |
 | D5 | Borrow rates for short-cost realism | S3, S5 | No free source; use flat assumption bps first |
+| D6 | UK (`.LON`) company accounts | S7 and every fundamental filter on UK names | 0 of 99 `.LON` names have any accounts concept (Sep 2026); only FCA short positions. See ROADMAP "Fundamentals coverage" |
+| D7 | US accounts gaps (~20–45% of `.US` names per rule) | S7, fundamental filters | e.g. revenue 376/534, long_term_debt 292/534. Part structural (banks/REITs), part possibly ingest limits. See ROADMAP "Fundamentals coverage" |
 
 ### UI workflow gaps
 

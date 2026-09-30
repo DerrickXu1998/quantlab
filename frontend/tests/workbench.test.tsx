@@ -305,6 +305,40 @@ describe('RunResultsView', () => {
     expect(screen.queryByTestId('run-corporate-actions')).not.toBeInTheDocument();
   });
 
+  it('names the instruments whose fundamental gates had no filings to read', () => {
+    const missing = Array.from({ length: 10 }, (_, i) => `N${i}.LON`);
+    renderResults(
+      makeRun({
+        coverage: {
+          instruments_requested: 12,
+          instruments_with_data: 12,
+          instruments_full_warmup: 12,
+          facts: {
+            concepts: ['net_income', 'shares_outstanding'],
+            instruments_with_facts: 2,
+            missing_by_concept: { net_income: 10, shares_outstanding: 0 },
+            instruments_missing_facts: missing,
+          },
+        },
+      }),
+    );
+
+    expect(screen.getByTestId('fact-coverage-count')).toHaveTextContent('2/12');
+    const warning = screen.getByTestId('run-fact-coverage');
+    // A gate with no filing is silent; the silence must not read as a verdict.
+    expect(warning).toHaveAttribute('role', 'alert');
+    expect(warning).toHaveTextContent('net_income for 10 of 12');
+    expect(warning).not.toHaveTextContent('shares_outstanding');
+    expect(warning).toHaveTextContent(/N0\.LON.*N7\.LON and 2 more/);
+  });
+
+  it('says nothing about filings when the run read none', () => {
+    renderResults(makeRun());
+
+    expect(screen.queryByTestId('fact-coverage-count')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('run-fact-coverage')).not.toBeInTheDocument();
+  });
+
   it('marks a run recorded against another dataset as not reproducible', () => {
     renderResults(makeRun({ re_runnable: false }));
 

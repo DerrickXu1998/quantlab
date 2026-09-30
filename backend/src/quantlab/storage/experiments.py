@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import threading
 from contextlib import contextmanager
+from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -50,12 +51,23 @@ def _pg_json(value: object) -> str | None:
     return json.dumps(value, sort_keys=True) if value else None
 
 
-def _coverage(requested: int, with_data: int, full_warmup: int) -> dict:
+def _coverage(
+    requested: int, with_data: int, full_warmup: int, facts: dict | None = None
+) -> dict:
     return {
         "instruments_requested": requested,
         "instruments_with_data": with_data,
         "instruments_full_warmup": full_warmup,
+        # Null on runs whose rules read no fundamentals, and on every run
+        # recorded before fact coverage was kept.
+        "facts": facts,
     }
+
+
+def _fact_coverage(result: Any) -> dict | None:
+    """The run's fact coverage as a plain dict, for either store's JSON column."""
+    facts = getattr(result.coverage, "facts", None)
+    return asdict(facts) if facts is not None else None
 
 
 # ---------------------------------------------------------------------------
@@ -75,7 +87,8 @@ class SqliteExperimentStore:
         "id, name, model_name, model_version, parameters, symbols, start_date, end_date, "
         "status, error, created_at, signal_count, instruments_requested, "
         "instruments_with_data, instruments_full_warmup, dataset, instrument_ids, "
-        "ingest_run_ids, corporate_actions, owner_id, strategy, execution, execution_summary"
+        "ingest_run_ids, corporate_actions, owner_id, strategy, execution, execution_summary, "
+        "fact_coverage"
     )
 
     @staticmethod
@@ -84,7 +97,7 @@ class SqliteExperimentStore:
             run_id, name, model_name, model_version, parameters, symbols, start_date,
             end_date, status, error, created_at, signal_count, requested, with_data,
             full_warmup, dataset, instrument_ids, ingest_run_ids, actions, owner_id,
-            strategy, execution, execution_summary,
+            strategy, execution, execution_summary, fact_coverage,
         ) = row
         return {
             "id": run_id,
@@ -99,7 +112,12 @@ class SqliteExperimentStore:
             "error": error,
             "created_at": created_at,
             "signal_count": signal_count,
-            "coverage": _coverage(requested, with_data, full_warmup),
+            "coverage": _coverage(
+                requested,
+                with_data,
+                full_warmup,
+                json.loads(fact_coverage) if fact_coverage else None,
+            ),
             "dataset": dataset or "sqlite",
             "instrument_ids": json.loads(instrument_ids) if instrument_ids else None,
             "ingest_run_ids": json.loads(ingest_run_ids) if ingest_run_ids else None,
@@ -119,7 +137,7 @@ class SqliteExperimentStore:
         with db.connect(self.db_path) as conn:
             conn.execute(
                 f"INSERT INTO experiment_runs ({self._COLUMNS}) "
-                f"VALUES ({', '.join(['?'] * 23)})",
+                f"VALUES ({', '.join(['?'] * 24)})",
                 (
                     result.id,
                     result.name,
@@ -144,6 +162,7 @@ class SqliteExperimentStore:
                     _json_or_none(getattr(result, "strategy", None)),
                     _json_or_none(getattr(result, "execution", None)),
                     _json_or_none(getattr(result, "execution_summary", None)),
+                    _json_or_none(_fact_coverage(result)),
                 ),
             )
             conn.executemany(
@@ -337,7 +356,7 @@ class PostgresExperimentStore:
         "ingest_run_ids, corporate_actions, dataset, start_date, end_date, status, "
         "error, created_at, "
         "signal_count, instruments_requested, instruments_with_data, instruments_full_warmup, "
-        "owner_id, strategy, execution, execution_summary"
+        "owner_id, strategy, execution, execution_summary, fact_coverage"
     )
 
     @staticmethod
@@ -346,7 +365,7 @@ class PostgresExperimentStore:
             run_id, name, model_name, model_version, parameters, symbols, instrument_ids,
             ingest_run_ids, actions, dataset, start_date, end_date, status, error,
             created_at, signal_count, requested, with_data, full_warmup, owner_id,
-            strategy, execution, execution_summary,
+            strategy, execution, execution_summary, fact_coverage,
         ) = row
         return {
             "id": run_id,
@@ -365,7 +384,7 @@ class PostgresExperimentStore:
             "error": error,
             "created_at": created_at.isoformat(),
             "signal_count": signal_count,
-            "coverage": _coverage(requested, with_data, full_warmup),
+            "coverage": _coverage(requested, with_data, full_warmup, fact_coverage),
             "owner_id": owner_id,
             "strategy": strategy,
             "execution": execution,
@@ -380,7 +399,7 @@ class PostgresExperimentStore:
         with self._connect() as conn:
             conn.execute(
                 f"INSERT INTO experiment_runs ({self._COLUMNS}) "
-                "VALUES (" + ", ".join(["%s"] * 23) + ")",
+                "VALUES (" + ", ".join(["%s"] * 24) + ")",
                 (
                     result.id,
                     result.name,
@@ -405,6 +424,7 @@ class PostgresExperimentStore:
                     _pg_json(getattr(result, "strategy", None)),
                     _pg_json(getattr(result, "execution", None)),
                     _pg_json(getattr(result, "execution_summary", None)),
+                    _pg_json(_fact_coverage(result)),
                 ),
             )
             conn.cursor().executemany(

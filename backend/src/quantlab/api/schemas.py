@@ -158,10 +158,18 @@ class CorporateActionNotice(BaseModel):
     dividend: float | None = None
 
 
+class FactCoverage(BaseModel):
+    concepts: list[str]
+    instruments_with_facts: int
+    missing_by_concept: dict[str, int]
+    instruments_missing_facts: list[str]
+
+
 class RunCoverage(BaseModel):
     instruments_requested: int
     instruments_with_data: int
     instruments_full_warmup: int
+    facts: FactCoverage | None = None
 
 
 class Run(BaseModel):
