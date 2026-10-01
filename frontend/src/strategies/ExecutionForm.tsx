@@ -1,10 +1,13 @@
 import { useId, type ReactNode } from 'react';
-import type { ExecutionConfig, FillTiming, PositionSizing } from '../api/types';
+import type { ExecutionConfig, FillTiming, PositionSizing, PriceAdjustment } from '../api/types';
 import {
   FILL_TIMINGS,
   FILL_TIMING_EXPLAINERS,
   FILL_TIMING_LABELS,
   POSITION_SIZING_MODES,
+  PRICE_ADJUSTMENTS,
+  PRICE_ADJUSTMENT_EXPLAINERS,
+  PRICE_ADJUSTMENT_LABELS,
   SIZING_VALUE_MEANING,
 } from '../api/types';
 import { Input, Select } from '../components/ui/field';
@@ -498,6 +501,34 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
             )}
           </Field>
         ) : null}
+      </Section>
+
+      <Section
+        title="Splits & dividends"
+        note="Stored prices are what traded. This decides whether signals see a split as a crash, and whether a held position collects its dividends."
+      >
+        <Field
+          label="Price adjustment"
+          explainer={PRICE_ADJUSTMENT_EXPLAINERS[value.price_adjustment ?? 'split_dividend']}
+          full
+        >
+          {({ id, describedBy }) => (
+            <Select
+              id={id}
+              aria-describedby={describedBy}
+              value={value.price_adjustment ?? 'split_dividend'}
+              onChange={(event) =>
+                patch({ price_adjustment: event.target.value as PriceAdjustment })
+              }
+            >
+              {PRICE_ADJUSTMENTS.map((mode) => (
+                <option key={mode} value={mode}>
+                  {PRICE_ADJUSTMENT_LABELS[mode]}
+                </option>
+              ))}
+            </Select>
+          )}
+        </Field>
       </Section>
     </div>
   );

@@ -982,6 +982,11 @@ export interface components {
             pnl: number;
             /** @default 0 */
             fees: number;
+            /**
+             * @description Dividend cash while held: received on a long, paid (negative) on a short. Included in pnl and return_pct.
+             * @default 0
+             */
+            dividends: number;
         };
         PerformanceMetrics: {
             /** @description Fraction, e.g. 0.12 for +12%. */
@@ -1188,6 +1193,12 @@ export interface components {
              * @default 0
              */
             borrow_cost_bps: number;
+            /**
+             * @description How splits and dividends are treated. split_dividend: signals read prices back-adjusted for both as of the run's end date; trades fill at traded prices, a split multiplies the shares held and a dividend is paid to a long (charged to a short) in cash on its ex-date. split: the same for splits only. none: raw prices and no events -- what a run stored before this field existed re-executes under.
+             * @default split_dividend
+             * @enum {string}
+             */
+            price_adjustment: "split_dividend" | "split" | "none";
         };
         /** @description What the engine did, including what it refused to do. The rejection counters matter as much as the fills: a strategy whose signals were mostly dropped for want of a free slot has not been tested, and without these it looks identical to one that simply signalled rarely. */
         ExecutionSummary: {
@@ -1201,6 +1212,9 @@ export interface components {
             total_commission?: number;
             total_slippage?: number;
             total_borrow?: number;
+            total_dividends?: number;
+            splits_applied?: number;
+            dividends_applied?: number;
             /** @description Dates where the entry logic said both "long" and "short", and so said nothing. Neither side was taken. */
             contradictions?: number;
         };
@@ -1208,6 +1222,8 @@ export interface components {
             commission?: number;
             slippage?: number;
             borrow?: number;
+            /** @description Net dividend cash over the run; income, shown beside the costs. */
+            dividends?: number;
         };
         /**
          * @description Why a position closed. "The strategy said so" and "the stop caught it" are different facts about a strategy, and averaging them into one win rate hides which one is doing the work.
@@ -1245,6 +1261,8 @@ export interface components {
             total_slippage: number;
             /** @default 0 */
             total_borrow: number;
+            /** @default 0 */
+            total_dividends: number;
         };
         FundamentalFact: {
             concept: string;

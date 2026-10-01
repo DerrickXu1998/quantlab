@@ -1,4 +1,4 @@
-import { AlertTriangle, TriangleAlert } from 'lucide-react';
+import { AlertTriangle, Info, TriangleAlert } from 'lucide-react';
 import { useState } from 'react';
 import type { Run } from '../api/client';
 import type { ExecutionConfig, RunDetailV2 } from '../api/types';
@@ -235,16 +235,49 @@ export function RunResultsView({ run }: { run: RunDetailV2 }) {
         </div>
       </header>
 
-      {/* A correctness warning, not a footnote: stored bars are unadjusted, so
-          any signal near an ex-date may be an artefact of the action rather
-          than a market move. Splits break the series outright and stay red;
-          dividends only shave the price by the payout and are informational. */}
+      {/* Splits and dividends in the window, and what the run did about them.
+          A run stored before adjustment existed traded raw prices: there a
+          split breaks the series outright and stays a red correctness warning,
+          and a dividend only shaves the price, so it is informational. A run
+          that adjusted says so, so the list reads as handled, not as a hazard. */}
       {(() => {
         const actions = run.corporate_actions ?? [];
+        const adjustment = run.execution?.price_adjustment ?? 'none';
         const splits = actions.filter((a) => a.action_type === 'split');
         const dividends = actions.filter((a) => a.action_type !== 'split');
         const list = (xs: typeof actions) =>
           xs.map((a) => `${a.symbol} ${a.ex_date}`).join(', ');
+        const info =
+          'mt-3 flex gap-2 rounded-sm border border-border bg-muted/40 p-2 text-xs text-muted-foreground';
+        if (adjustment !== 'none') {
+          const handled = adjustment === 'split_dividend' ? dividends : [];
+          const ignored = adjustment === 'split' ? dividends : [];
+          return (
+            <>
+              {splits.length > 0 || handled.length > 0 ? (
+                <div data-testid="run-corporate-adjustments" className={info}>
+                  <Info size={16} strokeWidth={1.5} className="mt-px shrink-0" />
+                  <span>
+                    {splits.length > 0
+                      ? `Adjusted for splits: ${list(splits)}. Signals read split-adjusted prices; shares held were multiplied on each ex-date. `
+                      : ''}
+                    {handled.length > 0
+                      ? `Dividends paid in cash on ${handled.length} ex-date${handled.length === 1 ? '' : 's'}: ${list(handled)}.`
+                      : ''}
+                  </span>
+                </div>
+              ) : null}
+              {ignored.length > 0 ? (
+                <div data-testid="run-dividend-notices" className={info}>
+                  <TriangleAlert size={16} strokeWidth={1.5} className="mt-px shrink-0" />
+                  <span>
+                    Dividend ex-dates in window (not credited — price return only): {list(ignored)}.
+                  </span>
+                </div>
+              ) : null}
+            </>
+          );
+        }
         return (
           <>
             {splits.length > 0 ? (
@@ -256,15 +289,13 @@ export function RunResultsView({ run }: { run: RunDetailV2 }) {
                 <TriangleAlert size={16} strokeWidth={1.5} className="mt-px shrink-0" />
                 <span>
                   Unadjusted prices across splits: {list(splits)}. Moves near those dates may be
-                  artefacts of the split rather than the market.
+                  artefacts of the split rather than the market. Re-run with split adjustment to
+                  correct it.
                 </span>
               </div>
             ) : null}
             {dividends.length > 0 ? (
-              <div
-                data-testid="run-dividend-notices"
-                className="mt-3 flex gap-2 rounded-sm border border-border bg-muted/40 p-2 text-xs text-muted-foreground"
-              >
+              <div data-testid="run-dividend-notices" className={info}>
                 <TriangleAlert size={16} strokeWidth={1.5} className="mt-px shrink-0" />
                 <span>
                   Dividend ex-dates in window (prices unadjusted): {list(dividends)}. Returns near

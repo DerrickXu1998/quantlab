@@ -8,6 +8,8 @@ change, and none of them should force the other two to be re-tested.
 
 from __future__ import annotations
 
+from quantlab.execution import adjustments
+from quantlab.execution.adjustments import PRICE_ADJUSTMENT, CorporateAction
 from quantlab.execution.config import (
     BPS,
     DEFAULT_EXECUTION,
@@ -31,6 +33,9 @@ from quantlab.execution.engine import (
 
 __all__ = [
     "BPS",
+    "PRICE_ADJUSTMENT",
+    "CorporateAction",
+    "adjustments",
     "DEFAULT_EXECUTION",
     "EXIT_REASONS",
     "FILL_TIMING",

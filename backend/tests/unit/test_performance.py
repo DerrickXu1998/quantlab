@@ -322,4 +322,4 @@ def test_the_caveats_travel_with_the_numbers():
     assert "equal-weight" in joined
     assert "transaction cost" in joined
     assert "slippage" in joined
-    assert "unadjusted" in joined
+    assert "splits and dividends" in joined  # how corporate actions were treated

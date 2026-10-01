@@ -31,7 +31,7 @@ from datetime import UTC, datetime, timedelta
 from datetime import date as _date
 from typing import Any
 
-from quantlab.execution import ExecutionConfig, simulate
+from quantlab.execution import ExecutionConfig, adjustments, simulate
 from quantlab.logging import get_logger
 from quantlab.research import errors
 from quantlab.signals.registry import get_rule
@@ -331,9 +331,18 @@ def run_experiment(
             raise errors.UnknownSymbolError(missing)
         series = backend.load_bars_for(wanted_series, warmup_start, end_date)
 
+    # Splits and dividends from the warm-up start: an action in the warm-up
+    # still restates every bar before it, and those bars feed the indicators.
+    # Signals read back-adjusted bars; the engine trades the raw ones and is
+    # handed the actions as events (execution.adjustments).
+    mode = spec.execution.price_adjustment
+    all_actions = backend.corporate_actions(requested_symbols, warmup_start, end_date)
+    actions = adjustments.by_symbol(all_actions, mode, end=end_date)
+    signal_bars = adjustments.adjust_all(bars_by_symbol, actions)
+
     decisions, composition = compose(
         spec,
-        bars_by_symbol,
+        signal_bars,
         requested_symbols,
         facts_by_symbol=facts_by_symbol,
         series=series,
@@ -344,7 +353,7 @@ def run_experiment(
     # Execute over the full loaded series -- an ATR stop set on the first
     # session of the window needs the bars behind it -- but score only from the
     # window start. Nothing can happen before it: no decision exists there.
-    result = simulate(requested_symbols, bars_by_symbol, in_window, spec.execution)
+    result = simulate(requested_symbols, bars_by_symbol, in_window, spec.execution, actions)
 
     # Surrogate identities, where the store has them. Recorded because the
     # canonical symbol is unique but editable, while instrument_id is the
@@ -357,9 +366,10 @@ def run_experiment(
     ingest_runs = backend.ingest_run_ids(requested_symbols, warmup_start, end_date) or None
 
     earliest = backend.earliest_bar_dates(requested_symbols)
-    # Reported, never applied: stored bars are unadjusted, so a split inside
+    # The window's actions, reported with the run. Whether they were applied
+    # is the run's `execution.price_adjustment`; under `none` a split inside
     # the window makes the series jump in a way that is an artefact.
-    actions = backend.corporate_actions(requested_symbols, start_date, end_date)
+    window_actions = [a for a in all_actions if start_date <= str(a["ex_date"])[:10] <= end_date]
     instruments_with_facts = (
         fact_coverage.instruments_with_facts if fact_coverage is not None else None
     )
@@ -398,7 +408,7 @@ def run_experiment(
         dataset=getattr(backend, "name", "sqlite"),
         instrument_ids=instrument_ids,
         ingest_run_ids=ingest_runs,
-        corporate_actions=actions,
+        corporate_actions=window_actions,
         strategy=spec.to_dict(),
         execution=spec.execution.to_dict(),
         execution_summary={
@@ -429,7 +439,7 @@ def run_experiment(
             "fact_concepts": wanted_concepts or None,
             "dataset": run.dataset,
             "ingest_run_ids": ingest_runs,
-            "corporate_actions": len(actions),
+            "corporate_actions": len(window_actions),
         },
     )
     return run
@@ -460,15 +470,18 @@ def execution_config_for(run: dict) -> ExecutionConfig:
 
     A run recorded before execution criteria existed has none, and gets the
     defaults -- which are exactly the behaviour that was hardcoded at the time,
-    so re-deriving its performance still reproduces it.
+    so re-deriving its performance still reproduces it. Likewise a run recorded
+    before ``price_adjustment`` existed traded raw prices, and gets ``none``.
     """
     stored = run.get("execution")
     if not stored:
-        return ExecutionConfig()
+        return ExecutionConfig(price_adjustment="none")
+    # Recorded before splits and dividends were applied: it ran on raw prices.
+    stored = {"price_adjustment": "none", **stored}
     try:
         return ExecutionConfig.from_dict(stored)
     except ValueError:
         # A stored config this build cannot parse is a forward-compatibility
         # problem, not a reason to refuse to show the run at all.
         logger.warning("run_execution_unreadable", extra={"run_id": run.get("id")})
-        return ExecutionConfig()
+        return ExecutionConfig(price_adjustment="none")

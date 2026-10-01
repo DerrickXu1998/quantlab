@@ -294,8 +294,8 @@ describe('StrategyBuilder', () => {
     expect(within(starters).getAllByRole('listitem')).toHaveLength(templates.length);
     expect(within(book).getAllByRole('listitem')).toHaveLength(1);
     expect(book).toHaveTextContent('S1 · Regime-gated trend following');
-    // The unadjusted-price warning travels with the presets that need it most.
-    expect(book).toHaveTextContent(/unadjusted/i);
+    // The split caveat travels with the presets that span the most of them.
+    expect(book).toHaveTextContent(/split/i);
   });
 
   it('loads a template into the builder as a working, unsaved strategy', async () => {

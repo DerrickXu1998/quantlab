@@ -34,6 +34,7 @@ from __future__ import annotations
 from itertools import pairwise
 from typing import Any
 
+from quantlab.execution.adjustments import raw_close
 from quantlab.signals.registry import ParamSpec, SignalEvent, register_signal_rule
 
 #: How old a filed figure may be before a gate stops trusting it.
@@ -107,7 +108,9 @@ def _market_cap(bars, i: int, facts, on: str, max_stale_days: int) -> float | No
     shares = _value(facts, "shares_outstanding", on, max_stale_days)
     if shares is None or shares <= 0:
         return None
-    return bars[i].close * shares
+    # The traded price, not a back-adjusted one: `shares_outstanding` is in the
+    # share count of its filing, before any later split.
+    return raw_close(bars[i]) * shares
 
 
 # ---------------------------------------------------------------------------
