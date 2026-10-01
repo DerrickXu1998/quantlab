@@ -38,6 +38,55 @@ CH_PASSWORD_ENV = "QUANTLAB_CH_PASSWORD"
 # legitimately hold two copies of a bar between merges.
 BARS_VIEW = "price_bars_current"
 
+# ClickHouse's MEMORY_LIMIT_EXCEEDED. On the self-hosted VM every query, merge
+# and insert shares one 2 GiB server ceiling, and when two heavy reads overlap
+# the server cancels one of them even though each fits alone. Waiting for the
+# other to finish and running it again turns that into a slower answer rather
+# than an error. A query over its *own* per-query limit is not retried: it
+# would fail identically, only later.
+MEMORY_LIMIT_EXCEEDED = 241
+#: Backoff between attempts, in seconds -- about half a minute in all, longer
+#: than the heavy reads it waits on take on this host.
+MEMORY_RETRY_DELAYS: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 16.0)
+
+
+def _server_memory_exhausted(exc: Exception) -> bool:
+    """True for a query cancelled because the server, not the query, ran out."""
+    code = getattr(exc, "code", None)
+    message = str(exc)
+    if code is None and f"Code: {MEMORY_LIMIT_EXCEEDED}." not in message:
+        return False
+    if code is not None and code != MEMORY_LIMIT_EXCEEDED:
+        return False
+    return "(for query)" not in message
+
+
+class _MemoryRetryingClient:
+    """A ClickHouse client whose reads retry server-wide memory cancellations.
+
+    Only ``query`` is wrapped -- it is the only read this module issues; every
+    other attribute passes through to the pooled client untouched.
+    """
+
+    def __init__(self, client: Any, sleep=None) -> None:
+        import time
+
+        self._client = client
+        self._sleep = sleep or time.sleep
+
+    def query(self, *args: Any, **kwargs: Any) -> Any:
+        for delay in MEMORY_RETRY_DELAYS:
+            try:
+                return self._client.query(*args, **kwargs)
+            except Exception as exc:
+                if not _server_memory_exhausted(exc):
+                    raise
+                self._sleep(delay)
+        return self._client.query(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
 
 def configured() -> bool:
     """True when both halves of the warehouse are configured."""
@@ -157,9 +206,12 @@ class Warehouse:
         A pool of clients rather than one shared client: clickhouse_connect's
         Client carries no lock and mutable per-instance state, so sharing it
         across the API's handler threads would be a data race.
+
+        Reads through it retry server-wide memory cancellations; see
+        MEMORY_LIMIT_EXCEEDED.
         """
         with self._ensure_bars_pool().acquire() as client:
-            yield client
+            yield _MemoryRetryingClient(client)
 
     def close(self) -> None:
         """Release both pools. Idempotent; used at shutdown and in tests."""
