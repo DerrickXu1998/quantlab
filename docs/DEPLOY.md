@@ -1,9 +1,9 @@
 # Deploying QuantLab
 
 The work is split in two. **Vercel** builds and serves the SPA from `frontend/`.
-One `e2-standard-2` Compute Engine VM runs **the API**; its datastores are
-**managed services** — bars in ClickHouse Cloud, the catalog in a managed
-Postgres — reached over TLS.
+One `e2-standard-2` Compute Engine VM runs **the API and its datastores** —
+bars in ClickHouse, the catalog in Postgres, both as containers whose data lives
+on the VM's separate 100 GB persistent data disk.
 GitHub Actions builds two images, pushes them to Artifact Registry, and restarts
 Compose on the VM over an IAP SSH tunnel. Both pipelines cost nothing; the VM is
 the bill.
@@ -22,10 +22,9 @@ the bill.
                                 caddy :80/:443  (TLS, the only public port)
                                   -> backend (uvicorn, 2 workers)
                                   [migrate + ingest run from the ingest image]
-                                        |
-                                        | TLS
-                                        +--> managed Postgres   (catalog)
-                                        +--> ClickHouse Cloud   (bars)
+                                  -> postgres 18      (catalog)  \  data on the
+                                  -> clickhouse 24.8  (bars)     /  data disk,
+                                                                   /mnt/disks/quantlab
 ```
 
 Two consequences follow from the split, and both are load-bearing:
@@ -39,10 +38,13 @@ Two consequences follow from the split, and both are load-bearing:
   certificate authority issues for a bare IP, so plain HTTP is only good for
   curling the box from itself.
 
-The databases are not on the VM. Their addresses and passwords live in
-`/opt/quantlab/.env` (`QUANTLAB_DB_URL` + `PGPASSWORD`, `QUANTLAB_CH_URL` +
-`QUANTLAB_CH_PASSWORD`); restrict each service's IP allow-list to the VM's
-address.
+The databases run on the VM but are never published: their ports bind to
+`127.0.0.1` only. Their settings live in `/opt/quantlab/.env`
+(`QUANTLAB_PG_USER` / `QUANTLAB_PG_PASSWORD`, `QUANTLAB_CH_USER` /
+`QUANTLAB_CH_PASSWORD`, and `QUANTLAB_DB_URL` / `QUANTLAB_CH_URL` naming the
+in-compose hosts `postgres` and `clickhouse`). The passwords are baked into the
+data directories on first start; changing them in `.env` alone does not change
+them in the databases.
 
 ## Why this shape
 
@@ -50,7 +52,8 @@ address.
 |---|---|
 | SPA on Vercel, not on the VM | Vercel already builds `frontend/` from this repository on every push. Shipping a second copy in a container would be two builds and two deploys of one artefact. The cost is CORS and a mandatory domain — see above. |
 | The ingest image still ships | It is not only the data loader: the `migrate` service runs from it, and the backend will not start until that container has exited successfully. Dropping it would stop the API booting. |
-| Managed databases, not containers on the VM | Backups, upgrades and disk growth become the provider's job, and the VM holds no market data — it can be rebuilt from scratch in minutes. The price is network latency on every query, which is why the VM should sit in the same region as the databases. |
+| Databases in containers on the VM, not managed services | Tried managed (ClickHouse Cloud + managed Postgres, September 2026) and moved back in October: the services sat in London while the VM is in Iowa, so every query paid a transatlantic round trip, and the bills outgrew the VM. On the box, queries are local and the cost is the disk. The price is that backups, upgrades and disk growth are ours — see "Data disk" below. |
+| Data on a separate persistent disk, not the boot disk | The 30 GB boot disk is mostly container images; a database that filled it would take every service down at once. The data disk can be grown, snapshotted and re-attached to a rebuilt VM on its own. `remote-deploy.sh` refuses to deploy unless it is mounted, because the databases would otherwise initialise empty on the boot disk. |
 | Artifact Registry, not Docker Hub | The VM authenticates with its own service account. No registry credentials exist on the host to leak or rotate. |
 | Workload Identity Federation, not a JSON key | Actions exchanges GitHub's OIDC token for a short-lived Google credential. There is no key in repository secrets because there is no key. |
 | SSH through IAP, not a public port 22 | The firewall admits only IAP's `35.235.240.0/20` range. |
@@ -65,7 +68,8 @@ your region** — European and Asian regions run roughly 10–20% higher.
 | Line | Monthly |
 |---|---|
 | `e2-standard-2` (2 vCPU, 8 GB), on-demand, 730 h | ~$49 |
-| 100 GB `pd-balanced` boot disk | ~$10 |
+| 30 GB `pd-balanced` boot disk | ~$3 |
+| 100 GB `pd-balanced` data disk (Postgres + ClickHouse) | ~$10 |
 | Static external IP, attached | ~$3 |
 | Egress (modest personal traffic) | ~$2–5 |
 | Artifact Registry (2 images, ~2–4 GB after the cleanup policy; first 0.5 GB free) | <$1 |
@@ -79,9 +83,10 @@ The levers, cheapest effort first:
 - **A 1-year committed use discount** on the VM is the big one — roughly a third
   off the compute line, taking the total to about $45/month. It commits you for
   a year, so make it once the shape has settled.
-- **Shrink the disk.** 100 GB is generous for compressed bars; `make coverage`
-  reports what the warehouse actually occupies. The disk cannot be shrunk after
-  creation, only grown, so size it deliberately the first time.
+- **Right-size the data disk.** 100 GB is generous: the whole warehouse
+  (476M bars, 6.4 GB compressed, plus a <1 GB catalog) used ~7 GB in October
+  2026. A disk cannot be shrunk after creation, only grown — online, in
+  seconds — so starting smaller is the cheap direction.
 - **Stop the VM when idle.** You stop paying for compute; the disk and IP still
   bill. Good for a research box you use in bursts, useless for a public demo.
 
@@ -129,25 +134,22 @@ sudo AR_REGION=europe-west2 bash /tmp/quantlab/deploy/bootstrap-vm.sh
 ```
 
 Installs Docker and Compose v2, points Docker at Artifact Registry, creates
-2 GiB of swap, generates `/opt/quantlab/.env` for you to fill in, installs the
-`quantlab.service` systemd unit so the stack survives a reboot, and enables
-unattended security upgrades.
+2 GiB of swap, formats and mounts the data disk (`DATA_DISK=/dev/disk/by-id/google-<name>`,
+via `prepare-data-disk.sh`), generates `/opt/quantlab/.env` with random
+database passwords, installs the `quantlab.service` systemd unit so the stack
+survives a reboot, and enables unattended security upgrades.
 
-Then fill in the managed databases and your ingest API keys (all free — see
-[DATA_SOURCES.md](DATA_SOURCES.md)):
+Then add your ingest API keys (all free — see [DATA_SOURCES.md](DATA_SOURCES.md)):
 
 ```bash
 sudo nano /opt/quantlab/.env
-#   QUANTLAB_DB_URL=postgresql://postgres@<pg-host>:5432/postgres?sslmode=require
-#   PGPASSWORD=...
-#   QUANTLAB_CH_URL=clickhouses://default@<service>.clickhouse.cloud:8443/quantlab
-#   QUANTLAB_CH_PASSWORD=...
 #   SEC_USER_AGENT, FRED_API_KEY, COMPANIES_HOUSE_API_KEY
 ```
 
-Passwords go in their own variables, never inside the URLs: a generated
-password needs no escaping there, and never appears in a logged URL. Allow the
-VM's external IP in both services' IP allow-lists.
+The generated database passwords are baked into the data directories on the
+first start; do not change them afterwards. Bootstrap marks a freshly prepared
+data disk as allowed one deploy while empty; after that first deploy succeeds,
+every later one refuses an empty data disk.
 
 ### 3. Domain, HTTPS and CORS — before the first deploy
 
@@ -244,60 +246,100 @@ sudo cp .env.images.prev .env.images
 sudo systemctl restart quantlab
 ```
 
-**Reach a database.** They are managed services, so connect to them directly
-(from an allow-listed address) or use each provider's web console:
+**Reach a database.** From a shell on the VM (`make prod-ssh`); the ports are
+loopback-only, so there is nothing to reach from outside:
 
 ```bash
-PGPASSWORD=... psql "postgresql://postgres@<pg-host>:5432/postgres?sslmode=require"
-clickhouse client --host <service>.clickhouse.cloud --secure --password ...
+cd /opt/quantlab
+sudo docker compose --env-file .env --env-file .env.images -f docker-compose.prod.yml \
+  exec postgres psql -U quantlab -d quantlab
+sudo docker compose --env-file .env --env-file .env.images -f docker-compose.prod.yml \
+  exec clickhouse clickhouse-client --user quantlab --password "$(sudo sed -n 's/^QUANTLAB_CH_PASSWORD=//p' .env)" -d quantlab
 ```
 
-## Moving an existing VM onto the managed databases
+## Data disk
 
-A VM set up before the move runs Postgres and ClickHouse as containers, with the
-data in their volumes. `deploy/migrate-to-managed.sh` copies it across, once,
-while those containers are still running:
-
-1. On the VM, put the managed settings in `/opt/quantlab/.env.managed`
-   (`sudo nano`, then `sudo chmod 600`) — the same four lines as above.
-2. Run it: `sudo bash migrate-to-managed.sh` (copy it over, or run it from a
-   checkout). It checks both targets, the source's foreign keys and the needed
-   Postgres extensions; pauses the API; `pg_dump`s and restores Postgres;
-   recreates and streams each ClickHouse table; compares **every** table's row
-   count; and only if all match rewrites `.env` (keeping
-   `.env.pre-managed-<time>`) and deletes `.env.managed`. The API restarts on its
-   old settings either way.
-3. Deploy (merge to `main`). The new compose file has no database containers;
-   `migrate` finds the copied schema up to date and the backend reads the
-   managed services.
-
-Until step 2 has run, `remote-deploy.sh` refuses to deploy — an `.env` still
-naming the `postgres` / `clickhouse` hosts would otherwise stop the containers
-and leave the API with nothing to read.
-
-If the old containers are already gone but the managed databases already hold
-the data you need (for example, after a manual migration or when rebuilding the
-VM against an existing managed warehouse), you can rewrite `.env` directly
-without copying from the containers:
+Postgres and ClickHouse keep their data under `/mnt/disks/quantlab`
+(`QUANTLAB_DATA_DIR`), a separate 100 GB `pd-balanced` persistent disk mounted
+by label from `/etc/fstab` with `nofail`. `deploy/prepare-data-disk.sh` formats
+it (only if it is blank — it refuses any disk carrying a signature or data) and
+mounts it; it is safe to re-run.
 
 ```bash
-QUANTLAB_DB_URL=postgresql://postgres@<pg-host>:5432/postgres?sslmode=require \
-PGPASSWORD=<postgres password> \
-QUANTLAB_CH_URL=clickhouses://default@<service>.clickhouse.cloud:8443/quantlab \
-QUANTLAB_CH_PASSWORD=<clickhouse password> \
-GCP_INSTANCE=<vm> GCP_ZONE=<zone> \
-bash deploy/set-managed-env.sh
+sudo bash deploy/prepare-data-disk.sh /dev/disk/by-id/google-<disk-device-name>
 ```
 
-This backs up the previous `.env` and updates the four managed settings. The
-next deploy — or a manual `sudo systemctl restart quantlab` — uses them.
+Two guards keep a missing disk from turning into an empty warehouse:
+`remote-deploy.sh` refuses to deploy unless the mount point is a mounted
+filesystem and both `postgres/` and `clickhouse/` under it hold data (a
+brand-new install sets `QUANTLAB_ALLOW_EMPTY_DATA=1` once), and `nofail` lets
+the VM boot without it rather than hang.
 
-The old volumes are kept, unmounted, as a fallback; remove them once you trust
-the copy:
-`docker volume rm quantlab_quantlab-chdata quantlab_quantlab-pgdata`.
+**Backups are ours now.** Snapshot the data disk on a schedule — a GCE snapshot
+schedule on the disk is the least moving parts:
 
-**Rolling back** before trusting the copy: restore `.env.pre-managed-<time>` as
-`.env` and redeploy the commit before the move.
+```bash
+gcloud compute resource-policies create snapshot-schedule quantlab-data-daily \
+  --region <region> --daily-schedule --start-time 03:00 --max-retention-days 14
+gcloud compute disks add-resource-policies <data-disk> --zone <zone> \
+  --resource-policies quantlab-data-daily
+```
+
+A crash-consistent snapshot of a running ClickHouse and Postgres restores like a
+power cut: both recover from their own write-ahead state. For a logical copy as
+well, `pg_dump` the catalog into `/opt/quantlab/backups`.
+
+**Growing the disk** is online: `gcloud compute disks resize <data-disk> --size
+200GB`, then `sudo resize2fs /dev/disk/by-id/google-<disk-device-name>`.
+
+## Moving an existing VM back from the managed databases
+
+From September to October 2026 the datastores were managed services
+(ClickHouse Cloud + ClickHouse's managed Postgres, both in London). A VM still
+pointing at them is moved back by `deploy/migrate-to-selfhost.sh`, once, while
+the managed stack is still serving. It never modifies the managed services, so
+they remain the rollback.
+
+1. Mount the data disk: `sudo bash prepare-data-disk.sh /dev/disk/by-id/google-<disk>`.
+2. Put the new local settings in `/opt/quantlab/.env.selfhost` (mode 600) — the
+   seven lines in the script's header, with fresh passwords from
+   `openssl rand -hex 24`.
+3. Copy this branch's `docker-compose.prod.yml`, `clickhouse-limits.xml` and
+   `clickhouse-users.xml` into
+   `/opt/quantlab/selfhost-staging/`.
+4. Optionally run the slow part early, with the API still serving:
+   `sudo PHASE=bulk bash migrate-to-selfhost.sh`. It starts only the local
+   `postgres` and `clickhouse`, creates the ClickHouse schema (from the repo's
+   migration: Cloud's `Shared*MergeTree` DDL does not run elsewhere) plus any
+   views the source has, and copies `price_bars` **one monthly partition at a
+   time**, checking each against the source by row count and a content hash,
+   both under `FINAL`. A month that does not match is dropped and copied again. Each month is then merged
+   to a single part (`OPTIMIZE ... PARTITION ... FINAL`): every read goes
+   through `FINAL`, and over a freshly copied, unmerged table it exceeds the
+   2 GiB server memory cap.
+5. Cut over: `sudo bash migrate-to-selfhost.sh`. It re-checks every month
+   (re-copying only what changed), pauses the API, `pg_dump`s the managed
+   catalog (excluding the provider-only `pg_stat_ch` extension) and restores it
+   into Postgres 18, compares every table's row count, and only if all match
+   rewrites `.env` (keeping `.env.pre-selfhost-<time>`, which holds the managed
+   credentials), installs the new compose file and brings the stack up.
+6. Merge the branch, so the next CI deploy ships the same compose file.
+
+**Do not merge anything else to `main` during steps 4–5.** The managed-era
+`remote-deploy.sh` runs its compose file with `--remove-orphans`, which removes
+the new `postgres` / `clickhouse` containers as orphans. Their data survives on
+the data disk, and the script can simply be run again, but the copy is
+interrupted.
+
+**Rolling back**, before anything new has been written locally: restore
+`.env.pre-selfhost-<time>` as `.env` and `docker-compose.prod.yml.pre-selfhost-<time>`
+as `docker-compose.prod.yml`, then `sudo docker compose ... up -d`. Writes made
+after the cutover are not in the managed services.
+
+The boot-disk volumes `quantlab_quantlab-chdata` / `quantlab_quantlab-pgdata`
+are from the first self-hosted era and stale since September; nothing mounts
+them. Remove them to free ~7 GB of the boot disk:
+`sudo docker volume rm quantlab_quantlab-chdata quantlab_quantlab-pgdata`.
 
 ## When something is wrong
 
@@ -310,9 +352,10 @@ the copy:
 | Browser blocks the API call as "mixed content" | The SPA is on HTTPS and `QUANTLAB_SITE_ADDRESS` is still `:80`. Set a real hostname and point `VITE_API_BASE_URL` at `https://`. |
 | Stack refuses to start, `required variable QUANTLAB_CORS_ORIGINS` | Working as intended — the API is useless to the SPA without it, so it fails loudly rather than serving something the browser will reject. |
 | API serves data that looks plausible but fictitious | It fell back to the synthetic SQLite demo because `QUANTLAB_DB_URL` or `QUANTLAB_CH_URL` is unset or wrong. `remote-deploy.sh` hard-fails on this, and `make prod-check` re-checks it any time. |
-| Deploy refuses: "still points at the retired in-compose database" | `.env` still names the old `postgres` / `clickhouse` containers. Run `deploy/migrate-to-managed.sh` first if the old containers still have the data; if they are already gone, use `deploy/set-managed-env.sh` to point `.env` at the managed services directly. |
-| `migrate` fails to connect, or times out | The managed service's IP allow-list does not include the VM's external IP, or `PGPASSWORD` / `QUANTLAB_CH_PASSWORD` is wrong. `sudo docker compose ... logs migrate` has the driver's message. |
-| API slow on every request | Round trips to the databases. Keep the VM in the same region as ClickHouse Cloud and the Postgres service; each request makes several queries, and a transatlantic round trip is ~80 ms each. |
+| Deploy refuses: "does not point at the in-compose postgres/clickhouse" | `.env` still names a managed service. Run `deploy/migrate-to-selfhost.sh` (see above). |
+| Deploy refuses: "is not a mounted filesystem" or "is empty" | The data disk is missing or unmounted. `lsblk`, `sudo mount /mnt/disks/quantlab`; a new VM runs `deploy/prepare-data-disk.sh`. Never bypass this with an empty directory on the boot disk — the databases would initialise empty. |
+| `migrate` fails with authentication errors | `QUANTLAB_PG_PASSWORD` / `QUANTLAB_CH_PASSWORD` in `.env` no longer match what the data directories were initialised with. Restore the old values; changing a password means changing it inside the database too. |
+| ClickHouse query fails with `MEMORY_LIMIT_EXCEEDED` | Working as intended: `clickhouse-limits.xml` caps a query at 1.5 GiB so one wide scan cannot OOM the 8 GiB host. Narrow the query, or raise the limit together with the container's memory limit. |
 | Disk filling | `docker system df`. The weekly prune keeps a week of superseded images. |
 | Certificate not issued | DNS must resolve to the VM *before* `QUANTLAB_SITE_ADDRESS` is set. `make prod-logs SERVICE=caddy`. |
 | Deploy blocked by frontend tests timing out | CI runs vitest with `--maxWorkers=2`. Unbounded, twenty parallel jsdom environments starve each other and six `findBy*` queries time out — a contention artefact, not a defect. The underlying reliance on wall-clock timeouts is still worth fixing in the tests. |
@@ -322,6 +365,7 @@ the copy:
 The stack is a single Compose file, so the next step up is deliberately dull:
 change the machine type (`gcloud compute instances set-machine-type`, requires a
 stop/start) and raise the memory limits in `deploy/docker-compose.prod.yml`
-together. Splitting ClickHouse onto its own VM, or moving to ClickHouse Cloud, is
-a change to two URLs in `/opt/quantlab/.env` — the backend already talks to both
-stores over the network and does not care where they live.
+together. Splitting ClickHouse onto its own VM is a change to one URL in
+`/opt/quantlab/.env` — the backend already talks to both stores over the
+network and does not care where they live. (Managed services were tried and
+reverted; see "Moving an existing VM back from the managed databases".)

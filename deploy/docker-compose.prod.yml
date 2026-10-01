@@ -10,15 +10,28 @@
 #
 #     docker compose -f docker-compose.prod.yml --env-file .env up -d
 #
-# The datastores are managed services, not containers on this VM: bars live
-# in ClickHouse Cloud and the catalog in a managed Postgres, both reached over
-# TLS from QUANTLAB_CH_URL / QUANTLAB_DB_URL in .env. Their passwords are kept
-# out of those URLs, in QUANTLAB_CH_PASSWORD and PGPASSWORD (libpq reads the
-# latter natively). Moving an existing VM over is a one-time copy -- see
-# deploy/migrate-to-managed.sh and docs/DEPLOY.md.
+# The datastores run here, as containers: bars in ClickHouse, the catalog in
+# Postgres. Their data lives on the VM's separate data disk, mounted at
+# QUANTLAB_DATA_DIR (default /mnt/disks/quantlab -- see
+# deploy/prepare-data-disk.sh), never on the boot disk: the boot disk is 30 GB
+# and mostly images, and a database that fills it takes every service down.
+# remote-deploy.sh refuses to deploy unless that disk is mounted, because
+# Docker would otherwise create the directories on the boot disk and both
+# servers would initialise EMPTY -- an API serving nothing, quietly.
 #
-# Memory budget (host has 8 GiB): backend 1G + caddy 128M, plus the on-demand
-# ingest container's 2G. With no databases on the box the rest is headroom.
+# Self-hosted rather than managed (ClickHouse Cloud, managed Postgres) since
+# October 2026: the managed services sat in London while this VM is in Iowa,
+# so every query crossed the Atlantic, and both bills outgrew the VM's. Moving
+# an existing VM back is a one-time copy -- see deploy/migrate-to-selfhost.sh
+# and docs/DEPLOY.md.
+#
+# Passwords: QUANTLAB_PG_PASSWORD / QUANTLAB_CH_PASSWORD are both what the
+# servers are initialised with and what the clients send (PGPASSWORD is set
+# from the former). They are baked into the data directories on first start;
+# changing them in .env alone does NOT change them in the databases.
+#
+# Memory budget (host has 8 GiB): clickhouse 2.5G + postgres 1G + backend 1G +
+# caddy 128M, plus the on-demand ingest container's 2G.
 
 name: quantlab
 
@@ -31,6 +44,87 @@ x-logging: &logging
     max-file: "3"
 
 services:
+  # --------------------------------------------------------------------------
+  # Bars. Append-only price history; the large one (hundreds of millions of
+  # rows, several GB compressed).
+  # --------------------------------------------------------------------------
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    environment:
+      CLICKHOUSE_USER: ${QUANTLAB_CH_USER:?set QUANTLAB_CH_USER in .env}
+      # Bare `:?`: secret scanners read `PASSWORD: <anything>` as a literal and
+      # flag an error message there as a hardcoded credential.
+      CLICKHOUSE_PASSWORD: ${QUANTLAB_CH_PASSWORD:?}
+      CLICKHOUSE_DB: quantlab
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - ${QUANTLAB_DATA_DIR:-/mnt/disks/quantlab}/clickhouse:/var/lib/clickhouse
+      - ./clickhouse-limits.xml:/etc/clickhouse-server/config.d/limits.xml:ro
+      - ./clickhouse-users.xml:/etc/clickhouse-server/users.d/quantlab-profile.xml:ro
+    ports:
+      # Loopback only: for an operator on the VM, never the internet.
+      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:9000:9000"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      # 127.0.0.1, not localhost: inside the container localhost resolves to
+      # ::1 and the server listens on IPv4, so the probe would never connect.
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2560M
+    logging: *logging
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # Catalog. Instruments, symbol maps, universes, signals, runs, accounts.
+  # Postgres 18: the managed service it was copied from ran 18, and a dump
+  # cannot be restored into an older server.
+  # --------------------------------------------------------------------------
+  postgres:
+    image: postgres:18-alpine
+    command:
+      - postgres
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=768MB
+      - -c
+      - max_connections=50
+    environment:
+      POSTGRES_USER: ${QUANTLAB_PG_USER:?set QUANTLAB_PG_USER in .env}
+      POSTGRES_PASSWORD: ${QUANTLAB_PG_PASSWORD:?}
+      POSTGRES_DB: quantlab
+      # Deterministic collation: index order must not depend on the host locale.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      # The parent directory, not .../data: from 18 the image keeps PGDATA in a
+      # major-version subdirectory (/var/lib/postgresql/18/docker) so a future
+      # pg_upgrade can sit beside it.
+      - ${QUANTLAB_DATA_DIR:-/mnt/disks/quantlab}/postgres:/var/lib/postgresql
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d quantlab"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
+    logging: *logging
+    restart: unless-stopped
+
   # --------------------------------------------------------------------------
   # Edge. Terminates TLS and is the only service bound to a public port.
   #
@@ -78,11 +172,13 @@ services:
     environment:
       QUANTLAB_DB_URL: ${QUANTLAB_DB_URL:?set QUANTLAB_DB_URL in .env}
       QUANTLAB_CH_URL: ${QUANTLAB_CH_URL:?set QUANTLAB_CH_URL in .env}
-      # Bare `:?`: secret scanners read `PASSWORD: <anything>` as a literal and
-      # flag an error message there as a hardcoded credential. Compose still
-      # aborts on a missing value with its own "required variable" message.
-      PGPASSWORD: ${PGPASSWORD:?}
+      PGPASSWORD: ${QUANTLAB_PG_PASSWORD:?}
       QUANTLAB_CH_PASSWORD: ${QUANTLAB_CH_PASSWORD:?}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
     logging: *logging
     restart: "no"
 
@@ -97,7 +193,7 @@ services:
     environment:
       QUANTLAB_DB_URL: ${QUANTLAB_DB_URL}
       QUANTLAB_CH_URL: ${QUANTLAB_CH_URL}
-      PGPASSWORD: ${PGPASSWORD}
+      PGPASSWORD: ${QUANTLAB_PG_PASSWORD}
       QUANTLAB_CH_PASSWORD: ${QUANTLAB_CH_PASSWORD}
       QUANTLAB_HOME: /var/lib/quantlab
       QUANTLAB_USER_AGENT: ${QUANTLAB_USER_AGENT:-quantlab/0.1 (research)}
@@ -106,6 +202,11 @@ services:
       COMPANIES_HOUSE_API_KEY: ${COMPANIES_HOUSE_API_KEY:-}
     volumes:
       - quantlab-cache:/var/lib/quantlab
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
     deploy:
       resources:
         limits:
@@ -143,7 +244,7 @@ services:
       # exactly the failure `make check-warehouse` exists to catch.
       QUANTLAB_DB_URL: ${QUANTLAB_DB_URL}
       QUANTLAB_CH_URL: ${QUANTLAB_CH_URL}
-      PGPASSWORD: ${PGPASSWORD}
+      PGPASSWORD: ${QUANTLAB_PG_PASSWORD}
       QUANTLAB_CH_PASSWORD: ${QUANTLAB_CH_PASSWORD}
       QUANTLAB_DB: /data/quantlab.db
       QUANTLAB_DB_PATH: /data/quantlab.db
@@ -158,6 +259,10 @@ services:
     expose:
       - "8000"
     depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
       data-perms:
@@ -172,8 +277,8 @@ services:
         ]
       interval: 10s
       # /health is cached for 30 s, but its first call per process still asks
-      # the managed Postgres and ClickHouse; a 5 s ceiling on that failed a
-      # deploy whose backend was actually fine (it went healthy a minute later).
+      # Postgres and ClickHouse; a 5 s ceiling on that (when they were managed
+      # services an ocean away) failed a deploy whose backend was actually fine.
       timeout: 12s
       retries: 12
       # Probes failing during startup do not count toward `retries`. Was 20 s.
@@ -192,10 +297,12 @@ services:
   # same-origin keeps development free of CORS entirely.
 
 volumes:
-  # Retired: the self-hosted ClickHouse and Postgres data from before the move
-  # to managed services. No service mounts them; they stay declared so nothing
-  # deletes them while the managed copy is being trusted. Once it is, remove
-  # them by hand: `docker volume rm quantlab_quantlab-chdata quantlab_quantlab-pgdata`.
+  # The database data is NOT in a named volume: it is bind-mounted from the
+  # data disk (QUANTLAB_DATA_DIR) above. quantlab-chdata / quantlab-pgdata are
+  # the boot-disk volumes of the first self-hosted era (pre September 2026),
+  # stale since the move to managed services; no service mounts them. Remove
+  # them by hand once the data disk is trusted:
+  # `docker volume rm quantlab_quantlab-chdata quantlab_quantlab-pgdata`.
   quantlab-chdata:
   quantlab-pgdata:
   quantlab-cache:         # provider HTTP cache + Parquet exports

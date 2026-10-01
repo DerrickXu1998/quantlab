@@ -215,6 +215,8 @@ jobs:
             --zone "${{ vars.GCP_ZONE }}" \
             deploy/docker-compose.prod.yml \
             deploy/Caddyfile \
+            deploy/clickhouse-limits.xml \
+            deploy/clickhouse-users.xml \
             deploy/remote-deploy.sh \
             "${{ vars.GCP_INSTANCE }}:${stage}/"
 

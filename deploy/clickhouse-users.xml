@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<!--
+  Per-query limits for every user (the default profile, which the quantlab user
+  created from CLICKHOUSE_USER inherits). Mounted into users.d: ClickHouse reads
+  <profiles> only from the users configuration, never from config.d, so these
+  must not live in clickhouse-limits.xml.
+
+  max_memory_usage keeps one query well under max_server_memory_usage, so a wide
+  query fails alone with MEMORY_LIMIT_EXCEEDED instead of starving the API's
+  other queries; max_threads matches the 2-vCPU VM.
+
+  do_not_merge_across_partitions_select_final: price_bars is partitioned by
+  month and its sorting key includes ts, so two versions of one bar can never
+  sit in different partitions. FINAL may therefore deduplicate each partition
+  on its own, which bounds its memory to a partition at a time instead of the
+  whole 476M-row table, the difference between price_bars_current answering
+  on this 8 GiB host and failing.
+
+  optimize_read_in_order = 0: every bar read is FINAL (via price_bars_current)
+  plus ORDER BY ts, and read-in-order then streams all 121 monthly partitions
+  side by side, each with its own buffers. Measured on one stock's ten years
+  of daily bars: 380 MiB and 1.4 s with it, 17 MiB and 0.36 s without. A few
+  such reads at once (a replay plus a dashboard) exceeded the 2 GiB server cap
+  and failed the replay. Sorting the small result after the read is cheaper.
+-->
+<clickhouse>
+    <profiles>
+        <default>
+            <max_memory_usage>1610612736</max_memory_usage>   <!-- 1.5 GiB per query -->
+            <max_threads>2</max_threads>
+            <do_not_merge_across_partitions_select_final>1</do_not_merge_across_partitions_select_final>
+            <optimize_read_in_order>0</optimize_read_in_order>
+        </default>
+    </profiles>
+</clickhouse>

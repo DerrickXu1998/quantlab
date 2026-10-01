@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # QuantLab -- the part of a deploy that runs ON the VM.
 #
-# GitHub Actions copies this file, docker-compose.prod.yml and the Caddyfile
-# into a staging directory, then runs:
+# GitHub Actions copies this file, docker-compose.prod.yml, the Caddyfile and
+# clickhouse-limits.xml into a staging directory, then runs:
 #
 #     sudo bash remote-deploy.sh <backend-image> <ingest-image>
 #
@@ -41,31 +41,68 @@ compose() {
 [ -d "$APP_DIR" ] || fail "$APP_DIR does not exist -- run deploy/bootstrap-vm.sh on this VM first"
 [ -f "$APP_DIR/.env" ] || fail "$APP_DIR/.env is missing -- run deploy/bootstrap-vm.sh first"
 
-# --- 0. the datastores are managed services -----------------------------------
-# The compose file no longer runs Postgres or ClickHouse. An .env still pointing
-# at the old in-compose hosts would let this deploy stop those containers and
-# then fail every query -- so refuse here, before anything changes, with the
-# old stack still serving. deploy/migrate-to-managed.sh copies the data across
-# and rewrites these lines; run it first.
-for var in QUANTLAB_DB_URL QUANTLAB_CH_URL; do
-	value="$(sed -n "s/^${var}=//p" "$APP_DIR/.env" | head -1)"
-	case "$value" in
-	*@postgres:* | *@postgres/* | *@clickhouse:* | *@clickhouse/*)
-		fail "$var in $APP_DIR/.env still points at the retired in-compose database. Run deploy/migrate-to-managed.sh on this VM first (see docs/DEPLOY.md)."
-		;;
-	"") fail "$var is empty in $APP_DIR/.env" ;;
-	esac
+# --- 0. the datastores run here, on the data disk ------------------------------
+# Postgres and ClickHouse are containers in the compose file, with their data
+# bind-mounted from the separate data disk. Two ways this deploy could quietly
+# leave the API serving nothing, both refused here, before anything changes:
+#
+#   - .env still pointing at the managed services this VM has moved off --
+#     the deploy would start empty local databases and keep querying the old
+#     ones, or the other way round once the managed services are gone;
+#   - the data disk not mounted -- Docker would create the bind-mount
+#     directories on the boot disk and both servers would initialise EMPTY.
+#
+# deploy/migrate-to-selfhost.sh copies the data across and rewrites .env; run
+# it first. A brand-new VM with nothing to copy is allowed ONE deploy onto empty
+# directories: bootstrap-vm.sh leaves $DATA_DIR/.allow-empty-first-deploy, and
+# this script removes it once that deploy has succeeded.
+# (QUANTLAB_ALLOW_EMPTY_DATA=1 does the same for a deploy run by hand.)
+setting() { sed -n "s/^$1=//p" "$APP_DIR/.env" | head -1; }
+case "$(setting QUANTLAB_DB_URL)" in
+*@postgres:* | *@postgres/*) ;;
+"") fail "QUANTLAB_DB_URL is empty in $APP_DIR/.env" ;;
+*) fail "QUANTLAB_DB_URL in $APP_DIR/.env does not point at the in-compose postgres. If the data is still in a managed service, run deploy/migrate-to-selfhost.sh on this VM first (see docs/DEPLOY.md)." ;;
+esac
+case "$(setting QUANTLAB_CH_URL)" in
+*@clickhouse:* | *@clickhouse/*) ;;
+"") fail "QUANTLAB_CH_URL is empty in $APP_DIR/.env" ;;
+*) fail "QUANTLAB_CH_URL in $APP_DIR/.env does not point at the in-compose clickhouse. If the data is still in a managed service, run deploy/migrate-to-selfhost.sh on this VM first (see docs/DEPLOY.md)." ;;
+esac
+for var in QUANTLAB_PG_USER QUANTLAB_PG_PASSWORD QUANTLAB_CH_USER QUANTLAB_CH_PASSWORD; do
+	[ -n "$(setting "$var")" ] || fail "$var is empty in $APP_DIR/.env"
 done
-for var in PGPASSWORD QUANTLAB_CH_PASSWORD; do
-	grep -q "^${var}=." "$APP_DIR/.env" || fail "$var is empty in $APP_DIR/.env -- the managed databases need it"
-done
+
+DATA_DIR="$(setting QUANTLAB_DATA_DIR)"
+DATA_DIR="${DATA_DIR:-/mnt/disks/quantlab}"
+mountpoint -q "$DATA_DIR" ||
+	fail "$DATA_DIR is not a mounted filesystem. The databases would initialise empty on the boot disk. Run deploy/prepare-data-disk.sh (see docs/DEPLOY.md)."
+if [ "${QUANTLAB_ALLOW_EMPTY_DATA:-0}" != "1" ] && [ ! -f "$DATA_DIR/.allow-empty-first-deploy" ]; then
+	for store in postgres clickhouse; do
+		[ -n "$(ls -A "$DATA_DIR/$store" 2>/dev/null)" ] ||
+			fail "$DATA_DIR/$store is empty -- this deploy would start an empty $store. Run deploy/migrate-to-selfhost.sh first (see docs/DEPLOY.md)."
+	done
+fi
 
 # --- 1. install the new configuration ----------------------------------------
 # Config is copied every deploy, so a change to the compose file or the Caddyfile
 # ships exactly like a code change: commit, push, done.
+#
+# The Caddyfile and the ClickHouse XML are bind-mounted as single files, and a
+# single-file bind mount pins the file the container started with: `install`
+# writes a new file, so a running container keeps reading the old one, and
+# compose sees no change to recreate for. Note which ones changed, and restart
+# the service that reads them once the stack is up (step 4b) -- otherwise a
+# config change ships, deploys green, and silently never takes effect.
 log "installing configuration from $STAGE_DIR"
-for f in docker-compose.prod.yml Caddyfile; do
+restart_after_up=()
+for f in docker-compose.prod.yml Caddyfile clickhouse-limits.xml clickhouse-users.xml; do
 	[ -f "$STAGE_DIR/$f" ] || fail "$f missing from the staged deploy"
+	if ! cmp -s "$STAGE_DIR/$f" "$APP_DIR/$f" 2>/dev/null; then
+		case "$f" in
+		Caddyfile) restart_after_up+=(caddy) ;;
+		clickhouse-*.xml) restart_after_up+=(clickhouse) ;;
+		esac
+	fi
 	install -o root -g root -m 0644 "$STAGE_DIR/$f" "$APP_DIR/$f"
 done
 
@@ -103,6 +140,14 @@ log "starting the stack"
 if ! compose up -d --remove-orphans; then
 	compose logs --tail 50 migrate >&2 || true
 	fail "compose up did not complete -- the migrate logs above have the reason"
+fi
+
+# --- 4b. pick up changed bind-mounted config (see step 1) ------------------------
+if [ "${#restart_after_up[@]}" -gt 0 ]; then
+	services="$(printf '%s\n' "${restart_after_up[@]}" | sort -u | tr '\n' ' ')"
+	log "restarting for changed config: $services"
+	# shellcheck disable=SC2086 # word-splitting the service list is intended
+	compose restart $services
 fi
 
 # --- 5. wait for health -------------------------------------------------------
@@ -186,6 +231,9 @@ case "$health" in
 	*'"dataset":"warehouse"'* | *'"dataset": "warehouse"'*) ;;
 	*) fail "API is serving the synthetic demo dataset, not the warehouse. Check QUANTLAB_DB_URL / QUANTLAB_CH_URL in $APP_DIR/.env" ;;
 esac
+
+# The one deploy allowed onto an empty data disk has now happened.
+rm -f "$DATA_DIR/.allow-empty-first-deploy"
 
 log "deploy complete"
 compose ps
