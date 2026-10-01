@@ -18,7 +18,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 from dataclasses import dataclass, field
-from typing import Mapping, Sequence
+from typing import Iterator, Mapping, Sequence
 
 import pandas as pd
 
@@ -215,6 +215,12 @@ def write_bars(
 # Reads
 # ---------------------------------------------------------------------------
 
+# A wide read (hundreds of instruments over years) makes ClickHouse hold one
+# FINAL merge stream per touched part, and the per-query memory cap counts
+# that peak -- not the (often small) result. Batching instruments keeps each
+# query's peak low; 25 daily-instruments peaks far below a 1.5 GiB cap.
+DEFAULT_READ_CHUNK_SIZE = 25
+
 
 def _ts_bound(value: str | dt.date | dt.datetime | None) -> dt.datetime | None:
     if value is None or value == "":
@@ -260,6 +266,53 @@ def load_bars(
          ORDER BY ts, instrument_id
     """
     return client.query_df(query, parameters=params)
+
+
+def iter_bars(
+    client,
+    instrument_ids: Sequence[int] | None = None,
+    *,
+    start: str | dt.date | None = None,
+    end: str | dt.date | None = None,
+    frequency: str = "1d",
+    chunk_size: int = DEFAULT_READ_CHUNK_SIZE,
+) -> Iterator[pd.DataFrame]:
+    """Yield `load_bars` frames one instrument batch at a time.
+
+    Peak memory of a bars query scales with the instruments it touches, so
+    splitting a wide read into per-chunk queries keeps every query under the
+    server's per-query memory cap where one monolithic query would blow it.
+    Each yielded frame is exactly one chunk's `load_bars` output --
+    deduplicated, ordered by (ts, instrument_id), complete for its
+    instruments. Empty chunks are skipped.
+
+    Two cautions for the caller. Chunks are separate queries, hence separate
+    snapshots: a re-ingest landing mid-iteration mixes run versions across
+    chunks. And a consumer that concatenates every chunk re-materialises the
+    full frame -- process or spill each chunk before pulling the next one.
+
+    `instrument_ids=None` reads everything in a single query (there is no id
+    list to batch on); an empty sequence yields nothing -- deliberately
+    unlike `load_bars`, where an empty list means "no filter".
+    """
+    if chunk_size < 1:
+        raise ValueError("chunk_size must be at least 1")
+    if instrument_ids is None:
+        frame = load_bars(client, None, start=start, end=end, frequency=frequency)
+        if frame is not None and not frame.empty:
+            yield frame
+        return
+    ids = [int(i) for i in instrument_ids]
+    for offset in range(0, len(ids), chunk_size):
+        frame = load_bars(
+            client,
+            ids[offset : offset + chunk_size],
+            start=start,
+            end=end,
+            frequency=frequency,
+        )
+        if frame is not None and not frame.empty:
+            yield frame
 
 
 def coverage(client, frequency: str = "1d") -> pd.DataFrame:

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-from typing import Sequence
+from typing import Iterator, Mapping, Sequence
 
 import pandas as pd
 
@@ -43,23 +43,7 @@ def load_panel(
     snapshot, which is how a point-in-time backtest avoids survivorship bias:
     model the universe as it was, not as it survived.
     """
-    if universe_snapshot is not None:
-        wanted_ids = catalog.snapshot_members(conn, universe_snapshot)
-        id_to_symbol = catalog.symbols_for_ids(conn, wanted_ids)
-        if symbols:
-            keep = set(symbols)
-            id_to_symbol = {k: v for k, v in id_to_symbol.items() if v in keep}
-    else:
-        resolved = catalog.instrument_ids(conn, list(symbols)) if symbols else {}
-        if symbols and not resolved:
-            id_to_symbol = {}
-        elif symbols:
-            id_to_symbol = {v: k for k, v in resolved.items()}
-        else:
-            all_symbols = catalog.list_symbols(conn)
-            resolved = catalog.instrument_ids(conn, all_symbols)
-            id_to_symbol = {v: k for k, v in resolved.items()}
-
+    id_to_symbol = _resolve_instruments(conn, symbols, universe_snapshot)
     if not id_to_symbol:
         panel = _empty_panel()
         return (panel, Context(frequency=frequency)) if return_context else panel
@@ -71,22 +55,7 @@ def load_panel(
         end=end,
         frequency=frequency,
     )
-
-    if frame is None or frame.empty:
-        panel = _empty_panel()
-    else:
-        frame = frame.copy()
-        frame["symbol"] = frame["instrument_id"].map(id_to_symbol)
-        frame["date"] = pd.to_datetime(frame["ts"])
-        for column in _PANEL_COLUMNS:
-            if column not in frame.columns:
-                frame[column] = pd.NA
-            frame[column] = pd.to_numeric(frame[column], errors="coerce")
-        panel = (
-            frame[["date", "symbol", *_PANEL_COLUMNS]]
-            .set_index(["date", "symbol"])
-            .sort_index()
-        )
+    panel = _panel_from_frame(frame, id_to_symbol)
 
     if not return_context:
         return panel
@@ -100,6 +69,86 @@ def load_panel(
         extras={"origin": "clickhouse", "universe_snapshot": universe_snapshot},
     )
     return panel, context
+
+
+def iter_panels(
+    conn,
+    client,
+    symbols: Sequence[str] | None = None,
+    *,
+    start: str | dt.date | None = None,
+    end: str | dt.date | None = None,
+    frequency: str = "1d",
+    universe_snapshot: int | None = None,
+    chunk_size: int = bars_mod.DEFAULT_READ_CHUNK_SIZE,
+) -> Iterator[pd.DataFrame]:
+    """Yield `load_panel`-shaped panels one instrument batch at a time.
+
+    Same resolution and shaping as `load_panel`, but the bars come out
+    through `bars_mod.iter_bars`: each query covers at most `chunk_size`
+    instruments, so a universe-wide read stays under the bar store's
+    per-query memory cap, and the caller holds one batch -- not the whole
+    universe -- in memory at a time. Each yielded panel is indexed by
+    (date, symbol), sorted, and complete for its batch; batches with no
+    bars are skipped.
+
+    The same two cautions as `iter_bars` apply: batches are separate query
+    snapshots, and a consumer that concatenates them all re-materialises the
+    full panel. There is no `return_context` -- a Context describes the whole
+    universe, which is exactly what iteration avoids holding.
+    """
+    id_to_symbol = _resolve_instruments(conn, symbols, universe_snapshot)
+    if not id_to_symbol:
+        return
+    for frame in bars_mod.iter_bars(
+        client,
+        list(id_to_symbol),
+        start=start,
+        end=end,
+        frequency=frequency,
+        chunk_size=chunk_size,
+    ):
+        yield _panel_from_frame(frame, id_to_symbol)
+
+
+def _resolve_instruments(
+    conn,
+    symbols: Sequence[str] | None,
+    universe_snapshot: int | None,
+) -> dict[int, str]:
+    """instrument_id -> symbol for everything the panel should contain."""
+    if universe_snapshot is not None:
+        wanted_ids = catalog.snapshot_members(conn, universe_snapshot)
+        id_to_symbol = catalog.symbols_for_ids(conn, wanted_ids)
+        if symbols:
+            keep = set(symbols)
+            id_to_symbol = {k: v for k, v in id_to_symbol.items() if v in keep}
+        return id_to_symbol
+
+    resolved = catalog.instrument_ids(conn, list(symbols)) if symbols else {}
+    if symbols:
+        return {v: k for k, v in resolved.items()}
+    all_symbols = catalog.list_symbols(conn)
+    resolved = catalog.instrument_ids(conn, all_symbols)
+    return {v: k for k, v in resolved.items()}
+
+
+def _panel_from_frame(frame: pd.DataFrame, id_to_symbol: Mapping[int, str]) -> pd.DataFrame:
+    """Shape one raw `load_bars` frame into the (date, symbol) long panel."""
+    if frame is None or frame.empty:
+        return _empty_panel()
+    frame = frame.copy()
+    frame["symbol"] = frame["instrument_id"].map(id_to_symbol)
+    frame["date"] = pd.to_datetime(frame["ts"])
+    for column in _PANEL_COLUMNS:
+        if column not in frame.columns:
+            frame[column] = pd.NA
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    return (
+        frame[["date", "symbol", *_PANEL_COLUMNS]]
+        .set_index(["date", "symbol"])
+        .sort_index()
+    )
 
 
 def _empty_panel() -> pd.DataFrame:
