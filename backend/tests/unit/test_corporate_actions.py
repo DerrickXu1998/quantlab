@@ -218,3 +218,28 @@ def test_new_configs_default_to_split_and_dividend_adjustment():
     assert ExecutionConfig().price_adjustment == "split_dividend"
     with pytest.raises(ValueError, match="price_adjustment"):
         ExecutionConfig(price_adjustment="total")
+
+
+# --- studies (lines drawn over candles) -------------------------------------
+
+
+def test_studies_restated_in_traded_terms_sit_on_raw_candles():
+    """A flat 2,000 -> 100 series across a 20:1 split: the SMA is 100 adjusted
+    everywhere, and 2,000 before the split / 100 after in traded terms."""
+    from quantlab.research.studies import compute_studies
+
+    run = {"id": "r", "model_name": "sma-crossover", "parameters": {"fast": 2, "slow": 3}}
+    raw = bars([2000.0] * 5 + [100.0] * 5)
+    actions = [split("d005", 20.0)]
+    adjusted = adjustments.adjust(raw, actions)
+
+    def line(price_factors):
+        result = compute_studies(run=run, symbol="AAA", bars=adjusted, price_factors=price_factors)
+        fast = next(s for s in result.studies if s.key.endswith("sma_fast"))
+        return {p.date: p.value for p in fast.points}
+
+    on_signal_basis = line(None)
+    traded = line(adjustments.factors(raw, actions)[0])
+    assert on_signal_basis["d003"] == pytest.approx(100.0)
+    assert traded["d003"] == pytest.approx(2000.0)
+    assert traded["d008"] == pytest.approx(100.0) == on_signal_basis["d008"]

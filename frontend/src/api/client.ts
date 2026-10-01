@@ -236,8 +236,16 @@ export type StudyPoint = components['schemas']['StudyPoint'];
 export type Study = components['schemas']['Study'];
 export type RunStudies = components['schemas']['RunStudies'];
 
-export function getRunStudies(runId: string, symbol: string): Promise<RunStudies> {
-  const query = new URLSearchParams({ symbol });
+/**
+ * `basis: 'traded'` restates the lines in traded-price terms, for drawing over
+ * raw candles; the default is the adjusted basis the signals fired on.
+ */
+export function getRunStudies(
+  runId: string,
+  symbol: string,
+  basis: 'adjusted' | 'traded' = 'adjusted',
+): Promise<RunStudies> {
+  const query = new URLSearchParams({ symbol, basis });
   return request<RunStudies>(`/runs/${encodeURIComponent(runId)}/studies?${query}`);
 }
 

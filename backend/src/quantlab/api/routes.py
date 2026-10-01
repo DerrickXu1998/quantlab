@@ -796,6 +796,7 @@ def get_run_studies(
     run_id: str,
     user: CurrentUser,
     symbol: Annotated[str | None, Query(pattern=SYMBOL_PATTERN)] = None,
+    basis: Literal["adjusted", "traded"] = "adjusted",
 ) -> dict:
     """The lines the run's rules compared, for one of its symbols. Analytics in
     research.studies, as with performance (Constitution V)."""
@@ -822,11 +823,15 @@ def get_run_studies(
     _, bars = replay_engine.load_replay_inputs(backend(request), store, one)
     # The lines the rules compared were computed on the prices the rules read:
     # back-adjusted, when the run adjusted for splits and dividends.
-    actions = replay_engine.load_corporate_actions(backend(request), one)
+    actions = replay_engine.load_corporate_actions(backend(request), one).get(symbol, [])
+    raw = bars.get(symbol) or []
     result = studies.compute_studies(
         run=run,
         symbol=symbol,
-        bars=adjustments.adjust(bars.get(symbol) or [], actions.get(symbol, [])),
+        bars=adjustments.adjust(raw, actions),
+        # Over raw candles the lines must be in traded terms too; by default
+        # they stay on the basis the signals fired on.
+        price_factors=adjustments.factors(raw, actions)[0] if basis == "traded" else None,
         window_start=run["start_date"],
         window_end=run["end_date"],
     )

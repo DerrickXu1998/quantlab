@@ -1761,6 +1761,8 @@ export interface operations {
             query?: {
                 /** @description Which of the run's symbols to draw. Required when the run has more than one; guessing would put one name's averages under another's candles. */
                 symbol?: string;
+                /** @description adjusted (default): the prices the rules read -- back-adjusted for splits and dividends when the run's price_adjustment says so -- so the lines equal the signals' trigger_values. traded: the same lines restated in traded-price terms, to draw over raw candles. Identical for a run with price_adjustment none or no actions in its window. */
+                basis?: "adjusted" | "traded";
             };
             header?: never;
             path: {

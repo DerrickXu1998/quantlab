@@ -75,6 +75,7 @@ def compute_studies(
     bars: list[Any],
     window_start: str | None = None,
     window_end: str | None = None,
+    price_factors: list[float] | None = None,
 ) -> RunStudies:
     """Every drawable line the run's rules compared, on ``symbol``'s bars.
 
@@ -82,6 +83,13 @@ def compute_studies(
     honest answer for RSI, whose scale is not the price axis. Two components
     running the same rule with the same parameters would draw identical lines,
     so the second is dropped.
+
+    ``bars`` are what the rules read (back-adjusted when the run adjusted for
+    splits and dividends), so the lines equal the signals' trigger values.
+    ``price_factors`` -- adjusted / traded, per bar -- restates them in
+    traded-price terms instead, for drawing over raw candles. Every study is
+    on the price axis, so dividing by the day's factor is exact, and a
+    crossover stays on the date it happened because both lines move together.
     """
     dates = [bar.date for bar in bars]
     seen: set[tuple[str, tuple]] = set()
@@ -94,9 +102,10 @@ def compute_studies(
             continue
         seen.add(identity)
         for line in rule.studies(bars, **params):
+            factors = price_factors or [1.0] * len(dates)
             points = [
-                StudyPoint(date=day, value=float(value))
-                for day, value in zip(dates, line.values, strict=True)
+                StudyPoint(date=day, value=float(value) / factor)
+                for day, value, factor in zip(dates, line.values, factors, strict=True)
                 if not math.isnan(value)
                 and (window_start is None or day >= window_start)
                 and (window_end is None or day <= window_end)
