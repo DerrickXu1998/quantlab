@@ -29,7 +29,15 @@ Typical use::
 """
 from __future__ import annotations
 
-from .bars import bar_count, load_bars, optimize, storage_stats, validate, write_bars
+from .bars import (
+    bar_count,
+    iter_bars,
+    load_bars,
+    optimize,
+    storage_stats,
+    validate,
+    write_bars,
+)
 from .catalog import (
     ensure_instruments,
     finish_run,
@@ -92,7 +100,7 @@ from .migrate import (
     migrate,
     migrate_all,
 )
-from .reader import coverage, load_panel, panel_for_modelling
+from .reader import coverage, iter_panels, load_panel, panel_for_modelling
 
 __all__ = [
     "CH_ENV_VAR",
@@ -129,6 +137,8 @@ __all__ = [
     "ingest_prices",
     "ingest_sec_fundamentals",
     "instrument_ids",
+    "iter_bars",
+    "iter_panels",
     "latest_snapshot",
     "list_symbols",
     "load_bars",

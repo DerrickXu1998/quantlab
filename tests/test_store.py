@@ -131,6 +131,115 @@ def test_partition_chunks_respect_the_default_cap():
     )
 
 
+class _FakeBarsClient:
+    """Stands in for clickhouse_connect: records each query's parameters and
+    answers one synthetic bar per requested instrument_id."""
+
+    def __init__(self, empty_chunks: set[frozenset] | None = None):
+        self.calls: list[dict] = []
+        self._empty = empty_chunks or set()
+
+    def query_df(self, query, parameters=None):
+        params = dict(parameters or {})
+        self.calls.append(params)
+        ids = params.get("ids")
+        if ids is None:
+            ids = (1, 2)  # the unfiltered whole-table case
+        elif frozenset(ids) in self._empty:
+            return pd.DataFrame()
+        n = len(ids)
+        return pd.DataFrame(
+            {
+                "instrument_id": list(ids),
+                "ts": pd.to_datetime(["2026-01-05"] * n),
+                "open": [1.0] * n,
+                "high": [1.0] * n,
+                "low": [1.0] * n,
+                "close": [float(i) for i in ids],
+                "volume": [100] * n,
+                "adj_close": [1.0] * n,
+                "currency": ["USD"] * n,
+                "source": ["test"] * n,
+            }
+        )
+
+
+def test_iter_bars_bounds_each_query_to_the_chunk_size():
+    """The whole point: no single query may cover more instruments than the
+    chunk, so the server's per-query memory peak stays bounded."""
+    client = _FakeBarsClient()
+    chunks = list(bars_mod.iter_bars(client, range(1, 61), chunk_size=25))
+
+    assert [len(c["ids"]) for c in client.calls] == [25, 25, 10]
+    assert [i for c in chunks for i in c["instrument_id"]] == list(range(1, 61))
+
+
+def test_iter_bars_default_chunk_size_is_the_documented_one():
+    client = _FakeBarsClient()
+    list(bars_mod.iter_bars(client, range(bars_mod.DEFAULT_READ_CHUNK_SIZE + 1)))
+    assert len(client.calls) == 2
+    assert all(len(c["ids"]) <= bars_mod.DEFAULT_READ_CHUNK_SIZE for c in client.calls)
+
+
+def test_iter_bars_skips_chunks_with_no_bars():
+    client = _FakeBarsClient(empty_chunks={frozenset(range(26, 51))})
+    chunks = list(bars_mod.iter_bars(client, range(1, 76), chunk_size=25))
+    assert len(client.calls) == 3, "every chunk is still queried"
+    assert len(chunks) == 2, "but empty chunks yield nothing"
+
+
+def test_iter_bars_empty_id_list_queries_nothing():
+    """An explicit empty list means "no instruments", not "no filter" -- the
+    opposite of load_bars, and the only safe reading for a generator."""
+    client = _FakeBarsClient()
+    assert list(bars_mod.iter_bars(client, [])) == []
+    assert client.calls == []
+
+
+def test_iter_bars_without_ids_falls_back_to_one_unfiltered_query():
+    client = _FakeBarsClient()
+    chunks = list(bars_mod.iter_bars(client))
+    assert len(client.calls) == 1
+    assert "ids" not in client.calls[0]
+    assert len(chunks) == 1
+
+
+def test_iter_bars_rejects_a_non_positive_chunk_size():
+    with pytest.raises(ValueError):
+        list(bars_mod.iter_bars(_FakeBarsClient(), [1], chunk_size=0))
+
+
+def test_iter_panels_yields_one_sorted_panel_per_batch(monkeypatch):
+    from quantlab.store import reader as reader_mod
+
+    symbols = [f"S{i}.US" for i in range(5)]
+    monkeypatch.setattr(
+        catalog,
+        "instrument_ids",
+        lambda conn, syms: {s: i + 1 for i, s in enumerate(syms)},
+    )
+    client = _FakeBarsClient()
+
+    panels = list(reader_mod.iter_panels(None, client, symbols, chunk_size=2))
+
+    assert [len(c["ids"]) for c in client.calls] == [2, 2, 1]
+    covered = {s for p in panels for s in p.index.get_level_values("symbol")}
+    assert covered == set(symbols)
+    for panel in panels:
+        assert panel.index.names == ["date", "symbol"]
+        assert panel.index.get_level_values("symbol").nunique() <= 2
+        assert panel.index.is_monotonic_increasing
+
+
+def test_iter_panels_with_no_resolvable_symbols_yields_nothing(monkeypatch):
+    from quantlab.store import reader as reader_mod
+
+    monkeypatch.setattr(catalog, "instrument_ids", lambda conn, syms: {})
+    client = _FakeBarsClient()
+    assert list(reader_mod.iter_panels(None, client, ["NOPE.US"])) == []
+    assert client.calls == []
+
+
 def test_real_equity_symbols_excludes_fixtures_and_macro():
     """Synthetic ZX* and BoE pseudo-instruments are warehouse plumbing, not
     universe members -- by meta flag or by symbol convention."""
