@@ -236,24 +236,45 @@ export function RunResultsView({ run }: { run: RunDetailV2 }) {
       </header>
 
       {/* A correctness warning, not a footnote: stored bars are unadjusted, so
-          any signal near an ex-date may be an artefact of the split rather
-          than a market move. */}
-      {(run.corporate_actions ?? []).length > 0 ? (
-        <div
-          role="alert"
-          data-testid="run-corporate-actions"
-          className="mt-3 flex gap-2 rounded-sm border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive"
-        >
-          <TriangleAlert size={16} strokeWidth={1.5} className="mt-px shrink-0" />
-          <span>
-            Unadjusted prices across{' '}
-            {(run.corporate_actions ?? [])
-              .map((action) => `${action.symbol} ${action.ex_date}`)
-              .join(', ')}
-            . Moves near those dates may be artefacts of the action rather than the market.
-          </span>
-        </div>
-      ) : null}
+          any signal near an ex-date may be an artefact of the action rather
+          than a market move. Splits break the series outright and stay red;
+          dividends only shave the price by the payout and are informational. */}
+      {(() => {
+        const actions = run.corporate_actions ?? [];
+        const splits = actions.filter((a) => a.action_type === 'split');
+        const dividends = actions.filter((a) => a.action_type !== 'split');
+        const list = (xs: typeof actions) =>
+          xs.map((a) => `${a.symbol} ${a.ex_date}`).join(', ');
+        return (
+          <>
+            {splits.length > 0 ? (
+              <div
+                role="alert"
+                data-testid="run-corporate-actions"
+                className="mt-3 flex gap-2 rounded-sm border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive"
+              >
+                <TriangleAlert size={16} strokeWidth={1.5} className="mt-px shrink-0" />
+                <span>
+                  Unadjusted prices across splits: {list(splits)}. Moves near those dates may be
+                  artefacts of the split rather than the market.
+                </span>
+              </div>
+            ) : null}
+            {dividends.length > 0 ? (
+              <div
+                data-testid="run-dividend-notices"
+                className="mt-3 flex gap-2 rounded-sm border border-border bg-muted/40 p-2 text-xs text-muted-foreground"
+              >
+                <TriangleAlert size={16} strokeWidth={1.5} className="mt-px shrink-0" />
+                <span>
+                  Dividend ex-dates in window (prices unadjusted): {list(dividends)}. Returns near
+                  those dates are understated by the payout; tight stops may see spurious dips.
+                </span>
+              </div>
+            ) : null}
+          </>
+        );
+      })()}
 
       <FactCoverageWarning run={run} />
 

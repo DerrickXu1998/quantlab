@@ -1,8 +1,9 @@
-import { History } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { History, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Run } from '../api/client';
+import { runDisplayName } from '../runs/labels';
 import { useRuns } from '../runs/RunsContext';
-import { ConfirmDelete } from './ConfirmDelete';
+import { Button } from './ui/button';
 import { EmptyState } from './ui/empty-state';
 import { Numeric } from './ui/numeric';
 import { StatusBadge } from './ui/status-badge';
@@ -10,16 +11,26 @@ import { StatusBadge } from './ui/status-badge';
 function RunRow({
   run,
   selected,
+  checked,
   onSelect,
+  onToggle,
 }: {
   run: Run;
   selected: boolean;
+  checked: boolean;
   onSelect: () => void;
+  onToggle: () => void;
 }) {
-  const { remove } = useRuns();
-
   return (
-    <li className="group relative">
+    <li className="group relative flex items-start gap-1 pl-2">
+      <input
+        type="checkbox"
+        data-testid={`select-run-${run.id}`}
+        aria-label={`Select run ${runDisplayName(run)}`}
+        checked={checked}
+        onChange={onToggle}
+        className="mt-3 shrink-0 accent-primary"
+      />
       <button
         type="button"
         onClick={onSelect}
@@ -29,9 +40,7 @@ function RunRow({
         }`}
       >
         <span className="flex items-baseline justify-between gap-2">
-          <span className="truncate font-mono text-[11px]">
-            {run.name ?? run.model_name}
-          </span>
+          <span className="truncate font-mono text-[11px]">{runDisplayName(run)}</span>
           <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
             {run.created_at.slice(0, 10)}
           </span>
@@ -58,14 +67,6 @@ function RunRow({
           ) : null}
         </span>
       </button>
-
-      <span className="absolute right-2 top-2">
-        <ConfirmDelete
-          label={`Delete run ${run.name ?? run.id}`}
-          title="Delete this run"
-          onConfirm={() => remove(run.id)}
-        />
-      </span>
     </li>
   );
 }
@@ -74,8 +75,10 @@ function RunRow({
  * Every recorded run, newest first, with a saved-only filter — saving a run is
  * what marks it worth keeping, so saved is the default view.
  *
- * Delete is a two-step row action: the first click arms it, the second
- * confirms. There is no undo against the backend.
+ * Cleanup is bulk, not per-row: tick the runs to discard, then the single
+ * delete icon in the toolbar. Because there is no undo against the backend,
+ * the confirmation is a modal that names every run about to be deleted, not
+ * an inline popover that is easy to click through.
  */
 export function RunsRail({
   runs,
@@ -86,16 +89,72 @@ export function RunsRail({
   selectedId: string | null;
   onSelect: (runId: string) => void;
 }) {
+  const { remove } = useRuns();
   const [savedOnly, setSavedOnly] = useState(true);
+  const [checked, setChecked] = useState<ReadonlySet<string>>(new Set());
+  const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const visible = useMemo(
     () => (savedOnly ? runs.filter((run) => run.name) : runs),
     [runs, savedOnly],
   );
 
+  const toggle = (runId: string) =>
+    setChecked((current) => {
+      const next = new Set(current);
+      if (next.has(runId)) next.delete(runId);
+      else next.add(runId);
+      return next;
+    });
+
+  const checkedVisible = visible.filter((run) => checked.has(run.id));
+  const allChecked = visible.length > 0 && checkedVisible.length === visible.length;
+  const toggleAll = () =>
+    setChecked(allChecked ? new Set() : new Set(visible.map((run) => run.id)));
+
+  // The dialog names what it deletes, so it lists every checked run, including
+  // ones the current filter has hidden from the rail.
+  const checkedRuns = runs.filter((run) => checked.has(run.id));
+
+  useEffect(() => {
+    if (!confirming) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !deleting) setConfirming(false);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [confirming, deleting]);
+
+  const confirmRemove = async () => {
+    setDeleting(true);
+    try {
+      for (const runId of checked) {
+        await remove(runId);
+      }
+      setChecked(new Set());
+    } finally {
+      setDeleting(false);
+      setConfirming(false);
+    }
+  };
+
   return (
     <div data-testid="runs-rail">
-      <div className="flex items-center gap-1 border-b border-border px-3 py-2">
-        <div role="group" aria-label="Run filter" className="grid grid-cols-2 gap-px rounded-sm border border-border bg-border">
+      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+        <input
+          type="checkbox"
+          data-testid="select-all-runs"
+          aria-label="Select all listed runs"
+          checked={allChecked}
+          onChange={toggleAll}
+          disabled={visible.length === 0}
+          className="shrink-0 accent-primary"
+        />
+        <div
+          role="group"
+          aria-label="Run filter"
+          className="grid grid-cols-2 gap-px rounded-sm border border-border bg-border"
+        >
           {(['saved', 'all'] as const).map((option) => (
             <button
               key={option}
@@ -112,6 +171,26 @@ export function RunsRail({
             </button>
           ))}
         </div>
+        <span className="flex-1" />
+        {checked.size > 0 ? (
+          <span
+            data-testid="runs-selected-count"
+            className="font-mono text-[11px] text-muted-foreground"
+          >
+            {checked.size} selected
+          </span>
+        ) : null}
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          aria-label="Delete selected runs"
+          title={checked.size > 1 ? `Delete ${checked.size} runs` : 'Delete run'}
+          disabled={checked.size === 0}
+          onClick={() => setConfirming(true)}
+        >
+          <Trash2 size={16} strokeWidth={1.5} aria-hidden="true" />
+        </Button>
       </div>
 
       {visible.length === 0 ? (
@@ -132,11 +211,65 @@ export function RunsRail({
               key={run.id}
               run={run}
               selected={run.id === selectedId}
+              checked={checked.has(run.id)}
               onSelect={() => onSelect(run.id)}
+              onToggle={() => toggle(run.id)}
             />
           ))}
         </ul>
       )}
+
+      {confirming ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/70"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !deleting) setConfirming(false);
+          }}
+        >
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-label="Delete selected runs"
+            data-testid="bulk-delete-dialog"
+            className="flex max-h-[70vh] w-[22rem] flex-col rounded-sm border border-border bg-card p-4"
+          >
+            <h2 className="text-sm font-medium">
+              Delete {checkedRuns.length} {checkedRuns.length === 1 ? 'run' : 'runs'}?
+            </h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              This removes the runs and their stored signals. There is no undo.
+            </p>
+            <ul className="mt-3 min-h-0 flex-1 divide-y divide-border overflow-y-auto rounded-sm border border-border">
+              {checkedRuns.map((run) => (
+                <li key={run.id} className="px-3 py-1.5 font-mono text-[11px]">
+                  {runDisplayName(run)}
+                </li>
+              ))}
+            </ul>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                disabled={deleting}
+                onClick={() => setConfirming(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={deleting}
+                className="border-destructive/50 text-destructive hover:text-destructive"
+                onClick={() => void confirmRemove()}
+              >
+                {deleting ? 'Deleting…' : 'Delete'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import type { Run } from '../../api/client';
+import { runDisplayName } from '../../runs/labels';
 import { Button } from '../../components/ui/button';
 import { ButtonGroup, FillColumn, StatGrid } from '../../components/ui/layout';
 import { EmptyState } from '../chrome/EmptyState';
@@ -39,7 +40,7 @@ const STATUS_LABEL: Record<ReplayStatus, string> = {
 };
 
 function runLabel(run: Run): string {
-  return `${run.name ?? run.model_name} · ${run.start_date} → ${run.end_date}`;
+  return `${runDisplayName(run)} · ${run.start_date} → ${run.end_date}`;
 }
 
 /** Progress along the window's calendar — a position indicator, not a metric. */

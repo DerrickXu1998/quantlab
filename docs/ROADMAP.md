@@ -107,6 +107,38 @@ and (later) live trading.
       takes a symbol list.
 - [ ] Frontend: universe picker wherever a symbol list is chosen today.
 
+## Phase 3.5 — Strategy expressiveness gaps
+
+**Goal**: close the gaps between the feature/signal catalog and what the
+Strategy tab can express. Candidate strategies and the full gap analysis live
+in `docs/STRATEGY_IDEAS.md` (2026-09-30); gap IDs continue the register in
+`docs/AI_QUANT_BOOK_STRATEGY_PLAN.md` §3. Six strategies (A1–A6 there) are
+buildable today with zero code — backtest those first.
+
+- [ ] **F11** — port `squeeze` and `choppiness` as backend filter rules
+      (follows the `adx-trend-filter` pattern; hours of work, unlocks the
+      volatility-regime strategies B3).
+- [ ] **U7** — frontend for custom signal rules. The backend already serves
+      `indicator-threshold` / `indicator-crossover` / `fundamental-condition`
+      templates via `/signal-templates` + `/custom-rules`; there is no UI to
+      create them. Highest-leverage single UI item: makes the whole indicator
+      catalog user-reachable without new backend rules.
+- [ ] **F10 + U6** — portfolio-level execution: rank a universe by a feature,
+      rebalance on a schedule, hold N positions at target weights. This is the
+      one architecture decision here (per-instrument simulation becomes a
+      portfolio pass); it unlocks cross-sectional momentum rotation (B1), the
+      largest strategy family the research engine already has features for.
+- [ ] **F12** — signal rules over `insider_activity` and
+      `fca_short_interest` / `short_squeeze_score`. Scope: US insiders + UK
+      shorts only; `finra_short_volume` has ~1 month of history and cannot
+      backtest.
+- [ ] **F13** — `sizing_from_score`: scale position size by the weighted
+      combine score. Cheap once F10 exists; not worth doing standalone.
+
+**Order** (decision): A1–A6 backtests → F11 → U7 → F10/U6 → F12/F13. F10 is
+deliberately last of the big items: it should be designed with real backtest
+evidence from A1–A6 in hand, not ahead of it.
+
 ## Phase 4 — Real-time tick ingest (IBKR)
 
 **Goal**: live LSE L1 ticks captured to memory for strategies, batched into

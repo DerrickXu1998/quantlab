@@ -339,6 +339,29 @@ describe('RunResultsView', () => {
     expect(screen.queryByTestId('run-fact-coverage')).not.toBeInTheDocument();
   });
 
+  it('shows dividends as informational, not as a correctness alert', () => {
+    renderResults(
+      makeRun({
+        corporate_actions: [
+          {
+            instrument_id: 2,
+            symbol: 'IBM.US',
+            ex_date: '2024-05-09',
+            action_type: 'dividend',
+            split_ratio: null,
+            dividend: 1.67,
+          },
+        ],
+      }),
+    );
+
+    const notice = screen.getByTestId('run-dividend-notices');
+    expect(notice).not.toHaveAttribute('role', 'alert');
+    expect(notice).toHaveTextContent(/IBM\.US/);
+    expect(notice).toHaveTextContent(/2024-05-09/);
+    expect(screen.queryByTestId('run-corporate-actions')).not.toBeInTheDocument();
+  });
+
   it('marks a run recorded against another dataset as not reproducible', () => {
     renderResults(makeRun({ re_runnable: false }));
 
