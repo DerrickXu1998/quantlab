@@ -6,8 +6,9 @@
   the kernel OOM-killer then picks a victim more or less at random.
 
   These values keep ClickHouse inside the 2560M container limit set in
-  docker-compose.prod.yml. A query that needs more now fails with a clear
-  MEMORY_LIMIT_EXCEEDED instead of taking the host down with it.
+  docker-compose.prod.yml. Aggregations and sorts that outgrow memory spill to
+  disk (clickhouse-users.xml); anything else that needs more fails with a
+  clear MEMORY_LIMIT_EXCEEDED instead of taking the host down with it.
 -->
 <clickhouse>
     <!-- Hard ceiling for the server process, in bytes. 2 GiB, under the 2.5 GiB
