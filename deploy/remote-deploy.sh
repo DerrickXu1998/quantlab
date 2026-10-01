@@ -86,9 +86,23 @@ fi
 # --- 1. install the new configuration ----------------------------------------
 # Config is copied every deploy, so a change to the compose file or the Caddyfile
 # ships exactly like a code change: commit, push, done.
+#
+# The Caddyfile and the ClickHouse XML are bind-mounted as single files, and a
+# single-file bind mount pins the file the container started with: `install`
+# writes a new file, so a running container keeps reading the old one, and
+# compose sees no change to recreate for. Note which ones changed, and restart
+# the service that reads them once the stack is up (step 4b) -- otherwise a
+# config change ships, deploys green, and silently never takes effect.
 log "installing configuration from $STAGE_DIR"
+restart_after_up=()
 for f in docker-compose.prod.yml Caddyfile clickhouse-limits.xml clickhouse-users.xml; do
 	[ -f "$STAGE_DIR/$f" ] || fail "$f missing from the staged deploy"
+	if ! cmp -s "$STAGE_DIR/$f" "$APP_DIR/$f" 2>/dev/null; then
+		case "$f" in
+		Caddyfile) restart_after_up+=(caddy) ;;
+		clickhouse-*.xml) restart_after_up+=(clickhouse) ;;
+		esac
+	fi
 	install -o root -g root -m 0644 "$STAGE_DIR/$f" "$APP_DIR/$f"
 done
 
@@ -126,6 +140,14 @@ log "starting the stack"
 if ! compose up -d --remove-orphans; then
 	compose logs --tail 50 migrate >&2 || true
 	fail "compose up did not complete -- the migrate logs above have the reason"
+fi
+
+# --- 4b. pick up changed bind-mounted config (see step 1) ------------------------
+if [ "${#restart_after_up[@]}" -gt 0 ]; then
+	services="$(printf '%s\n' "${restart_after_up[@]}" | sort -u | tr '\n' ' ')"
+	log "restarting for changed config: $services"
+	# shellcheck disable=SC2086 # word-splitting the service list is intended
+	compose restart $services
 fi
 
 # --- 5. wait for health -------------------------------------------------------
