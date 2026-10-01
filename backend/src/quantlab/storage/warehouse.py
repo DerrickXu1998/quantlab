@@ -13,7 +13,7 @@ from __future__ import annotations
 import datetime as dt
 import os
 import threading
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -418,14 +418,40 @@ class Bar:
     volume: int
 
 
+#: Instruments per bar-store query when reading a selection. Every read goes
+#: through price_bars_current (FINAL), whose memory grows with the parts it
+#: must merge at once, not with the rows it returns: daily bars share each
+#: monthly partition with the minute bars, so one query over a whole
+#: 503-name universe touched nearly the entire table and died at the
+#: self-hosted server's 1.5 GiB per-query cap, where 25-name batches each use
+#: a few tens of MiB. Same default as quantlab.store's iter_bars.
+BAR_QUERY_CHUNK = 25
+
+
+def _rows_by_id_chunks(client: Any, sql: str, ids: Iterable[int], parameters: dict) -> list:
+    """Run ``sql`` once per batch of instrument ids and concatenate the rows.
+
+    ``sql`` must filter on ``instrument_id IN %(ids)s`` and compute per
+    instrument only -- a batch boundary must not split anything the query
+    aggregates across instruments. Ids are sorted first, so a query ordered by
+    instrument_id stays ordered across batches.
+    """
+    ordered = sorted(set(int(i) for i in ids))
+    rows: list = []
+    for start in range(0, len(ordered), BAR_QUERY_CHUNK):
+        batch = tuple(ordered[start : start + BAR_QUERY_CHUNK])
+        rows.extend(client.query(sql, parameters={**parameters, "ids": batch}).result_rows)
+    return rows
+
+
 def iter_symbol_bars(
     wh: Warehouse, symbols: Sequence[str] | None = None, frequency: str = "1d"
 ) -> Iterator[tuple[str, int, list[Bar]]]:
     """Yield (symbol, instrument_id, bars) for signal materialisation.
 
-    One bar-store query for the whole selection -- the load_bars_for pattern --
-    rather than one per instrument: over the full catalog that is the
-    difference between one round trip and several hundred.
+    One bar-store query per BAR_QUERY_CHUNK instruments -- the load_bars_for
+    pattern -- rather than one per instrument (several hundred round trips over
+    the full catalog) or one for all of them (past the per-query memory cap).
     """
     query = "SELECT instrument_id, symbol FROM instruments"
     params: list[Any] = []
@@ -441,18 +467,17 @@ def iter_symbol_bars(
         return
 
     with wh.bars() as client:
-        rows = client.query(
+        rows = _rows_by_id_chunks(
+            client,
             f"""
             SELECT instrument_id, ts, open, high, low, close, volume
               FROM {BARS_VIEW}
              WHERE instrument_id IN %(ids)s AND frequency = %(frequency)s
              ORDER BY instrument_id, ts ASC
             """,
-            parameters={
-                "ids": tuple(int(instrument_id) for instrument_id, _ in instruments),
-                "frequency": frequency,
-            },
-        ).result_rows
+            (int(instrument_id) for instrument_id, _ in instruments),
+            {"frequency": frequency},
+        )
 
     grouped: dict[int, list[Bar]] = {}
     for instrument_id, ts, o, h, lo, c, v in rows:
@@ -516,7 +541,8 @@ def load_bars_for(
     by_id = {instrument_id: symbol for symbol, instrument_id in ids.items()}
 
     with wh.bars() as client:
-        rows = client.query(
+        rows = _rows_by_id_chunks(
+            client,
             f"""
             SELECT instrument_id, ts, open, high, low, close, volume
               FROM {BARS_VIEW}
@@ -525,13 +551,9 @@ def load_bars_for(
                AND ts >= %(start)s AND ts <= %(end)s
              ORDER BY instrument_id, ts ASC
             """,
-            parameters={
-                "ids": tuple(by_id),
-                "frequency": frequency,
-                "start": f"{start} 00:00:00",
-                "end": f"{end} 23:59:59",
-            },
-        ).result_rows
+            by_id,
+            {"frequency": frequency, "start": f"{start} 00:00:00", "end": f"{end} 23:59:59"},
+        )
 
     out: dict[str, list[Bar]] = {}
     for instrument_id, ts, o, h, lo, c, v in rows:
@@ -552,15 +574,17 @@ def earliest_bar_dates(
     by_id = {instrument_id: symbol for symbol, instrument_id in ids.items()}
 
     with wh.bars() as client:
-        rows = client.query(
+        rows = _rows_by_id_chunks(
+            client,
             f"""
             SELECT instrument_id, min(ts)
               FROM {BARS_VIEW}
              WHERE instrument_id IN %(ids)s AND frequency = %(frequency)s
              GROUP BY instrument_id
             """,
-            parameters={"ids": tuple(by_id), "frequency": frequency},
-        ).result_rows
+            by_id,
+            {"frequency": frequency},
+        )
 
     return {by_id[int(iid)]: ts.date().isoformat() for iid, ts in rows}
 
@@ -581,23 +605,20 @@ def ingest_run_ids(
         return []
 
     with wh.bars() as client:
-        rows = client.query(
+        rows = _rows_by_id_chunks(
+            client,
             f"""
             SELECT DISTINCT run_id
               FROM {BARS_VIEW}
              WHERE instrument_id IN %(ids)s
                AND frequency = %(frequency)s
                AND ts >= %(start)s AND ts <= %(end)s
-             ORDER BY run_id
             """,
-            parameters={
-                "ids": tuple(ids.values()),
-                "frequency": frequency,
-                "start": f"{start} 00:00:00",
-                "end": f"{end} 23:59:59",
-            },
-        ).result_rows
-    return [int(run_id) for (run_id,) in rows]
+            ids.values(),
+            {"frequency": frequency, "start": f"{start} 00:00:00", "end": f"{end} 23:59:59"},
+        )
+    # DISTINCT per batch; the union across batches, ordered, is the answer.
+    return sorted({int(run_id) for (run_id,) in rows})
 
 
 def corporate_actions(wh: Warehouse, symbols: list[str], start: str, end: str) -> list[dict]:
@@ -1222,7 +1243,8 @@ def _last_closes(
         return {}
     by_id = {instrument_id: symbol for symbol, instrument_id in ids.items()}
     with wh.bars() as client:
-        rows = client.query(
+        rows = _rows_by_id_chunks(
+            client,
             f"""
             SELECT instrument_id, argMax(close, ts)
               FROM {BARS_VIEW}
@@ -1231,12 +1253,9 @@ def _last_closes(
                AND ts <= %(as_of)s
              GROUP BY instrument_id
             """,
-            parameters={
-                "ids": tuple(by_id),
-                "frequency": frequency,
-                "as_of": f"{as_of} 23:59:59",
-            },
-        ).result_rows
+            by_id,
+            {"frequency": frequency, "as_of": f"{as_of} 23:59:59"},
+        )
     return {by_id[int(iid)]: float(close) for iid, close in rows}
 
 

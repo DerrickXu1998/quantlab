@@ -234,3 +234,92 @@ def test_no_known_symbols_means_no_ingest_lineage():
     wh = _FakeWarehouse(catalog_rows=[], bar_rows=[])
     assert warehouse.ingest_run_ids(wh, ["NOSUCH"], "2024-01-01", "2024-12-31") == []
     assert wh.client.queries == []
+
+
+# --- universe-sized selections are read in batches ---------------------------
+#
+# One FINAL query over a whole universe exceeded the self-hosted ClickHouse's
+# per-query memory cap; the reads now go BAR_QUERY_CHUNK instruments at a time.
+# These pin that the batching is invisible: same answers, just more queries.
+
+
+class _IdAwareClient(_FakeClient):
+    """Answers each query only for the ids it asked about, as ClickHouse would."""
+
+    def __init__(self, rows_by_id):
+        super().__init__([])
+        self._rows_by_id = rows_by_id
+        self.batches: list[tuple] = []
+
+    def query(self, sql, parameters=None):
+        self.queries.append(sql)
+        ids = tuple((parameters or {}).get("ids", ()))
+        self.batches.append(ids)
+        if "DISTINCT run_id" in sql:
+            # Overlapping run ids across batches: the union must dedupe them.
+            runs = sorted({r for i in ids for r in self._rows_by_id[i]["runs"]})
+            return _Result([(r,) for r in runs])
+        if "min(ts)" in sql:
+            return _Result([(i, self._rows_by_id[i]["bars"][0][1]) for i in ids])
+        if "argMax(close" in sql:
+            return _Result([(i, self._rows_by_id[i]["bars"][-1][5]) for i in ids])
+        return _Result([row for i in ids for row in self._rows_by_id[i]["bars"]])
+
+
+def _universe(n=60):
+    symbols = [f"S{i:03d}.US" for i in range(1, n + 1)]
+    rows_by_id = {
+        i: {
+            "bars": [(i, _ts(d), 1.0, 2.0, 0.5, float(i * 10 + d), 100) for d in (1, 2)],
+            "runs": {7, 7 + i % 3},
+        }
+        for i in range(1, n + 1)
+    }
+    # Catalogue rows deliberately out of id order: batching must still sort.
+    catalog = [(s, i) for i, s in reversed(list(enumerate(symbols, start=1)))]
+    wh = _FakeWarehouse(catalog_rows=catalog, bar_rows=[])
+    wh.client = _IdAwareClient(rows_by_id)
+    return wh, symbols
+
+
+def test_a_universe_is_read_in_batches_and_reassembled_exactly():
+    wh, symbols = _universe(60)
+
+    bars = warehouse.load_bars_for(wh, symbols, "2024-03-01", "2024-03-31")
+
+    assert [len(b) for b in wh.client.batches] == [25, 25, 10]
+    assert all(len(set(b)) == len(b) for b in wh.client.batches)
+    assert sorted(i for b in wh.client.batches for i in b) == list(range(1, 61))
+    assert set(bars) == set(symbols)
+    assert [bar.close for bar in bars["S042.US"]] == [421.0, 422.0]
+
+
+def test_a_small_selection_is_still_one_query(wh):
+    warehouse.load_bars_for(wh, ["AAPL.US", "MSFT.US"], "2024-03-01", "2024-03-31")
+    assert len(wh.client.queries) == 1
+
+
+def test_per_instrument_aggregates_merge_across_batches():
+    wh, symbols = _universe(60)
+
+    first = warehouse.earliest_bar_dates(wh, symbols)
+    last = warehouse._last_closes(wh, symbols, "2024-03-31")
+    runs = warehouse.ingest_run_ids(wh, symbols, "2024-03-01", "2024-03-31")
+
+    assert len(first) == 60 and first["S060.US"] == "2024-03-01"
+    assert len(last) == 60 and last["S060.US"] == 602.0
+    # Distinct per batch, deduplicated and ordered across batches.
+    assert runs == [7, 8, 9]
+
+
+def test_catalogue_materialisation_reads_in_batches_too():
+    wh, symbols = _universe(60)
+    # This path reads the catalogue as (instrument_id, symbol), not (symbol, id).
+    wh._catalog = _FakeCatalog([(i, s) for s, i in wh._catalog._rows])
+
+    yielded = list(warehouse.iter_symbol_bars(wh, symbols))
+
+    assert len(wh.client.queries) == 3
+    assert len(yielded) == 60
+    by_symbol = {symbol: bars for symbol, _, bars in yielded}
+    assert [bar.close for bar in by_symbol["S001.US"]] == [11.0, 12.0]
