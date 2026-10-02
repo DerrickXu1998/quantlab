@@ -128,7 +128,11 @@ def _active(
             age = index - positions.get(candidate.date, index)
             if age < window:
                 live[direction] = candidate
-        out[date] = live
+        # Sparse: a bar with nothing active has no entry, and every reader
+        # already asks with `.get(date, {})`. A dict per bar was the largest
+        # cost of composing intraday bars.
+        if live:
+            out[date] = live
     return out
 
 

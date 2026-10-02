@@ -24,9 +24,12 @@ Pure computation: no I/O, no wall clock (Constitution VI).
 
 from __future__ import annotations
 
-from bisect import bisect_left
 from dataclasses import dataclass
 from typing import Any
+
+import numpy as np
+
+from quantlab.execution.bars import BarSeries, first_at_or_after
 
 #: What a run may ask for. ``none`` is the behaviour that predates this module.
 PRICE_ADJUSTMENT: tuple[str, ...] = ("split_dividend", "split", "none")
@@ -114,7 +117,7 @@ def by_symbol(
     return out
 
 
-def factors(bars: list[Any], actions: list[CorporateAction]) -> tuple[list[float], list[float]]:
+def factors(bars: Any, actions: list[CorporateAction]) -> tuple[Any, Any]:
     """Per-bar multipliers that back-adjust ``bars`` for ``actions``.
 
     Returns ``(price, volume)``: adjusted price = raw x price[i], adjusted
@@ -129,46 +132,29 @@ def factors(bars: list[Any], actions: list[CorporateAction]) -> tuple[list[float
     rather than allowed to produce a zero or negative price.
     """
     n = len(bars)
-    price = [1.0] * n
-    volume = [1.0] * n
-    if not n or not actions:
-        return price, volume
-
-    dates = [bar.date for bar in bars]
-    # Per-action multiplier for every bar strictly before its ex-date.
-    events: list[tuple[str, float, float]] = []
-    for action in actions:
-        # First bar on or after the ex-date; everything before it is adjusted.
-        cut = bisect_left(dates, action.ex_date)
-        if cut == 0 or cut >= n:
-            # Nothing before it in this series, or not in force by the last bar.
-            continue
-        if action.is_split:
-            events.append(
-                (action.ex_date, 1.0 / float(action.split_ratio), float(action.split_ratio))
-            )
-        elif action.is_dividend:
-            before = float(bars[cut - 1].close)
-            dividend = float(action.dividend)
-            if before <= 0 or dividend >= before:
+    columnar = isinstance(bars, BarSeries)
+    price = np.ones(n)
+    volume = np.ones(n)
+    if n and actions:
+        for action in actions:
+            # First bar on or after the ex-date; everything before it is
+            # adjusted. For intraday bars that is the session's first bar.
+            cut = first_at_or_after(bars, action.ex_date)
+            if cut == 0 or cut >= n:
+                # Nothing before it in this series, or not in force by the last bar.
                 continue
-            events.append((action.ex_date, (before - dividend) / before, 1.0))
-
-    if not events:
-        return price, volume
-
-    # Walk backwards accumulating every event whose ex-date is after the bar.
-    events.sort(key=lambda e: e[0])
-    p, v = 1.0, 1.0
-    pending = len(events) - 1
-    for i in range(n - 1, -1, -1):
-        while pending >= 0 and events[pending][0] > dates[i]:
-            p *= events[pending][1]
-            v *= events[pending][2]
-            pending -= 1
-        price[i] = p
-        volume[i] = v
-    return price, volume
+            if action.is_split:
+                ratio = float(action.split_ratio)
+                price[:cut] /= ratio
+                volume[:cut] *= ratio
+            elif action.is_dividend:
+                before = float(bars[cut - 1].close)
+                dividend = float(action.dividend)
+                if before <= 0 or dividend >= before:
+                    continue
+                price[:cut] *= (before - dividend) / before
+    # Columns for a BarSeries; plain lists for a list of bars, as before.
+    return (price, volume) if columnar else (price.tolist(), volume.tolist())
 
 
 def adjust(bars: list[Any], actions: list[CorporateAction]) -> list[Any]:
@@ -178,6 +164,13 @@ def adjust(bars: list[Any], actions: list[CorporateAction]) -> list[Any]:
     anything to adjust comes back entirely as :class:`AdjustedBar`, so every
     bar in it answers ``raw_close`` the same way.
     """
+    if isinstance(bars, BarSeries):
+        if not actions:
+            return bars
+        price, volume = factors(bars, actions)
+        if (price == 1.0).all() and (volume == 1.0).all():
+            return bars
+        return bars.scaled(price, volume)
     if not actions:
         return list(bars)
     price, volume = factors(bars, actions)

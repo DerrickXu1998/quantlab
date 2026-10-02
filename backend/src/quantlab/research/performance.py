@@ -22,6 +22,8 @@ import statistics
 from dataclasses import dataclass, field
 from typing import Any
 
+from quantlab.execution.bars import BarSeries
+
 #: Notional book size. Arbitrary but fixed: the shape of the curve and every
 #: ratio below are scale-invariant, so this only sets the axis labels.
 INITIAL_CAPITAL = 100_000.0
@@ -544,6 +546,11 @@ def compute_performance(
         for symbol, actions in (corporate_actions or {}).items()
     }
     benchmark_bars = adjust_all(bars_by_symbol, benchmark_actions)
+    # Intraday bars collapse to one bar per session, the curve's own unit.
+    benchmark_bars = {
+        symbol: bars.sessions() if isinstance(bars, BarSeries) else bars
+        for symbol, bars in benchmark_bars.items()
+    }
     in_window = {
         symbol: _within(bars, window_start, window_end)
         for symbol, bars in benchmark_bars.items()

@@ -422,6 +422,9 @@ class ExecutionConfigModel(BaseModel):
     #: daily (default) or minute: whether minute bars decide which protective
     #: level a session crossed first, and supply next_vwap fills.
     intraday_resolution: Literal["daily", "minute"] = "daily"
+    #: The bars signals run on: daily, or intraday bars built from the minute
+    #: feed. Intraday runs are capped by an estimated bar count.
+    bar_frequency: Literal["1d", "1h", "15m", "5m"] = "1d"
 
 
 class StrategyRequest(BaseModel):

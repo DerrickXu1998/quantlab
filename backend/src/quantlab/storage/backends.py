@@ -38,6 +38,10 @@ class StorageBackend(Protocol):
     def load_bars_for(self, symbols: list[str], start: str, end: str) -> dict: ...
     def earliest_bar_dates(self, symbols: list[str]) -> dict: ...
     def corporate_actions(self, symbols: list[str], start: str, end: str) -> list[dict]: ...
+    #: Intraday signal bars (5m/15m/1h) as BarSeries; empty where there are none.
+    def load_intraday_bars(
+        self, symbols: list[str], start: str, end: str, frequency: str
+    ) -> dict: ...
     #: {session date: minute bars} for one symbol; empty where the store has none.
     def minute_bars(self, symbol: str, start: str, end: str) -> dict: ...
     def instrument_ids(self, symbols: list[str]) -> dict: ...
@@ -130,6 +134,13 @@ class SqliteBackend:
         # The synthetic dataset has none. Answering rather than raising is what
         # keeps the runner free of branching on which store it is talking to.
         return []
+
+    def load_intraday_bars(
+        self, symbols: list[str], start: str, end: str, frequency: str
+    ) -> dict:
+        # The demo is daily only; the runner refuses an intraday run on it
+        # rather than reporting an empty one.
+        return {}
 
     def minute_bars(self, symbol: str, start: str, end: str) -> dict:
         # No minute bars in the demo: a minute-resolution run falls back to
@@ -332,6 +343,11 @@ class WarehouseBackend:
 
     def corporate_actions(self, symbols: list[str], start: str, end: str) -> list[dict]:
         return warehouse.corporate_actions(self.wh, symbols, start, end)
+
+    def load_intraday_bars(
+        self, symbols: list[str], start: str, end: str, frequency: str
+    ) -> dict:
+        return warehouse.load_intraday_bars(self.wh, symbols, start, end, frequency)
 
     def minute_bars(self, symbol: str, start: str, end: str) -> dict:
         # A run reads many months of the same few symbols: resolve each id

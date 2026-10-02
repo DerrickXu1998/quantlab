@@ -25,6 +25,7 @@ from typing import NamedTuple
 
 import numpy as np
 
+from quantlab.execution.bars import as_of_day
 from quantlab.indicators import technical
 from quantlab.indicators.builtins import rsi as rsi_indicator
 from quantlab.indicators.builtins import sma as sma_indicator
@@ -724,7 +725,10 @@ def _as_of(series_bars, dates: list[str], max_stale_days: int) -> np.ndarray:
     points = sorted((bar.date, float(bar.close)) for bar in series_bars or [])
     out = np.full(len(dates), np.nan)
     j = -1
-    for i, day in enumerate(dates):
+    for i, key in enumerate(dates):
+        # An intraday bar reads the series as of the previous date: today's
+        # daily close is not known mid-session.
+        day = as_of_day(key)
         while j + 1 < len(points) and points[j + 1][0] <= day:
             j += 1
         if j < 0:

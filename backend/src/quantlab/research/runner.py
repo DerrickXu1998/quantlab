@@ -25,13 +25,17 @@ built from a later bar) is enforced by the CHECK constraint on
 
 from __future__ import annotations
 
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from datetime import date as _date
 from typing import Any
 
+import numpy as np
+
 from quantlab.execution import ExecutionConfig, adjustments, minutes, simulate
+from quantlab.execution.bars import BARS_PER_SESSION, is_intraday
 from quantlab.logging import get_logger
 from quantlab.research import errors
 from quantlab.signals.registry import get_rule
@@ -51,6 +55,40 @@ _BARS_PER_CALENDAR_DAY = 5 / 7
 
 #: Upper bound on instrument-days accepted in one synchronous run.
 MAX_SELECTION_INSTRUMENT_DAYS = 2_000_000
+
+#: Upper bound on bars in one intraday run, estimated before anything is read.
+#: A run holds ~150 B a bar at its peak (columns, indicators, the engine's
+#: book): 2M bars measured ~175 MB, inside one backend worker's share of the
+#: container, and ~30 s end to end.
+MAX_INTRADAY_BARS = 2_000_000
+
+#: One intraday run at a time per worker. Requests run on a thread pool, so
+#: without this a worker could hold several 2M-bar runs at once; one each
+#: (~330 MB measured at the limit) keeps two workers inside the container.
+_INTRADAY_SLOT = threading.BoundedSemaphore(1)
+#: How long a second intraday run waits for the slot before being refused.
+INTRADAY_WAIT_SECONDS = 30
+
+
+def warmup_start_for(start: _date, lookback_bars: int, frequency: str) -> str:
+    """Where to start loading so the first session of the window has its
+    lookback behind it. Lookback is in bars; intraday, a session holds many."""
+    sessions = -(-lookback_bars // BARS_PER_SESSION[frequency])  # ceiling
+    return (start - timedelta(days=sessions * _CALENDAR_DAYS_PER_BAR)).isoformat()
+
+
+def estimate_bars(symbols: int, start: str, end: str, frequency: str) -> int:
+    """Bars a run over [start, end] would hold, from weekdays alone."""
+    after_end = (_date.fromisoformat(end) + timedelta(days=1)).isoformat()
+    sessions = int(np.busday_count(start, after_end))
+    return symbols * sessions * BARS_PER_SESSION[frequency]
+
+
+def load_bars(backend, symbols: list[str], start: str, end: str, config: ExecutionConfig) -> dict:
+    """Signal bars at the config's frequency: rows for daily, columns intraday."""
+    if is_intraday(config.bar_frequency):
+        return backend.load_intraday_bars(symbols, start, end, config.bar_frequency)
+    return backend.load_bars_for(symbols, start, end)
 
 
 @dataclass(frozen=True)
@@ -257,9 +295,13 @@ def run_experiment(
 
     requested_symbols = sorted(set(symbols))
     window_days = (end - start).days + 1
+    frequency = spec.execution.bar_frequency
+    intraday = is_intraday(frequency)
     selection_size = len(requested_symbols) * window_days
-    if selection_size > MAX_SELECTION_INSTRUMENT_DAYS:
+    if not intraday and selection_size > MAX_SELECTION_INSTRUMENT_DAYS:
         raise errors.SelectionTooLargeError(selection_size, MAX_SELECTION_INSTRUMENT_DAYS)
+    if intraday and getattr(backend, "name", None) == "sqlite":
+        raise errors.DatasetUnsupportedError(f"{frequency} bars", "synthetic demo")
 
     unknown = backend.validate_symbols(requested_symbols)
     if unknown:
@@ -273,13 +315,40 @@ def run_experiment(
     # directly -- which this did until the units were noticed -- accepts a
     # 60-day window against a 50-bar lookback, when 60 calendar days hold only
     # about 43 sessions.
-    lookback_days = spec.lookback_days
-    window_bars = int(window_days * _BARS_PER_CALENDAR_DAY)
+    lookback_days = spec.lookback_days  # in bars, whatever the frequency
+    window_bars = int(window_days * _BARS_PER_CALENDAR_DAY) * BARS_PER_SESSION[frequency]
     if window_bars < lookback_days:
         raise errors.WindowTooShortError(lookback_days, window_days)
 
-    warmup_start = (start - timedelta(days=lookback_days * _CALENDAR_DAYS_PER_BAR)).isoformat()
-    bars_by_symbol = backend.load_bars_for(requested_symbols, warmup_start, end_date)
+    warmup_start = warmup_start_for(start, lookback_days, frequency)
+    if intraday:
+        # Refused before a single bar is read: the estimate is cheap, the
+        # read and the run are not.
+        estimate = estimate_bars(len(requested_symbols), warmup_start, end_date, frequency)
+        if estimate > MAX_INTRADAY_BARS:
+            raise errors.IntradaySelectionTooLargeError(estimate, MAX_INTRADAY_BARS, frequency)
+        if not _INTRADAY_SLOT.acquire(timeout=INTRADAY_WAIT_SECONDS):
+            raise errors.IntradayBusyError()
+        try:
+            return _execute(
+                backend, spec, requested_symbols, start_date, end_date, warmup_start, owner_id
+            )
+        finally:
+            _INTRADAY_SLOT.release()
+    return _execute(backend, spec, requested_symbols, start_date, end_date, warmup_start, owner_id)
+
+
+def _execute(
+    backend,
+    spec: StrategySpec,
+    requested_symbols: list[str],
+    start_date: str,
+    end_date: str,
+    warmup_start: str,
+    owner_id: str | None,
+) -> RunResult:
+    """Load, compose, execute and summarise a validated run."""
+    bars_by_symbol = load_bars(backend, requested_symbols, warmup_start, end_date, spec.execution)
 
     # Only the concepts this strategy's rules declared. Loading the whole
     # vocabulary would be several million rows for a question nobody asked, and
