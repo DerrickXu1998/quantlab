@@ -323,3 +323,76 @@ def test_the_caveats_travel_with_the_numbers():
     assert "transaction cost" in joined
     assert "slippage" in joined
     assert "splits and dividends" in joined  # how corporate actions were treated
+
+
+# --- the benchmark is on the strategy's price basis ---------------------------
+#
+# Since splits and dividends reach the strategy's holdings, buy-and-hold must
+# see them too -- on raw closes a split reads as a crash and a dividend as a
+# loss, and "vs hold" and the regression compare unlike things.
+
+
+def _actions(*items):
+    from quantlab.execution.adjustments import CorporateAction
+
+    return {"AAA": [CorporateAction(*item) for item in items]}
+
+
+def test_a_split_does_not_crash_the_benchmark():
+    """A 20:1 split: the price falls twentyfold, a holder's wealth does not."""
+    by_symbol = {"AAA": bars(100.0, 100.0, 5.0)}
+    signals = [signal("AAA", "2024-01-01", "bullish")]
+
+    result = performance.compute_performance(
+        run_id="split", signals=signals, bars_by_symbol=by_symbol, symbols=["AAA"],
+        corporate_actions=_actions(("2024-01-03", "split", 20.0)),
+    )
+
+    assert result.benchmark[-1].value == pytest.approx(INITIAL)
+    # The strategy held through the same split: like for like.
+    assert result.equity[-1].value == pytest.approx(result.benchmark[-1].value)
+
+
+def test_a_dividend_is_part_of_the_benchmarks_return():
+    """$2 paid on a $100 stock that then trades ex at $98: the holder is whole."""
+    by_symbol = {"AAA": bars(100.0, 100.0, 98.0)}
+    signals = [signal("AAA", "2024-01-01", "bullish")]
+
+    result = performance.compute_performance(
+        run_id="div", signals=signals, bars_by_symbol=by_symbol, symbols=["AAA"],
+        corporate_actions=_actions(("2024-01-03", "dividend", None, 2.0)),
+    )
+
+    assert result.benchmark[-1].value == pytest.approx(INITIAL)
+    assert result.equity[-1].value == pytest.approx(result.benchmark[-1].value)
+    assert any("reinvested" in line for line in result.assumptions)
+
+
+def test_a_run_on_traded_prices_keeps_a_traded_price_benchmark():
+    """price_adjustment="none" (every run recorded before #29) gets no actions,
+    so strategy and benchmark stay raw together and old results reproduce."""
+    from quantlab.execution import ExecutionConfig
+
+    by_symbol = {"AAA": bars(100.0, 100.0, 5.0)}
+
+    result = performance.compute_performance(
+        run_id="raw", signals=[], bars_by_symbol=by_symbol, symbols=["AAA"],
+        execution=ExecutionConfig(price_adjustment="none"), corporate_actions={},
+    )
+
+    assert result.benchmark[-1].value == pytest.approx(INITIAL * 0.05)
+    assert any("traded prices" in line for line in result.assumptions)
+
+
+def test_the_benchmark_starts_at_the_windows_first_close_after_adjustment():
+    """A split inside the warm-up must not leak into the measured period: the
+    series is adjusted whole, then trimmed to the window."""
+    by_symbol = {"AAA": bars(200.0, 10.0, 11.0)}
+
+    result = performance.compute_performance(
+        run_id="warm", signals=[], bars_by_symbol=by_symbol, symbols=["AAA"],
+        window_start="2024-01-02",
+        corporate_actions=_actions(("2024-01-02", "split", 20.0)),
+    )
+
+    assert [p.value for p in result.benchmark] == pytest.approx([INITIAL, INITIAL * 1.1])
