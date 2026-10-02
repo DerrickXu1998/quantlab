@@ -2614,7 +2614,7 @@ components:
             (holding periods, cooldown, ATR period) then counts bars, and
             fundamentals and macro series are read as of the previous session.
             An intraday run is refused before anything is read when it would
-            hold more than 2,000,000 bars. intraday_resolution must be daily.
+            hold more than 6,000,000 bars. intraday_resolution must be daily.
 
     ExecutionSummary:
       type: object

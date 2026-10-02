@@ -25,7 +25,6 @@ built from a later bar) is enforced by the CHECK constraint on
 
 from __future__ import annotations
 
-import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -53,21 +52,25 @@ _CALENDAR_DAYS_PER_BAR = 2
 #: so a window that is only just long enough is accepted rather than refused.
 _BARS_PER_CALENDAR_DAY = 5 / 7
 
-#: Upper bound on instrument-days accepted in one synchronous run.
-MAX_SELECTION_INSTRUMENT_DAYS = 2_000_000
+#: Upper bound on instrument-days (symbols x calendar days) in one daily
+#: run: ~6M weekday bars, the same budget as intraday below. Daily bars are
+#: read as columns (~150 B a bar at peak): all 503 S&P 500 names x 10 years,
+#: 1.3M bars, measured +189 MB (it was +765 MB as one object a bar).
+MAX_SELECTION_INSTRUMENT_DAYS = 8_400_000
 
 #: Upper bound on bars in one intraday run, estimated before anything is read.
-#: A run holds ~150 B a bar at its peak (columns, indicators, the engine's
-#: book): 2M bars measured ~175 MB, inside one backend worker's share of the
-#: container, and ~30 s end to end.
-MAX_INTRADAY_BARS = 2_000_000
+#: Measured on production data at 5m: 2.0M bars +277 MB / 40 s, 4.1M bars
+#: +462 MB / 79 s (laptop through the IAP tunnel). 6M is ~650 MB -- a third of
+#: the backend's 2 GiB, with one large run at a time -- and ~2 minutes, which
+#: is as long as a run should hold an API request open.
+MAX_INTRADAY_BARS = 6_000_000
 
-#: One intraday run at a time per worker. Requests run on a thread pool, so
-#: without this a worker could hold several 2M-bar runs at once; one each
-#: (~330 MB measured at the limit) keeps two workers inside the container.
-_INTRADAY_SLOT = threading.BoundedSemaphore(1)
-#: How long a second intraday run waits for the slot before being refused.
-INTRADAY_WAIT_SECONDS = 30
+#: A run estimated above this many bars -- daily or intraday -- is "large":
+#: it takes the server-wide large-run slot, so at most one is in memory at a
+#: time across both workers and every thread. Smaller runs never wait.
+LARGE_RUN_BARS = 300_000
+#: How long a large run waits for the slot before being refused (429).
+LARGE_RUN_WAIT_SECONDS = 30
 
 
 def warmup_start_for(start: _date, lookback_bars: int, frequency: str) -> str:
@@ -85,9 +88,14 @@ def estimate_bars(symbols: int, start: str, end: str, frequency: str) -> int:
 
 
 def load_bars(backend, symbols: list[str], start: str, end: str, config: ExecutionConfig) -> dict:
-    """Signal bars at the config's frequency: rows for daily, columns intraday."""
+    """Signal bars at the config's frequency, as columns where the store can
+    give them (the warehouse, any frequency) and rows where it cannot (the
+    demo, daily). Both read the same to every rule and to the engine."""
     if is_intraday(config.bar_frequency):
         return backend.load_intraday_bars(symbols, start, end, config.bar_frequency)
+    columns = getattr(backend, "load_daily_columns", None)
+    if columns is not None:
+        return columns(symbols, start, end)
     return backend.load_bars_for(symbols, start, end)
 
 
@@ -321,21 +329,23 @@ def run_experiment(
         raise errors.WindowTooShortError(lookback_days, window_days)
 
     warmup_start = warmup_start_for(start, lookback_days, frequency)
-    if intraday:
-        # Refused before a single bar is read: the estimate is cheap, the
-        # read and the run are not.
-        estimate = estimate_bars(len(requested_symbols), warmup_start, end_date, frequency)
-        if estimate > MAX_INTRADAY_BARS:
-            raise errors.IntradaySelectionTooLargeError(estimate, MAX_INTRADAY_BARS, frequency)
-        if not _INTRADAY_SLOT.acquire(timeout=INTRADAY_WAIT_SECONDS):
-            raise errors.IntradayBusyError()
-        try:
-            return _execute(
-                backend, spec, requested_symbols, start_date, end_date, warmup_start, owner_id
-            )
-        finally:
-            _INTRADAY_SLOT.release()
-    return _execute(backend, spec, requested_symbols, start_date, end_date, warmup_start, owner_id)
+    # Refused before a single bar is read: the estimate is cheap, the read and
+    # the run are not.
+    estimate = estimate_bars(len(requested_symbols), warmup_start, end_date, frequency)
+    if intraday and estimate > MAX_INTRADAY_BARS:
+        raise errors.IntradaySelectionTooLargeError(estimate, MAX_INTRADAY_BARS, frequency)
+
+    def execute() -> RunResult:
+        return _execute(
+            backend, spec, requested_symbols, start_date, end_date, warmup_start, owner_id
+        )
+
+    if estimate <= LARGE_RUN_BARS:
+        return execute()
+    with backend.large_run_slot(LARGE_RUN_WAIT_SECONDS) as acquired:
+        if not acquired:
+            raise errors.LargeRunBusyError()
+        return execute()
 
 
 def _execute(

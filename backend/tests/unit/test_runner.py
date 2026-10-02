@@ -15,7 +15,7 @@ from __future__ import annotations
 import pytest
 
 from quantlab.research import errors
-from quantlab.research.runner import run_experiment
+from quantlab.research.runner import MAX_SELECTION_INSTRUMENT_DAYS, run_experiment
 from quantlab.storage import backends, db, repository
 from quantlab.synthetic.generator import generate_universe
 
@@ -246,7 +246,8 @@ def test_oversized_selection_is_rejected_up_front(conn):
             conn,
             model_name="sma-crossover",
             overrides={},
-            symbols=[f"SYM{i:05d}" for i in range(6000)],
+            # One more symbol-year than the limit allows, whatever it is set to.
+            symbols=[f"SYM{i:05d}" for i in range(MAX_SELECTION_INSTRUMENT_DAYS // 366 + 1)],
             start_date="2024-01-01",
             end_date="2024-12-31",
         )

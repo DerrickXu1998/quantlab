@@ -286,7 +286,12 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1024M
+          # Backtests run in-request: one large run at a time server-wide
+          # (research/runner.py, sized from measurements there) plus small
+          # runs and two ~60 MB workers. Was 1024M. Always-on limits now total
+          # 5.8 GB of the VM's 7.9 GB (clickhouse 2.5 + postgres 1 + backend 2
+          # + caddy 0.1); the one-off ingest job adds 2 if run at the same time.
+          memory: 2048M
     logging: *logging
     restart: unless-stopped
 

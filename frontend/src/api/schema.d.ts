@@ -1208,7 +1208,7 @@ export interface components {
              */
             intraday_resolution: "daily" | "minute";
             /**
-             * @description The bars signals are computed on and execution steps through. 1d is the daily bar. 1h, 15m and 5m are built from the IEX minute bars, regular hours, market holidays excluded; every count of days (holding periods, cooldown, ATR period) then counts bars, and fundamentals and macro series are read as of the previous session. An intraday run is refused before anything is read when it would hold more than 2,000,000 bars. intraday_resolution must be daily.
+             * @description The bars signals are computed on and execution steps through. 1d is the daily bar. 1h, 15m and 5m are built from the IEX minute bars, regular hours, market holidays excluded; every count of days (holding periods, cooldown, ATR period) then counts bars, and fundamentals and macro series are read as of the previous session. An intraday run is refused before anything is read when it would hold more than 6,000,000 bars. intraday_resolution must be daily.
              * @default 1d
              * @enum {string}
              */
