@@ -218,6 +218,10 @@ before any data is read.
 | Daily (`bar_frequency` `1d`, default) | 8,400,000 instrument-days (symbols × calendar days, ≈ 6M bars) | all 503 S&P 500 names × all ~10 years of data, with room to spare |
 | Intraday (`1h`, `15m`, `5m`) | 6,000,000 bars, estimated as symbols × weekdays × bars per session (warm-up included) | see below |
 
+Choose the bars in the Strategy tab under **Universe & window → Bars** (or
+`execution.bar_frequency` in the API); the form shows the estimated size and
+time and disables **Run backtest** when a run would be refused.
+
 Bars per session: `1h` 7, `15m` 26, `5m` 78 (regular hours, 09:30–16:00 New
 York). So 6M intraday bars is about:
 
