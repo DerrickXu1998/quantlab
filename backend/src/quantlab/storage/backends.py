@@ -15,10 +15,16 @@ from __future__ import annotations
 
 import datetime as dt
 import sqlite3
+import threading
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from typing import Protocol
 
 from quantlab.storage import db, facts, repository, warehouse
+
+#: The demo's large-run lock (see SqliteBackend.large_run_slot).
+_DEMO_LARGE_RUN = threading.Lock()
 
 
 class StorageBackend(Protocol):
@@ -38,6 +44,9 @@ class StorageBackend(Protocol):
     def load_bars_for(self, symbols: list[str], start: str, end: str) -> dict: ...
     def earliest_bar_dates(self, symbols: list[str]) -> dict: ...
     def corporate_actions(self, symbols: list[str], start: str, end: str) -> list[dict]: ...
+    #: Hold "a large backtest is running" for the block; yields whether it
+    #: was acquired within ``timeout`` seconds. Server-wide on the warehouse.
+    def large_run_slot(self, timeout: float) -> AbstractContextManager[bool]: ...
     #: Intraday signal bars (5m/15m/1h) as BarSeries; empty where there are none.
     def load_intraday_bars(
         self, symbols: list[str], start: str, end: str, frequency: str
@@ -134,6 +143,16 @@ class SqliteBackend:
         # The synthetic dataset has none. Answering rather than raising is what
         # keeps the runner free of branching on which store it is talking to.
         return []
+
+    @contextmanager
+    def large_run_slot(self, timeout: float) -> Iterator[bool]:
+        # One process serves the demo, so a process-wide lock is server-wide.
+        acquired = _DEMO_LARGE_RUN.acquire(timeout=timeout)
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                _DEMO_LARGE_RUN.release()
 
     def load_intraday_bars(
         self, symbols: list[str], start: str, end: str, frequency: str
@@ -343,6 +362,12 @@ class WarehouseBackend:
 
     def corporate_actions(self, symbols: list[str], start: str, end: str) -> list[dict]:
         return warehouse.corporate_actions(self.wh, symbols, start, end)
+
+    def large_run_slot(self, timeout: float) -> AbstractContextManager[bool]:
+        return warehouse.large_run_slot(self.wh, timeout)
+
+    def load_daily_columns(self, symbols: list[str], start: str, end: str) -> dict:
+        return warehouse.load_daily_columns(self.wh, symbols, start, end)
 
     def load_intraday_bars(
         self, symbols: list[str], start: str, end: str, frequency: str

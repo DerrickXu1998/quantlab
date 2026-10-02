@@ -64,8 +64,12 @@ class SeriesBar:
 
 
 class BarSeries(Sequence):
-    """One instrument's bars as columns: ``stamps`` (datetime64[m], exchange
-    local) and float64 ``open/high/low/close``, int64 ``volume``.
+    """One instrument's bars as columns: ``stamps`` and float64
+    ``open/high/low/close``, int64 ``volume``.
+
+    ``stamps`` are datetime64[m] (exchange-local bar starts) for intraday bars
+    and datetime64[D] for daily ones, so a bar's key is ``YYYY-MM-DDTHH:MM``
+    or ``YYYY-MM-DD`` -- exactly the key a row-wise bar of either kind has.
 
     ``raw_close`` is the traded close when the prices have been back-adjusted
     (``adjustments.adjust``); otherwise it is ``close`` itself.
@@ -74,7 +78,8 @@ class BarSeries(Sequence):
     __slots__ = ("close", "high", "low", "open", "raw_close", "stamps", "volume")
 
     def __init__(self, stamps, open_, high, low, close, volume, raw_close=None):
-        self.stamps = np.asarray(stamps, dtype="datetime64[m]")
+        stamps = np.asarray(stamps)
+        self.stamps = stamps if stamps.dtype.kind == "M" else stamps.astype("datetime64[m]")
         self.open = np.asarray(open_, dtype=float)
         self.high = np.asarray(high, dtype=float)
         self.low = np.asarray(low, dtype=float)
@@ -175,10 +180,16 @@ def column(bars: Sequence[Any], name: str) -> np.ndarray:
     return np.array([getattr(b, name) for b in bars], dtype=float)
 
 
+def unit_of(bars: BarSeries) -> str:
+    """``"m"`` for intraday stamps, ``"D"`` for daily."""
+    return np.datetime_data(bars.stamps.dtype)[0]
+
+
 def first_at_or_after(bars: Sequence[Any], day: str) -> int:
     """Index of the first bar on or after ``day`` (a date), any frequency."""
     if isinstance(bars, BarSeries):
-        return int(np.searchsorted(bars.stamps, np.datetime64(day[:10], "m"), side="left"))
+        boundary = np.datetime64(day[:10]).astype(bars.stamps.dtype)
+        return int(np.searchsorted(bars.stamps, boundary, side="left"))
     from bisect import bisect_left
 
     return bisect_left([b.date for b in bars], day)
