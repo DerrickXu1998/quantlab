@@ -177,7 +177,9 @@ export function useModelOverlays(
         const [detail, performance, studies] = await Promise.all([
           getRun(run.id),
           getRunPerformance(run.id),
-          getRunStudies(run.id, subject),
+          // The company chart draws raw candles: the lines must be in the
+          // same terms, or a split leaves them at a fraction of the price.
+          getRunStudies(run.id, subject, 'traded'),
         ]);
         patch({
           status: 'ready',

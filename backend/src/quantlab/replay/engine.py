@@ -99,6 +99,7 @@ class ReplaySummary:
     total_commission: float = 0.0
     total_slippage: float = 0.0
     total_borrow: float = 0.0
+    total_dividends: float = 0.0
 
 
 ReplayEvent = ReplayBar | ReplaySignal | ReplayFill | ReplayEquity | ReplaySummary
@@ -136,6 +137,25 @@ def load_replay_inputs(backend, experiments, run: dict) -> tuple[list[dict], dic
     return signals, bars
 
 
+def load_corporate_actions(backend, run: dict, config: ExecutionConfig | None = None) -> dict:
+    """The splits and dividends a stored run applies, grouped for the engine.
+
+    Loaded over the same warm-up span as its bars, and empty for a run that
+    traded raw prices (``price_adjustment == "none"``, which includes every
+    run recorded before the setting existed).
+    """
+    from quantlab.execution import adjustments
+    from quantlab.research import runner as research_runner
+
+    config = config or execution_config_for(run)
+    if config.price_adjustment == "none":
+        return {}
+    lookback = _lookback_days(run)
+    warmup_start = _shift(run["start_date"], -lookback * research_runner._CALENDAR_DAYS_PER_BAR)
+    rows = backend.corporate_actions(list(run["symbols"]), warmup_start, run["end_date"])
+    return adjustments.by_symbol(rows, config.price_adjustment, end=run["end_date"])
+
+
 def _lookback_days(run: dict) -> int:
     """How much warm-up this run's strategy needs, from its stored spec."""
     from quantlab.strategy import StrategySpec, StrategyValidationError
@@ -170,6 +190,7 @@ def replay_events(
     initial_cash: float | None = None,
     step: int = 1,
     config: ExecutionConfig | None = None,
+    corporate_actions: dict | None = None,
 ) -> Iterator[ReplayEvent]:
     """Yield the run's window as a chronological event stream.
 
@@ -191,7 +212,7 @@ def replay_events(
     for same_day in signals_on.values():
         same_day.sort(key=lambda s: s["symbol"])  # deterministic within a date
 
-    simulator = ExecutionSimulator(symbols, bars_by_symbol, config)
+    simulator = ExecutionSimulator(symbols, bars_by_symbol, config, corporate_actions)
     # Absent when a caller hands over only the window's bars and has no warm-up
     # to skip -- in which case every date supplied is part of the replay.
     window_start = run.get("start_date")
@@ -280,6 +301,7 @@ def summary_event(
         total_commission=summary.total_commission,
         total_slippage=summary.total_slippage,
         total_borrow=summary.total_borrow,
+        total_dividends=summary.total_dividends,
     )
 
 
@@ -290,10 +312,16 @@ def replay_summary(
     *,
     initial_cash: float | None = None,
     config: ExecutionConfig | None = None,
+    corporate_actions: dict | None = None,
 ) -> ReplaySummary:
     """Run the same engine to completion and keep only the terminal event."""
     for event in replay_events(
-        run, signals, bars_by_symbol, initial_cash=initial_cash, config=config
+        run,
+        signals,
+        bars_by_symbol,
+        initial_cash=initial_cash,
+        config=config,
+        corporate_actions=corporate_actions,
     ):
         if isinstance(event, ReplaySummary):
             return event

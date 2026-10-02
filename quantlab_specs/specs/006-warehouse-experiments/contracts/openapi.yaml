@@ -421,6 +421,19 @@ paths:
             candles.
           schema:
             type: string
+        - name: basis
+          in: query
+          required: false
+          description: >
+            adjusted (default): the prices the rules read -- back-adjusted for
+            splits and dividends when the run's price_adjustment says so -- so
+            the lines equal the signals' trigger_values. traded: the same lines
+            restated in traded-price terms, to draw over raw candles. Identical
+            for a run with price_adjustment none or no actions in its window.
+          schema:
+            type: string
+            enum: [adjusted, traded]
+            default: adjusted
       responses:
         "200":
           description: Studies of the run on that symbol
@@ -2090,6 +2103,12 @@ components:
         fees:
           type: number
           default: 0
+        dividends:
+          type: number
+          default: 0
+          description: >
+            Dividend cash while held: received on a long, paid (negative) on a
+            short. Included in pnl and return_pct.
 
     PerformanceMetrics:
       type: object
@@ -2555,6 +2574,17 @@ components:
             Annual cost of borrowing stock to short, in basis points of the
             short's market value, accrued per session held (/252). Only read
             when allow_shorts is true.
+        price_adjustment:
+          type: string
+          enum: [split_dividend, split, none]
+          default: split_dividend
+          description: >
+            How splits and dividends are treated. split_dividend: signals read
+            prices back-adjusted for both as of the run's end date; trades fill
+            at traded prices, a split multiplies the shares held and a dividend
+            is paid to a long (charged to a short) in cash on its ex-date.
+            split: the same for splits only. none: raw prices and no events --
+            what a run stored before this field existed re-executes under.
 
     ExecutionSummary:
       type: object
@@ -2575,6 +2605,9 @@ components:
         total_commission: { type: number }
         total_slippage: { type: number }
         total_borrow: { type: number }
+        total_dividends: { type: number }
+        splits_applied: { type: integer }
+        dividends_applied: { type: integer }
         contradictions:
           type: integer
           description: >
@@ -2588,6 +2621,9 @@ components:
         commission: { type: number }
         slippage: { type: number }
         borrow: { type: number }
+        dividends:
+          type: number
+          description: Net dividend cash over the run; income, shown beside the costs.
 
     ExitReason:
       type: string
@@ -2673,6 +2709,9 @@ components:
           type: number
           default: 0
         total_borrow:
+          type: number
+          default: 0
+        total_dividends:
           type: number
           default: 0
 

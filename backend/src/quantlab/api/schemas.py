@@ -248,6 +248,8 @@ class Trade(BaseModel):
     ] = "signal"
     pnl: float = 0.0
     fees: float = 0.0
+    #: Dividends received (long) or paid (short, negative) while held.
+    dividends: float = 0.0
 
 
 class PerformanceMetrics(BaseModel):
@@ -266,6 +268,8 @@ class CostBreakdown(BaseModel):
     commission: float = 0.0
     slippage: float = 0.0
     borrow: float = 0.0
+    #: Net dividend cash: income, not a cost; shown beside the costs.
+    dividends: float = 0.0
 
 
 class BenchmarkRegression(BaseModel):
@@ -341,6 +345,7 @@ class ReplaySummary(BaseModel):
     total_commission: float = 0.0
     total_slippage: float = 0.0
     total_borrow: float = 0.0
+    total_dividends: float = 0.0
 
 
 # --- Identity ---------------------------------------------------------------
@@ -409,6 +414,9 @@ class ExecutionConfigModel(BaseModel):
     cooldown_days: int = 0
     allow_shorts: bool = False
     borrow_cost_bps: float = 0.0
+    #: Splits and dividends: back-adjusted prices for signals, events for
+    #: execution. ``none`` is raw prices throughout, as before it existed.
+    price_adjustment: Literal["split_dividend", "split", "none"] = "split_dividend"
 
 
 class StrategyRequest(BaseModel):
@@ -466,6 +474,9 @@ class ExecutionSummaryModel(BaseModel):
     total_commission: float = 0.0
     total_slippage: float = 0.0
     total_borrow: float = 0.0
+    total_dividends: float = 0.0
+    splits_applied: int = 0
+    dividends_applied: int = 0
     #: Dates where the entry logic said both "long" and "short", and so said
     #: nothing. Neither side was taken.
     contradictions: int = 0

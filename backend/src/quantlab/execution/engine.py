@@ -13,7 +13,12 @@ reads a bar later than the one being processed (Constitution VII).
 
 Ordering within a bar is fixed and is the whole game::
 
-    mark -> fill orders queued yesterday -> protective exits -> signal exits -> entries
+    mark -> corporate actions -> fill orders queued yesterday -> protective exits
+         -> signal exits -> entries
+
+Corporate actions come first because they happened before the session opened:
+a position held into a split's ex-date wakes up holding more shares, and one
+held into a dividend's ex-date is owed the payout, whatever it does today.
 
 Protective exits come before signal exits because a stop that was hit intraday
 was hit before the close that produced the signal. Entries come last because a
@@ -31,6 +36,8 @@ from typing import Any
 
 import numpy as np
 
+from quantlab.execution.adjustments import CorporateAction, applies
+from quantlab.execution.adjustments import factors as adjustment_factors
 from quantlab.execution.config import (
     BPS,
     DEFERRED_FILL_TIMING,
@@ -96,6 +103,8 @@ class ExecutedTrade:
     exit_reason: str
     pnl: float
     fees: float
+    #: Dividends received (long) or paid (short, negative) while held.
+    dividends: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -123,6 +132,10 @@ class ExecutionSummary:
     total_commission: float = 0.0
     total_slippage: float = 0.0
     total_borrow: float = 0.0
+    #: Net dividend cash: received on longs, minus paid on shorts.
+    total_dividends: float = 0.0
+    splits_applied: int = 0
+    dividends_applied: int = 0
 
 
 @dataclass(frozen=True)
@@ -157,6 +170,10 @@ class _Position:
     best_close: float
     #: Borrow charged so far on a short; folded into the trade's fees on close.
     borrow_accrued: float = 0.0
+    #: Dividend cash so far (negative on a short); realised with the trade.
+    dividends: float = 0.0
+    #: The same per share held, in today's share terms, for the trade's return.
+    dividends_per_share: float = 0.0
 
 
 def _deferred_fill_price(fill_timing: str, bar: Any) -> float:
@@ -259,12 +276,40 @@ class ExecutionSimulator:
         symbols: list[str],
         bars_by_symbol: dict[str, list[Any]],
         config: ExecutionConfig | None = None,
+        corporate_actions: dict[str, list[CorporateAction]] | None = None,
     ) -> None:
+        """``bars_by_symbol`` are raw, as traded. ``corporate_actions`` are the
+        splits and dividends to apply; only those the config's
+        ``price_adjustment`` covers are used, and none at all under ``none``."""
         if not symbols:
             raise ValueError("a run needs at least one symbol")
         self.symbols = list(symbols)
         self.config = config or ExecutionConfig()
         self.bars_by_symbol = {s: list(bars_by_symbol.get(s) or []) for s in self.symbols}
+
+        # Filtered here as well as by the caller: what the config asks for is
+        # the engine's to enforce, not something it trusts a caller to have done.
+        mode = self.config.price_adjustment
+        self._actions: dict[str, list[CorporateAction]] = {
+            s: sorted(
+                (a for a in (corporate_actions or {}).get(s) or [] if applies(a, mode)),
+                key=lambda a: a.ex_date,
+            )
+            for s in self.symbols
+        }
+        #: Next action not yet applied, per symbol.
+        self._next_action = dict.fromkeys(self.symbols, 0)
+        #: Adjusted / raw price per bar. ATR and volatility are measured on the
+        #: adjusted series -- a split is not a range -- and an ATR offset is
+        #: turned back into raw-price terms at entry.
+        self._price_factor: dict[str, list[float]] = {
+            s: adjustment_factors(self.bars_by_symbol[s], self._actions[s])[0]
+            for s in self.symbols
+            if self._actions[s]
+        }
+        self._dividends = 0.0
+        self._splits_applied = 0
+        self._dividends_applied = 0
 
         self.sleeved = self.config.position_sizing == "equal_weight"
         sleeve = self.config.initial_capital / len(self.symbols)
@@ -341,10 +386,11 @@ class ExecutionSimulator:
         for symbol, bars in self.bars_by_symbol.items():
             if not bars:
                 continue
+            factor = np.asarray(self._price_factor.get(symbol) or [1.0] * len(bars))
             out[symbol] = atr_indicator(
-                np.array([b.high for b in bars], dtype=float),
-                np.array([b.low for b in bars], dtype=float),
-                np.array([b.close for b in bars], dtype=float),
+                np.array([b.high for b in bars], dtype=float) * factor,
+                np.array([b.low for b in bars], dtype=float) * factor,
+                np.array([b.close for b in bars], dtype=float) * factor,
                 period=self.config.atr_period,
             )
         return out
@@ -362,6 +408,8 @@ class ExecutionSimulator:
         out: dict[str, np.ndarray] = {}
         for symbol, bars in self.bars_by_symbol.items():
             closes = np.array([b.close for b in bars], dtype=float)
+            if symbol in self._price_factor:
+                closes = closes * np.asarray(self._price_factor[symbol])
             values = np.full(closes.shape, np.nan)
             if len(closes) > window:
                 returns = np.diff(closes) / closes[:-1]
@@ -551,7 +599,10 @@ class ExecutionSimulator:
         if config.atr_stop_multiple is not None:
             series = self._atr.get(symbol)
             if series is not None and index < len(series) and not np.isnan(series[index]):
-                offset = config.atr_stop_multiple * float(series[index])
+                # The ATR is in adjusted terms; the stop sits on raw prices.
+                factor = self._price_factor.get(symbol)
+                scale = factor[index] if factor and index < len(factor) else 1.0
+                offset = config.atr_stop_multiple * float(series[index]) / scale
                 stops.append(
                     entry_price - offset if side == "long" else entry_price + offset
                 )
@@ -590,8 +641,9 @@ class ExecutionSimulator:
             if position.side == "long"
             else position.qty * (position.entry_price - fill_price)
         )
-        # Borrow was debited from cash day by day; it is realised with the trade.
-        net = gross - commission - position.borrow_accrued
+        # Borrow was debited and dividends credited day by day; both are
+        # realised with the trade.
+        net = gross - commission - position.borrow_accrued + position.dividends
         self._realized += net
 
         fees = position.entry_fees + commission + position.borrow_accrued
@@ -604,11 +656,17 @@ class ExecutionSimulator:
                 exit_date=date,
                 exit_price=fill_price,
                 qty=position.qty,
-                return_pct=self._return_pct(position.side, position.entry_price, fill_price),
+                return_pct=self._return_pct(
+                    position.side,
+                    position.entry_price,
+                    fill_price,
+                    position.dividends_per_share,
+                ),
                 open=False,
                 exit_reason=reason,
-                pnl=gross - fees,
+                pnl=gross - fees + position.dividends,
                 fees=fees,
+                dividends=position.dividends,
             )
         )
         del self._positions[symbol]
@@ -631,11 +689,61 @@ class ExecutionSimulator:
         return fill
 
     @staticmethod
-    def _return_pct(side: str, entry_price: float, exit_price: float) -> float:
+    def _return_pct(
+        side: str, entry_price: float, exit_price: float, dividends_per_share: float = 0.0
+    ) -> float:
+        """Total return: a long earns its dividends, a short pays them."""
         if entry_price == 0:
             return 0.0
-        raw = exit_price / entry_price - 1.0
+        raw = (exit_price + dividends_per_share) / entry_price - 1.0
         return raw if side == "long" else -raw
+
+    # -- corporate actions -------------------------------------------------
+
+    def _apply_corporate_actions(self, date: str, bars_today: dict[str, Any]) -> None:
+        """Apply every action that went ex on or before today.
+
+        Only for an instrument with a bar today: its first session on or after
+        the ex-date is when the book learns of it, and the price it marks at is
+        already the post-action one. An action is applied once, whether or not
+        anything was held, so the pointer only moves forward.
+        """
+        for symbol in bars_today:
+            actions = self._actions.get(symbol)
+            if not actions:
+                continue
+            index = self._next_action[symbol]
+            while index < len(actions) and actions[index].ex_date <= date:
+                position = self._positions.get(symbol)
+                if position is not None and position.entry_date < actions[index].ex_date:
+                    self._apply_action(symbol, position, actions[index])
+                index += 1
+            self._next_action[symbol] = index
+
+    def _apply_action(self, symbol: str, position: _Position, action: CorporateAction) -> None:
+        if action.is_split:
+            ratio = float(action.split_ratio)
+            # Same holding, more shares at a proportionally lower price: equity
+            # does not move. Every level fixed in price terms moves with it.
+            position.qty *= ratio
+            position.entry_price /= ratio
+            position.best_close /= ratio
+            position.dividends_per_share /= ratio
+            if position.stop_price is not None:
+                position.stop_price /= ratio
+            if position.target_price is not None:
+                position.target_price /= ratio
+            self._splits_applied += 1
+        elif action.is_dividend:
+            per_share = float(action.dividend)
+            # Owed to whoever held at the previous close: paid to a long,
+            # charged to a short (the borrower pays the lender's dividend).
+            cash = position.qty * per_share * (1.0 if position.side == "long" else -1.0)
+            self._credit(symbol, cash)
+            position.dividends += cash
+            position.dividends_per_share += per_share
+            self._dividends += cash
+            self._dividends_applied += 1
 
     # -- protective exits --------------------------------------------------
 
@@ -745,6 +853,9 @@ class ExecutionSimulator:
             self._last_price[symbol] = close
 
         fills_today: list[Fill] = []
+
+        # 0. Splits and dividends that went ex today, before the session opens.
+        self._apply_corporate_actions(date, bars_today)
 
         # 1. Orders queued yesterday for today's open fill before anything else
         #    can happen in the session.
@@ -965,11 +1076,14 @@ class ExecutionSimulator:
                     exit_date=None,
                     exit_price=last,
                     qty=position.qty,
-                    return_pct=self._return_pct(position.side, position.entry_price, last),
+                    return_pct=self._return_pct(
+                        position.side, position.entry_price, last, position.dividends_per_share
+                    ),
                     open=True,
                     exit_reason="end_of_window",
-                    pnl=gross - position.entry_fees - position.borrow_accrued,
+                    pnl=gross - position.entry_fees - position.borrow_accrued + position.dividends,
                     fees=position.entry_fees + position.borrow_accrued,
+                    dividends=position.dividends,
                 )
             )
         out.sort(key=lambda t: (t.symbol, t.entry_date))
@@ -980,6 +1094,9 @@ class ExecutionSimulator:
             total_commission=self._commission,
             total_slippage=self._slippage,
             total_borrow=self._borrow,
+            total_dividends=self._dividends,
+            splits_applied=self._splits_applied,
+            dividends_applied=self._dividends_applied,
             **self._counters,
         )
 
@@ -998,9 +1115,10 @@ def simulate(
     bars_by_symbol: dict[str, list[Any]],
     decisions: list[Decision],
     config: ExecutionConfig | None = None,
+    corporate_actions: dict[str, list[CorporateAction]] | None = None,
 ) -> ExecutionResult:
     """Run a whole window and keep the result. The batch entry point."""
-    simulator = ExecutionSimulator(symbols, bars_by_symbol, config)
+    simulator = ExecutionSimulator(symbols, bars_by_symbol, config, corporate_actions)
     curve: list[EquityPoint] = []
     for day in simulator.iter_days(decisions):
         # Only dates with a bar enter the curve: a date on which nothing in the

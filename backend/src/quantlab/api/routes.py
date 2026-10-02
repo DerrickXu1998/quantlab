@@ -21,6 +21,7 @@ from fastapi.responses import StreamingResponse
 from quantlab import auth as auth_lib
 from quantlab.api import schemas, security
 from quantlab.api.security import CurrentUser, owner_scope
+from quantlab.execution import adjustments
 from quantlab.replay import engine as replay_engine
 from quantlab.research import errors as research_errors
 from quantlab.research import performance, runner, studies
@@ -769,14 +770,16 @@ def get_run_performance(request: Request, run_id: str, user: CurrentUser) -> dic
     # from an ATR on the first session of the window needs the sessions behind
     # it. Nothing can happen in the warm-up -- no signal is dated there.
     signals, bars = replay_engine.load_replay_inputs(backend(request), store, run)
+    config = runner.execution_config_for(run)
     result = performance.compute_performance(
         run_id=run_id,
         signals=signals,
         bars_by_symbol=bars,
         symbols=symbols,
-        execution=runner.execution_config_for(run),
+        execution=config,
         window_start=run["start_date"],
         window_end=run["end_date"],
+        corporate_actions=replay_engine.load_corporate_actions(backend(request), run, config),
     )
     return asdict(result)
 
@@ -793,6 +796,7 @@ def get_run_studies(
     run_id: str,
     user: CurrentUser,
     symbol: Annotated[str | None, Query(pattern=SYMBOL_PATTERN)] = None,
+    basis: Literal["adjusted", "traded"] = "adjusted",
 ) -> dict:
     """The lines the run's rules compared, for one of its symbols. Analytics in
     research.studies, as with performance (Constitution V)."""
@@ -815,13 +819,19 @@ def get_run_studies(
 
     # From the warm-up start, as performance loads them: the first session of
     # the window needs the bars behind it to have an average at all.
-    _, bars = replay_engine.load_replay_inputs(
-        backend(request), store, {**run, "symbols": [symbol]}
-    )
+    one = {**run, "symbols": [symbol]}
+    _, bars = replay_engine.load_replay_inputs(backend(request), store, one)
+    # The lines the rules compared were computed on the prices the rules read:
+    # back-adjusted, when the run adjusted for splits and dividends.
+    actions = replay_engine.load_corporate_actions(backend(request), one).get(symbol, [])
+    raw = bars.get(symbol) or []
     result = studies.compute_studies(
         run=run,
         symbol=symbol,
-        bars=bars.get(symbol) or [],
+        bars=adjustments.adjust(raw, actions),
+        # Over raw candles the lines must be in traded terms too; by default
+        # they stay on the basis the signals fired on.
+        price_factors=adjustments.factors(raw, actions)[0] if basis == "traded" else None,
         window_start=run["start_date"],
         window_end=run["end_date"],
     )
@@ -1025,6 +1035,7 @@ def stream_run_replay(
 ) -> StreamingResponse:
     run = _replayable_run(request, run_id, user)
     signals, bars = replay_engine.load_replay_inputs(backend(request), experiments(request), run)
+    actions = replay_engine.load_corporate_actions(backend(request), run)
     # Acquired only after validation above: a request that raises before the
     # response exists must not leak a slot its generator would never release.
     slots = _acquire_stream_slot(request, user)
@@ -1036,7 +1047,9 @@ def stream_run_replay(
         # A sync generator: StreamingResponse iterates it in a threadpool, so
         # the optional pacing sleep never blocks the event loop.
         try:
-            for event in replay_engine.replay_events(run, signals, bars, step=step):
+            for event in replay_engine.replay_events(
+                run, signals, bars, step=step, corporate_actions=actions
+            ):
                 if emitted >= max_events:
                     truncated = f"max_events={max_events} reached before the summary"
                     break
@@ -1071,7 +1084,8 @@ def stream_run_replay(
 def get_run_replay_summary(request: Request, run_id: str, user: CurrentUser) -> dict:
     run = _replayable_run(request, run_id, user)
     signals, bars = replay_engine.load_replay_inputs(backend(request), experiments(request), run)
-    return asdict(replay_engine.replay_summary(run, signals, bars))
+    actions = replay_engine.load_corporate_actions(backend(request), run)
+    return asdict(replay_engine.replay_summary(run, signals, bars, corporate_actions=actions))
 
 
 # --- Live replay over the event bus -------------------------------------------

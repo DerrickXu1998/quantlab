@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as apiClient from '../src/api/client';
+import { DEFAULT_EXECUTION } from '../src/api/types';
 import { ModelList } from '../src/components/ModelList';
 import { RunConfigForm } from '../src/components/RunConfigForm';
 import { RunResultsView } from '../src/components/RunResultsView';
@@ -337,6 +338,60 @@ describe('RunResultsView', () => {
 
     expect(screen.queryByTestId('fact-coverage-count')).not.toBeInTheDocument();
     expect(screen.queryByTestId('run-fact-coverage')).not.toBeInTheDocument();
+  });
+
+  it('reports adjusted splits and paid dividends as handled, not as a hazard', () => {
+    renderResults(
+      makeRun({
+        execution: { ...DEFAULT_EXECUTION, price_adjustment: 'split_dividend' },
+        corporate_actions: [
+          {
+            instrument_id: 1,
+            symbol: 'GOOG.US',
+            ex_date: '2022-07-18',
+            action_type: 'split',
+            split_ratio: 20,
+            dividend: null,
+          },
+          {
+            instrument_id: 2,
+            symbol: 'IBM.US',
+            ex_date: '2024-05-09',
+            action_type: 'dividend',
+            split_ratio: null,
+            dividend: 1.67,
+          },
+        ],
+      }),
+    );
+
+    const notice = screen.getByTestId('run-corporate-adjustments');
+    expect(notice).not.toHaveAttribute('role', 'alert');
+    expect(notice).toHaveTextContent(/GOOG\.US 2022-07-18/);
+    expect(notice).toHaveTextContent(/IBM\.US 2024-05-09/);
+    expect(screen.queryByTestId('run-corporate-actions')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('run-dividend-notices')).not.toBeInTheDocument();
+  });
+
+  it('says dividends were not credited on a split-only run', () => {
+    renderResults(
+      makeRun({
+        execution: { ...DEFAULT_EXECUTION, price_adjustment: 'split' },
+        corporate_actions: [
+          {
+            instrument_id: 2,
+            symbol: 'IBM.US',
+            ex_date: '2024-05-09',
+            action_type: 'dividend',
+            split_ratio: null,
+            dividend: 1.67,
+          },
+        ],
+      }),
+    );
+
+    expect(screen.getByTestId('run-dividend-notices')).toHaveTextContent(/not credited/);
+    expect(screen.queryByTestId('run-corporate-adjustments')).not.toBeInTheDocument();
   });
 
   it('shows dividends as informational, not as a correctness alert', () => {

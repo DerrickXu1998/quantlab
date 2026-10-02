@@ -247,6 +247,27 @@ export const FILL_TIMING_SHORT: Record<FillTiming, string> = {
   next_typical: 'fills next typical price',
 };
 
+export const PRICE_ADJUSTMENTS = ['split_dividend', 'split', 'none'] as const;
+
+export type PriceAdjustment = (typeof PRICE_ADJUSTMENTS)[number];
+
+/** How splits and dividends are treated, named for a picker. */
+export const PRICE_ADJUSTMENT_LABELS: Record<PriceAdjustment, string> = {
+  split_dividend: 'Splits and dividends (total return)',
+  split: 'Splits only (price return)',
+  none: 'None — raw prices',
+};
+
+/** What each choice does to signals and to the book. */
+export const PRICE_ADJUSTMENT_EXPLAINERS: Record<PriceAdjustment, string> = {
+  split_dividend:
+    'Signals read prices back-adjusted for splits and dividends, as of the run’s end date. Trades fill at prices that actually traded: a split multiplies the shares held, and a dividend is paid to a long (charged to a short) in cash on its ex-date.',
+  split:
+    'Signals read split-adjusted prices and a split multiplies the shares held. Dividends are ignored, so returns are price-only and an ex-date shows up as a small real drop.',
+  none:
+    'Raw prices everywhere. A split reads as a crash — a 20-for-1 split looks like a 95% loss — and can trip stops and signals. Only for reproducing runs made before adjustment existed.',
+};
+
 export interface ExecutionConfig {
   initial_capital: number;
 
@@ -273,6 +294,12 @@ export interface ExecutionConfig {
   allow_shorts: boolean;
   /** Annual borrow on short market value, in bps. Read only with allow_shorts. */
   borrow_cost_bps: number;
+  /**
+   * Splits and dividends. A run stored before it existed has none on the wire
+   * and traded raw prices, so readers of a stored run treat a missing value as
+   * 'none' (RunResultsView).
+   */
+  price_adjustment: PriceAdjustment;
 }
 
 /** The contract's own defaults, §4, field for field. */
@@ -295,6 +322,7 @@ export const DEFAULT_EXECUTION: ExecutionConfig = {
   cooldown_days: 0,
   allow_shorts: false,
   borrow_cost_bps: 0,
+  price_adjustment: 'split_dividend',
 };
 
 /** Which sizing modes read `sizing_value`, and what it means to each. */
@@ -344,6 +372,10 @@ export interface ExecutionSummary {
   total_commission?: number;
   total_slippage?: number;
   total_borrow?: number;
+  /** Net dividend cash: received on longs, minus paid on shorts. */
+  total_dividends?: number;
+  splits_applied?: number;
+  dividends_applied?: number;
   rejected_max_positions?: number;
   rejected_cooldown?: number;
   rejected_shorts_disabled?: number;
@@ -368,11 +400,13 @@ export type TradeV2 = Trade & {
   exit_reason?: ExitReason | null;
   pnl?: number | null;
   fees?: number | null;
+  /** Dividend cash while held; negative on a short. Included in pnl. */
+  dividends?: number | null;
 };
 
 export type RunPerformanceV2 = Omit<RunPerformance, 'trades'> & {
   trades: TradeV2[];
-  costs?: { commission: number; slippage: number; borrow?: number } | null;
+  costs?: { commission: number; slippage: number; borrow?: number; dividends?: number } | null;
   exit_reasons?: Partial<Record<ExitReason, number>> | null;
   /** Alpha/beta/R² against the run's own buy-and-hold; null when unmeasurable. */
   regression?: BenchmarkRegression | null;

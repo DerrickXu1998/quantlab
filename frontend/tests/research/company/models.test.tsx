@@ -105,7 +105,8 @@ describe('useModelOverlays', () => {
     expect(overlay.signals).toHaveLength(2);
     expect(overlay.performance?.metrics).toBeDefined();
     // The lines come from the run, for the ticker on screen -- never computed here.
-    expect(apiClient.getRunStudies).toHaveBeenCalledWith('run-7', 'AAPL.US');
+    // Traded basis: the company chart draws raw candles.
+    expect(apiClient.getRunStudies).toHaveBeenCalledWith('run-7', 'AAPL.US', 'traded');
     expect(overlay.studies.map((study) => study.label)).toEqual(['SMA 20']);
   });
 

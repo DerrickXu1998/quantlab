@@ -36,8 +36,8 @@ ASSUMPTIONS: tuple[str, ...] = (
     "Entries and exits are marked at the close of the signal date.",
     "No transaction costs and no slippage are charged.",
     "No position sizing, leverage or risk budgeting is applied.",
-    "Prices are unadjusted, so a split or dividend inside the window shows up "
-    "as a real move.",
+    "Prices are back-adjusted for splits and dividends for signals; trades fill at "
+    "traded prices, with splits applied to shares held and dividends paid in cash.",
 )
 
 
@@ -61,6 +61,8 @@ class Trade:
     exit_reason: str = "signal"
     pnl: float = 0.0
     fees: float = 0.0
+    #: Dividends received (long) or paid (short, negative) while held.
+    dividends: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -90,6 +92,9 @@ class CostBreakdown:
     slippage: float = 0.0
     #: Short borrow charged over the run (``borrow_cost_bps``); 0 when long-only.
     borrow: float = 0.0
+    #: Net dividend cash over the run: income, not a cost, but it sits beside
+    #: them so the gap between price return and total return is visible.
+    dividends: float = 0.0
 
 
 #: Fewer paired daily returns than this and a regression is noise: beta from a
@@ -435,6 +440,7 @@ def compute_performance(
     execution: Any = None,
     window_start: str | None = None,
     window_end: str | None = None,
+    corporate_actions: dict | None = None,
 ) -> RunPerformance:
     """The whole answer for one run, from its signals and its window's bars.
 
@@ -458,7 +464,7 @@ def compute_performance(
     # the window only. Warm-up bars are inputs to the signals, not part of the
     # period being measured, and a curve that began in the warm-up would put a
     # flat stretch of untraded capital at the front of every result.
-    result = simulate(symbols, bars_by_symbol, to_decisions(signals), config)
+    result = simulate(symbols, bars_by_symbol, to_decisions(signals), config, corporate_actions)
 
     trades = [
         Trade(
@@ -474,6 +480,7 @@ def compute_performance(
             exit_reason=t.exit_reason,
             pnl=t.pnl,
             fees=t.fees,
+            dividends=t.dividends,
         )
         for t in result.trades
     ]
@@ -512,6 +519,7 @@ def compute_performance(
             commission=result.summary.total_commission,
             slippage=result.summary.total_slippage,
             borrow=result.summary.total_borrow,
+            dividends=result.summary.total_dividends,
         ),
         exit_reasons=dict(sorted(reasons.items())),
         regression=regression(curve, benchmark),

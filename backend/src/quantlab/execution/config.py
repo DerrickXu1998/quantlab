@@ -16,6 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any
 
+from quantlab.execution.adjustments import PRICE_ADJUSTMENT
+
 #: Notional book size when the caller does not set one. Arbitrary but fixed:
 #: every ratio the performance module reports is scale-invariant, so this only
 #: sets the axis labels.
@@ -115,6 +117,16 @@ class ExecutionConfig:
     #: exactly what the assumptions list says when it is left there.
     borrow_cost_bps: float = 0.0
 
+    # --- corporate actions ---
+    #: How splits and dividends are treated (``execution.adjustments``).
+    #: ``split_dividend``: signals read back-adjusted prices; execution trades
+    #: raw prices, a split multiplies the shares held and a dividend is paid
+    #: to a long and charged to a short in cash on its ex-date. ``split``: the
+    #: same for splits only, so returns are price-only. ``none``: raw prices
+    #: everywhere and no events -- the behaviour before this setting existed,
+    #: and what a stored run without it re-executes under.
+    price_adjustment: str = "split_dividend"
+
     def __post_init__(self) -> None:
         self.validate()
 
@@ -124,6 +136,10 @@ class ExecutionConfig:
         if self.position_sizing not in POSITION_SIZING:
             raise ValueError(
                 f"position_sizing must be one of {POSITION_SIZING}, got {self.position_sizing!r}"
+            )
+        if self.price_adjustment not in PRICE_ADJUSTMENT:
+            raise ValueError(
+                f"price_adjustment must be one of {PRICE_ADJUSTMENT}, got {self.price_adjustment!r}"
             )
         if self.fill_timing not in FILL_TIMING:
             raise ValueError(
@@ -321,10 +337,24 @@ class ExecutionConfig:
                 f"{self.cooldown_days} sessions."
             )
 
-        out.append(
-            "Prices are unadjusted, so a split or dividend inside the window shows up as a "
-            "real move."
-        )
+        if self.price_adjustment == "split_dividend":
+            out.append(
+                "Splits and dividends: signals read prices back-adjusted for both, as of the "
+                "run's end date. Trades fill at the prices that actually traded; a split "
+                "multiplies the shares held, and a dividend is paid to a long (charged to a "
+                "short) in cash on its ex-date -- the pay date is not modelled."
+            )
+        elif self.price_adjustment == "split":
+            out.append(
+                "Splits: signals read split-adjusted prices and a split multiplies the shares "
+                "held. Dividends are ignored, so returns are price-only and a dividend shows up "
+                "as a small real drop."
+            )
+        else:
+            out.append(
+                "Prices are unadjusted, so a split or dividend inside the window shows up as a "
+                "real move."
+            )
         out.append(
             "Fills assume unlimited liquidity at the modelled price: no partial fills, no "
             "queue position, no market impact."
@@ -364,7 +394,9 @@ class ExecutionConfig:
 
 
 #: What a run gets when the caller says nothing. Chosen to reproduce the
-#: behaviour that predates this module exactly -- equal-weight sleeves, filled
-#: at the close of the signal date, no costs and no stops -- so a legacy request
-#: still produces a legacy answer.
+#: behaviour that predates this module -- equal-weight sleeves, filled at the
+#: close of the signal date, no costs and no stops -- except that prices are
+#: adjusted for splits and dividends. A stored run recorded before
+#: ``price_adjustment`` existed re-executes with it set to ``none``
+#: (``research.runner.execution_config_for``), so its numbers do not move.
 DEFAULT_EXECUTION = ExecutionConfig()

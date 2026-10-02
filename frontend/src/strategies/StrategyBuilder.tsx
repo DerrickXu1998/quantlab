@@ -87,7 +87,7 @@ const TEMPLATE_SHELVES: { id: 'starter' | 'ai-quant-book'; label: string; note?:
   {
     id: 'ai-quant-book',
     label: 'AI Quant Book presets',
-    note: 'Regime-routed baselines from the strategy plan (S1, S2, S6, S7). Each description says where it should fail — a backtest that does not fail there is a bug signal. Prices are unadjusted: check trades on split dates before trusting a 2010–2026 result.',
+    note: 'Regime-routed baselines from the strategy plan (S1, S2, S6, S7). Each description says where it should fail — a backtest that does not fail there is a bug signal. Splits and dividends are adjusted by default (Execution → Splits & dividends); a run made before that traded raw prices — check its trades on split dates.',
   },
 ];
 
