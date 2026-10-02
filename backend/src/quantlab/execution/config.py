@@ -365,8 +365,10 @@ class ExecutionConfig:
                 "touches a level, its minutes decide which level was crossed first and "
                 "when, so a target reached before the stop is taken. Within one minute "
                 "the stop still wins. A gap through a level at the open fills at the "
-                "official open; a session whose minutes never reach the level the daily "
-                "range shows falls back to the daily rule."
+                "official open. A session with no minute bars (before 2016-12-12, or a "
+                "day the feed missed), or whose minutes never reach the level the daily "
+                "range shows, falls back to the daily rule; the summary counts them as "
+                "minute_fallbacks."
             )
 
         if self.max_holding_days is not None:
