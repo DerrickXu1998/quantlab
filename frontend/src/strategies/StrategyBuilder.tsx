@@ -18,6 +18,7 @@ import {
   BAR_FREQUENCIES,
   BAR_FREQUENCY_EXPLAINERS,
   BAR_FREQUENCY_LABELS,
+  formatDuration,
   isIntraday,
   runSize,
   type BarFrequency,
@@ -141,8 +142,8 @@ export function StrategyBuilder({
   // The backend's own size check, run here first so an oversized run is
   // refused on screen rather than after a round trip.
   const size = useMemo(
-    () => runSize(symbols.length, startDate, endDate, frequency),
-    [symbols.length, startDate, endDate, frequency],
+    () => runSize(symbols.length, startDate, endDate, frequency, draft.components.length),
+    [symbols.length, startDate, endDate, frequency, draft.components.length],
   );
   const setFrequency = (next: BarFrequency) =>
     setDraft((current) => ({
@@ -806,7 +807,9 @@ export function StrategyBuilder({
           {symbols.length > 0 && isIntraday(frequency) ? (
             <p data-testid="strategy-run-size" className="font-mono text-xs text-muted-foreground">
               ≈ {size.bars.toLocaleString()} bars
-              {size.seconds !== null ? ` · about ${size.seconds} s` : ''}
+              {size.time !== null
+                ? ` · about ${formatDuration(size.time.total)} (read ${formatDuration(size.time.read)} · signals ${formatDuration(size.time.signals)} for ${Math.max(1, draft.components.length)} component${draft.components.length === 1 ? '' : 's'} · backtest ${formatDuration(size.time.backtest)})`
+                : ''}
             </p>
           ) : null}
           {size.blocker ? (
