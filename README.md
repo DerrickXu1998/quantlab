@@ -207,42 +207,49 @@ roughly 10–15 minutes of compute, plus fetch time dominated by provider rate l
 ## Backtest size limits
 
 A backtest runs inside the API request, in a backend worker. On the production
-VM the backend container may use **1 GiB of memory, shared by 2 workers**
-(`deploy/docker-compose.prod.yml`), and an idle worker uses ~56 MB. The limits
-below keep one run from exhausting that; a run past one is refused with a `422`
-that says how big it was, before any data is read.
+VM the backend container may use **2 GiB of memory, shared by 2 workers**
+(`deploy/docker-compose.prod.yml`); an idle worker uses ~56 MB. Bars are held
+as compact columns (~120–150 B a bar at a run's peak), daily and intraday
+alike. A run past a limit is refused with a `422` that says how big it was,
+before any data is read.
 
-| Bars | Limit (`research/runner.py`) | Largest run that fits | Peak memory at the limit |
-|---|---|---|---|
-| Daily (`bar_frequency` `1d`, default) | 2,000,000 instrument-days (symbols × calendar days) | all 503 S&P 500 names × ~10 years | ~500 MB (estimated) |
-| Intraday (`1h`, `15m`, `5m`) | 2,000,000 bars, estimated as symbols × weekdays × bars per session | see below | ~330 MB (measured, 1.8M bars) |
+| Bars | Limit (`research/runner.py`) | What fits, e.g. |
+|---|---|---|
+| Daily (`bar_frequency` `1d`, default) | 8,400,000 instrument-days (symbols × calendar days, ≈ 6M bars) | all 503 S&P 500 names × all ~10 years of data, with room to spare |
+| Intraday (`1h`, `15m`, `5m`) | 6,000,000 bars, estimated as symbols × weekdays × bars per session (warm-up included) | see below |
 
 Bars per session: `1h` 7, `15m` 26, `5m` 78 (regular hours, 09:30–16:00 New
-York). So 2M intraday bars is about:
+York). So 6M intraday bars is about:
 
-| Frequency | Bars per symbol-year | 2M bars allows, e.g. |
+| Frequency | Bars per symbol-year | 6M bars allows, e.g. |
 |---|---|---|
-| `5m` | ~19,600 | 10 symbols × 10 years, 20 × 5, 100 × 1 |
-| `15m` | ~6,550 | 30 symbols × 10 years, 300 × 1 |
-| `1h` | ~1,760 | all 503 symbols × 2 years |
+| `5m` | ~19,600 | 60 symbols × 5 years, 30 × 10, 300 × 1 |
+| `15m` | ~6,550 | 90 symbols × 10 years, all 503 × 1.8 |
+| `1h` | ~1,760 | all 503 symbols × ~7 years |
 
-The estimate includes the warm-up before the window (the strategy's lookback),
-so a window right at the edge can be refused.
+**Measured** on production data (wall time from a laptop through the IAP
+tunnel, so the read is slower than on the VM itself):
 
-**One intraday run at a time per worker.** A second intraday request on the
-same worker waits up to 30 s for the first to finish, then gets `429` with
-`Retry-After: 60`. Daily runs are not limited this way.
+| Run | Peak memory | Time |
+|---|---|---|
+| Daily, all 503 symbols × 10 years (1.3M bars) | +189 MB (was +765 MB before columns) | 149 s |
+| 5m, 20 symbols × 5 years (2.0M bars) | +277 MB | 40 s |
+| 5m, 40 symbols × 5 years (4.1M bars) | +462 MB | 79 s |
 
-**Time.** Roughly 25 s per million intraday bars of compute, plus the read:
-~6 s for 2 symbols × 1 year at `5m`, ~45 s for 20 symbols × 4.5 years.
+**One large run at a time, server-wide.** A run estimated above 300,000 bars
+takes a Postgres advisory lock shared by every worker. A second large run
+waits up to 30 s, then gets `429` with `Retry-After: 60`. Smaller runs never
+wait. The lock is released when the run ends, or by Postgres if the worker
+dies. So at most one large run is in memory at once: ~650 MB at the 6M-bar
+limit, a third of the container.
+
+**Time.** Runs are synchronous. The 6M-bar limit (~2 minutes) is set by how
+long a request should stay open, not by memory; going further means running
+backtests as background jobs.
 
 **Minute data.** Intraday bars are built from the IEX minute feed, which starts
 on 2016-12-12. Market holidays are excluded (the feed carries flat placeholder
 bars on them).
-
-Raising these limits safely needs more memory or less concurrency first --
-a larger container, one large run per server rather than per worker, or the
-compact (columnar) bars that intraday runs use applied to daily runs too.
 
 ## Licence
 

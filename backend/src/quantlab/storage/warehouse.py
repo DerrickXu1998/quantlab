@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime as dt
 import os
 import threading
+import time
 from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -578,6 +579,37 @@ _INTRADAY_BUCKET = {
 }
 
 
+#: The advisory-lock key for "a large backtest is running". One per database,
+#: so every worker and every process on the server shares it.
+LARGE_RUN_LOCK = "quantlab:large-backtest"
+
+
+@contextmanager
+def large_run_slot(wh: Warehouse, timeout: float) -> Iterator[bool]:
+    """Hold the server-wide large-run lock for the duration of the block.
+
+    Yields whether it was acquired within ``timeout`` seconds. A Postgres
+    advisory lock, so it spans both workers and survives nothing: the server
+    drops it the moment the holding session ends, a crashed worker included,
+    and there is no stale lock to clean up.
+    """
+    deadline = time.monotonic() + timeout
+    with wh.catalog() as conn:
+        acquired = False
+        while True:
+            (acquired,) = conn.execute(
+                "SELECT pg_try_advisory_lock(hashtext(%s))", (LARGE_RUN_LOCK,)
+            ).fetchone()
+            if acquired or time.monotonic() >= deadline:
+                break
+            time.sleep(0.5)
+        try:
+            yield bool(acquired)
+        finally:
+            if acquired:
+                conn.execute("SELECT pg_advisory_unlock(hashtext(%s))", (LARGE_RUN_LOCK,))
+
+
 #: Instruments per intraday read (see load_intraday_bars).
 INTRADAY_QUERY_CHUNK = 5
 
@@ -690,6 +722,59 @@ def minute_bars(
     for local, o, h, lo, c, v in rows:
         out.setdefault(local.date().isoformat(), []).append(
             MinuteBar(local.strftime("%H:%M"), float(o), float(h), float(lo), float(c), int(v))
+        )
+    return out
+
+
+def load_daily_columns(
+    wh: Warehouse, symbols: list[str], start: str, end: str
+) -> dict[str, BarSeries]:
+    """``load_bars_for``'s daily bars, as columns.
+
+    What a backtest reads: a full-universe daily run is ~1.3M bars, which as
+    one Python object each was ~450 MB, and as columns is ~60 MB. Same view,
+    same window and the same batching as ``load_bars_for``; only the shape
+    of the answer differs, and the keys (``YYYY-MM-DD``) are the same.
+    """
+    ids = _instrument_ids(wh, symbols)
+    if not ids:
+        return {}
+    by_id = {instrument_id: symbol for symbol, instrument_id in ids.items()}
+    sql = f"""
+        SELECT instrument_id AS id,
+               toInt32(toDate(ts) - toDate('1970-01-01')) AS day,
+               open AS o, high AS h, low AS l, close AS c, volume AS v
+          FROM {BARS_VIEW}
+         WHERE instrument_id IN %(ids)s AND frequency = '1d'
+           AND ts >= %(start)s AND ts <= %(end)s
+         ORDER BY instrument_id, ts ASC
+    """
+    parts: dict[int, list] = {}
+    ordered = sorted(by_id)
+    with wh.bars() as client:
+        for first in range(0, len(ordered), BAR_QUERY_CHUNK):
+            batch = tuple(ordered[first : first + BAR_QUERY_CHUNK])
+            block = client.query_np(
+                sql,
+                parameters={
+                    "ids": batch,
+                    "start": f"{start} 00:00:00",
+                    "end": f"{end} 23:59:59",
+                },
+            )
+            if not len(block):
+                continue
+            ident = block["id"].astype(np.int64)
+            cuts = np.flatnonzero(ident[1:] != ident[:-1]) + 1
+            for rows in np.split(block, cuts):
+                parts.setdefault(int(rows["id"][0]), []).append(rows)
+
+    out: dict[str, BarSeries] = {}
+    for instrument_id, chunks in parts.items():
+        rows = chunks[0] if len(chunks) == 1 else np.concatenate(chunks)
+        out[by_id[instrument_id]] = BarSeries(
+            rows["day"].astype(np.int64).astype("datetime64[D]"),
+            rows["o"], rows["h"], rows["l"], rows["c"], rows["v"],
         )
     return out
 

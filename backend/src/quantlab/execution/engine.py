@@ -38,7 +38,7 @@ import numpy as np
 
 from quantlab.execution.adjustments import CorporateAction, applies
 from quantlab.execution.adjustments import factors as adjustment_factors
-from quantlab.execution.bars import BarSeries, column
+from quantlab.execution.bars import BarSeries, column, unit_of
 from quantlab.execution.config import (
     BPS,
     DEFERRED_FILL_TIMING,
@@ -307,6 +307,10 @@ class ExecutionSimulator:
         # Intraday bars arrive as columns (BarSeries) and stay columns: turning
         # 2M bars into objects is what this representation exists to avoid.
         self._columnar = any(isinstance(b, BarSeries) for b in bars_by_symbol.values())
+        # Daily columns step by day, intraday ones by minute; one run is one.
+        self._unit = next(
+            (unit_of(b) for b in bars_by_symbol.values() if isinstance(b, BarSeries)), "m"
+        )
         self.bars_by_symbol = {
             s: self._series(bars_by_symbol.get(s)) for s in self.symbols
         }
@@ -419,7 +423,8 @@ class ExecutionSimulator:
             return bars
         if self._columnar:
             empty = np.array([], dtype=float)
-            return BarSeries(np.array([], dtype="datetime64[m]"), empty, empty, empty, empty, [])
+            stamps = np.array([], dtype=f"datetime64[{self._unit}]")
+            return BarSeries(stamps, empty, empty, empty, empty, [])
         return list(bars or [])
 
     # -- precomputation ----------------------------------------------------
@@ -1108,7 +1113,8 @@ class ExecutionSimulator:
         """
         stamps = {s: series.stamps.view(np.int64) for s, series in self.bars_by_symbol.items()}
         extra = np.array(
-            [np.datetime64(key, "m") for key in by_date], dtype="datetime64[m]"
+            [np.datetime64(key, self._unit) for key in by_date],
+            dtype=f"datetime64[{self._unit}]",
         ).view(np.int64)
         timeline = np.unique(np.concatenate([*stamps.values(), extra]))
         pointer = dict.fromkeys(stamps, 0)
@@ -1121,7 +1127,7 @@ class ExecutionSimulator:
                     bars_today[symbol] = self.bars_by_symbol[symbol][i]
                     indices[symbol] = i
                     pointer[symbol] = i + 1
-            key = str(np.datetime64(t, "m"))
+            key = str(np.datetime64(t, self._unit))
             yield self._step(key, by_date.get(key, []), bars_today, indices)
 
     def _drain_pending(
