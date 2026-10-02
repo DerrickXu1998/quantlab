@@ -44,6 +44,12 @@ describe('ExecutionForm', () => {
     expect(config()).toMatchObject({ intraday_resolution: 'daily', fill_timing: 'next_typical' });
   });
 
+  it('rules out minute accuracy and VWAP on intraday bars', () => {
+    render(<Harness initial={{ ...DEFAULT_EXECUTION, bar_frequency: '5m' }} />);
+    expect(screen.getByLabelText(/execution accuracy/i)).toBeDisabled();
+    expect(screen.getByRole('option', { name: /VWAP \(minute bars\)/ })).toBeDisabled();
+  });
+
   it('covers §4 in four named groups rather than one wall of inputs', () => {
     render(<Harness />);
 
