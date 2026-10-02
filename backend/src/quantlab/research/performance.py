@@ -41,6 +41,25 @@ ASSUMPTIONS: tuple[str, ...] = (
 )
 
 
+#: How the buy-and-hold benchmark is priced, per ExecutionConfig.price_adjustment
+#: -- always the strategy's own basis, so "vs hold" compares like with like.
+_BENCHMARK_BASIS: dict[str, str] = {
+    "split_dividend": (
+        "The buy-and-hold benchmark is measured on the same split- and dividend-adjusted "
+        "prices: a total return with each dividend reinvested on its ex-date (the "
+        "strategy instead receives dividends as cash)."
+    ),
+    "split": (
+        "The buy-and-hold benchmark is measured on split-adjusted prices, like the "
+        "strategy: no dividends on either side."
+    ),
+    "none": (
+        "The buy-and-hold benchmark uses traded prices, like the strategy: a split reads "
+        "as a price move and dividends are not included."
+    ),
+}
+
+
 @dataclass(frozen=True)
 class Trade:
     symbol: str
@@ -288,6 +307,11 @@ def benchmark_series(
 
     Deliberately the run's own universe rather than an index: it isolates the
     model's timing from the question of which names it was pointed at.
+
+    ``bars_by_symbol`` must be on the strategy's price basis -- back-adjusted
+    for the run's corporate actions (compute_performance does this). The ratio
+    of back-adjusted closes is the holder's return: split-neutral, and with
+    dividends the total return with each one reinvested on its ex-date.
     """
     per_symbol: dict[str, dict[str, float]] = {}
     for symbol in symbols:
@@ -494,9 +518,29 @@ def compute_performance(
     # The benchmark is normalised from the window's first close, not the
     # warm-up's, or buy-and-hold would be credited with a move that happened
     # before the period under test.
+    #
+    # And it is held on the same footing as the strategy: the simulator above
+    # applies the run's splits (and, under split_dividend, dividends) to its
+    # holdings, so buy-and-hold is measured on the same corporate actions,
+    # back-adjusted. On raw closes a split reads as a crash -- GOOGL's 20:1 on
+    # 2022-07-18 as -95% -- and dividends are missing, which skewed "vs hold"
+    # and every regression figure built on the benchmark. The actions are
+    # already filtered by the run's price_adjustment, so a "none" run keeps a
+    # raw benchmark to match its raw strategy. Adjusting the whole loaded
+    # series first and trimming after means an ex-date on the window's first
+    # session still finds the session before it.
+    from quantlab.execution.adjustments import adjust_all, applies
+
+    # Filtered by the run's mode here as the simulator does internally, so the
+    # two sides agree by construction even for a caller passing every action.
+    benchmark_actions = {
+        symbol: [a for a in actions if applies(a, config.price_adjustment)]
+        for symbol, actions in (corporate_actions or {}).items()
+    }
+    benchmark_bars = adjust_all(bars_by_symbol, benchmark_actions)
     in_window = {
         symbol: _within(bars, window_start, window_end)
-        for symbol, bars in bars_by_symbol.items()
+        for symbol, bars in benchmark_bars.items()
     }
 
     reasons: dict[str, int] = {}
@@ -514,7 +558,7 @@ def compute_performance(
         trades=trades,
         # Generated from the config that actually ran, so the caveats can no
         # longer contradict the numbers they ship with.
-        assumptions=result.assumptions,
+        assumptions=[*result.assumptions, _BENCHMARK_BASIS[config.price_adjustment]],
         costs=CostBreakdown(
             commission=result.summary.total_commission,
             slippage=result.summary.total_slippage,
