@@ -38,6 +38,7 @@ import numpy as np
 
 from quantlab.execution.adjustments import CorporateAction, applies
 from quantlab.execution.adjustments import factors as adjustment_factors
+from quantlab.execution.bars import BarSeries, column
 from quantlab.execution.config import (
     BPS,
     DEFERRED_FILL_TIMING,
@@ -267,6 +268,8 @@ class _VolState:
     window: int
     prev_close: float | None = None
     returns: deque = field(init=False)
+    #: Bars a year: 252 for daily bars, 252 x bars-per-session intraday.
+    periods_per_year: int = TRADING_DAYS_PER_YEAR
 
     def __post_init__(self) -> None:
         self.returns = deque(maxlen=self.window)
@@ -277,7 +280,7 @@ class _VolState:
         self.prev_close = close
         if len(self.returns) < self.window:
             return np.nan
-        return float(np.asarray(self.returns, dtype=float).std()) * (TRADING_DAYS_PER_YEAR**0.5)
+        return float(np.asarray(self.returns, dtype=float).std()) * (self.periods_per_year**0.5)
 
 
 class ExecutionSimulator:
@@ -301,7 +304,13 @@ class ExecutionSimulator:
             raise ValueError("a run needs at least one symbol")
         self.symbols = list(symbols)
         self.config = config or ExecutionConfig()
-        self.bars_by_symbol = {s: list(bars_by_symbol.get(s) or []) for s in self.symbols}
+        # Intraday bars arrive as columns (BarSeries) and stay columns: turning
+        # 2M bars into objects is what this representation exists to avoid.
+        self._columnar = any(isinstance(b, BarSeries) for b in bars_by_symbol.values())
+        self.bars_by_symbol = {
+            s: self._series(bars_by_symbol.get(s)) for s in self.symbols
+        }
+        self._periods_per_year = self.config.periods_per_year
 
         # Filtered here as well as by the caller: what the config asks for is
         # the engine's to enforce, not something it trusts a caller to have done.
@@ -377,7 +386,8 @@ class ExecutionSimulator:
         # true stays true.
         self._atr_state: dict[str, _AtrState] = {}
         self._vol_state: dict[str, _VolState] = {}
-        if self._atr or self._vol:
+        # Columnar runs are batch-only (no `ingest`), so need no running state.
+        if (self._atr or self._vol) and not self._columnar:
             if self.config.atr_stop_multiple is not None:
                 self._atr_state = {
                     symbol: self._seed_atr_state(bars)
@@ -392,12 +402,25 @@ class ExecutionSimulator:
         # Bar lookup by date, and each symbol's own bar index on that date --
         # "how many sessions has this been held" must count the instrument's
         # own sessions, not calendar dates on which some other name traded.
+        #
+        # Built for row-wise (daily) bars only. A columnar run walks a merged
+        # timeline with one pointer per instrument instead: a dict entry per
+        # bar is ~100 B, which at 2M intraday bars is most of the budget.
         self._bar_on: dict[str, dict[str, Any]] = {}
         self._index_on: dict[str, dict[str, int]] = {}
-        for symbol, bars in self.bars_by_symbol.items():
-            for index, bar in enumerate(bars):
-                self._bar_on.setdefault(bar.date, {})[symbol] = bar
-                self._index_on.setdefault(bar.date, {})[symbol] = index
+        if not self._columnar:
+            for symbol, bars in self.bars_by_symbol.items():
+                for index, bar in enumerate(bars):
+                    self._bar_on.setdefault(bar.date, {})[symbol] = bar
+                    self._index_on.setdefault(bar.date, {})[symbol] = index
+
+    def _series(self, bars: Any) -> Any:
+        if isinstance(bars, BarSeries):
+            return bars
+        if self._columnar:
+            empty = np.array([], dtype=float)
+            return BarSeries(np.array([], dtype="datetime64[m]"), empty, empty, empty, empty, [])
+        return list(bars or [])
 
     # -- precomputation ----------------------------------------------------
 
@@ -408,11 +431,12 @@ class ExecutionSimulator:
         for symbol, bars in self.bars_by_symbol.items():
             if not bars:
                 continue
-            factor = np.asarray(self._price_factor.get(symbol) or [1.0] * len(bars))
+            factor = self._price_factor.get(symbol)
+            factor = np.asarray(factor) if factor is not None else 1.0
             out[symbol] = atr_indicator(
-                np.array([b.high for b in bars], dtype=float) * factor,
-                np.array([b.low for b in bars], dtype=float) * factor,
-                np.array([b.close for b in bars], dtype=float) * factor,
+                column(bars, "high") * factor,
+                column(bars, "low") * factor,
+                column(bars, "close") * factor,
                 period=self.config.atr_period,
             )
         return out
@@ -429,7 +453,7 @@ class ExecutionSimulator:
         window = self.config.atr_period
         out: dict[str, np.ndarray] = {}
         for symbol, bars in self.bars_by_symbol.items():
-            closes = np.array([b.close for b in bars], dtype=float)
+            closes = column(bars, "close")
             if symbol in self._price_factor:
                 closes = closes * np.asarray(self._price_factor[symbol])
             values = np.full(closes.shape, np.nan)
@@ -440,7 +464,7 @@ class ExecutionSimulator:
                 # used to loop over.
                 values[window:] = np.lib.stride_tricks.sliding_window_view(
                     returns, window
-                ).std(axis=1) * (TRADING_DAYS_PER_YEAR**0.5)
+                ).std(axis=1) * (self._periods_per_year**0.5)
             out[symbol] = values
         return out
 
@@ -456,7 +480,7 @@ class ExecutionSimulator:
         return state
 
     def _seed_vol_state(self, bars: list[Any]) -> _VolState:
-        state = _VolState(window=self.config.atr_period)
+        state = _VolState(window=self.config.atr_period, periods_per_year=self._periods_per_year)
         for bar in bars:
             state.observe(float(bar.close))
         return state
@@ -623,7 +647,7 @@ class ExecutionSimulator:
             if series is not None and index < len(series) and not np.isnan(series[index]):
                 # The ATR is in adjusted terms; the stop sits on raw prices.
                 factor = self._price_factor.get(symbol)
-                scale = factor[index] if factor and index < len(factor) else 1.0
+                scale = factor[index] if factor is not None and index < len(factor) else 1.0
                 offset = config.atr_stop_multiple * float(series[index]) / scale
                 stops.append(
                     entry_price - offset if side == "long" else entry_price + offset
@@ -910,6 +934,8 @@ class ExecutionSimulator:
         point: a live replay and a batch one cannot disagree about what a
         strategy did.
         """
+        if self._columnar:
+            raise NotImplementedError("a columnar (intraday) run is batch-only")
         if symbol not in self.bars_by_symbol:
             return  # outside this run's selection
         series = self.bars_by_symbol[symbol]
@@ -939,11 +965,21 @@ class ExecutionSimulator:
     def step_day(self, date: str, decisions_today: list[Decision]) -> DayState:
         """Process exactly one date and return the book at its close.
 
-        The whole ordering contract lives here, in one place, used by both the
-        batch walk and the streaming one.
+        The whole ordering contract lives in :meth:`_step`, in one place, used
+        by the batch walk, the streaming one and the columnar (intraday) one.
         """
-        bars_today = self._bar_on.get(date, {})
-        indices = self._index_on.get(date, {})
+        return self._step(
+            date, decisions_today, self._bar_on.get(date, {}), self._index_on.get(date, {})
+        )
+
+    def _step(
+        self,
+        date: str,
+        decisions_today: list[Decision],
+        bars_today: dict[str, Any],
+        indices: dict[str, int],
+    ) -> DayState:
+        """One step -- a date, or an intraday bar's key -- given its bars."""
         closes = {symbol: float(bar.close) for symbol, bar in bars_today.items()}
         for symbol, close in closes.items():
             self._last_price[symbol] = close
@@ -1024,7 +1060,7 @@ class ExecutionSimulator:
         # 5. Borrow on every short held through today's close, on today's
         # market value. Charged per session the instrument traded, so a
         # holiday on its exchange costs nothing -- the /252 convention.
-        rate = self.config.borrow_cost_bps * BPS / TRADING_DAYS_PER_YEAR
+        rate = self.config.borrow_cost_bps * BPS / self._periods_per_year
         if rate:
             for symbol in sorted(self._positions):
                 position = self._positions[symbol]
@@ -1056,8 +1092,37 @@ class ExecutionSimulator:
         for decision in decisions:
             by_date.setdefault(decision.date, []).append(decision)
 
+        if self._columnar:
+            yield from self._iter_columnar(by_date)
+            return
         for date in sorted(set(self._bar_on) | set(by_date)):
             yield self.step_day(date, by_date.get(date, []))
+
+    def _iter_columnar(self, by_date: dict[str, list[Decision]]) -> Iterator[DayState]:
+        """Walk the union of every instrument's bar times, one pointer each.
+
+        The same steps the row-wise walk takes -- a key with no bar for some
+        instrument simply has no bar for it -- without a lookup entry per bar.
+        Decision keys with no bar at all still get a step, so they are counted
+        as dropped exactly as on daily bars.
+        """
+        stamps = {s: series.stamps.view(np.int64) for s, series in self.bars_by_symbol.items()}
+        extra = np.array(
+            [np.datetime64(key, "m") for key in by_date], dtype="datetime64[m]"
+        ).view(np.int64)
+        timeline = np.unique(np.concatenate([*stamps.values(), extra]))
+        pointer = dict.fromkeys(stamps, 0)
+        for t in timeline.tolist():
+            bars_today: dict[str, Any] = {}
+            indices: dict[str, int] = {}
+            for symbol, column_ in stamps.items():
+                i = pointer[symbol]
+                if i < len(column_) and column_[i] == t:
+                    bars_today[symbol] = self.bars_by_symbol[symbol][i]
+                    indices[symbol] = i
+                    pointer[symbol] = i + 1
+            key = str(np.datetime64(t, "m"))
+            yield self._step(key, by_date.get(key, []), bars_today, indices)
 
     def _drain_pending(
         self, date: str, bars_today: dict[str, Any], indices: dict[str, int]
@@ -1238,7 +1303,14 @@ def simulate(
         # Only dates with a bar enter the curve: a date on which nothing in the
         # selection traded is not a mark, it is a holiday.
         if day.closes:
-            curve.append(EquityPoint(date=day.date, value=day.equity))
+            # One mark per session: an intraday run keeps each session's last
+            # bar, so the curve -- and every daily statistic built on it -- is
+            # in sessions whatever the bar frequency.
+            session = day.date[:10]
+            if curve and curve[-1].date == session:
+                curve[-1] = EquityPoint(date=session, value=day.equity)
+            else:
+                curve.append(EquityPoint(date=session, value=day.equity))
     return ExecutionResult(
         equity=curve,
         trades=simulator.trades(),

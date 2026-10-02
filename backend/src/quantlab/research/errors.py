@@ -67,6 +67,29 @@ class SelectionTooLargeError(ExperimentError):
         )
 
 
+class IntradaySelectionTooLargeError(SelectionTooLargeError):
+    """An intraday run past the bar budget, refused before anything is read."""
+
+    def __init__(self, requested: int, limit: int, frequency: str) -> None:
+        ExperimentError.__init__(
+            self,
+            f"about {requested:,} {frequency} bars exceeds the limit of {limit:,} per run; "
+            "use a coarser frequency, fewer symbols or a shorter window",
+        )
+        self.requested = requested
+        self.limit = limit
+        self.frequency = frequency
+
+
+class IntradayBusyError(ExperimentError):
+    """Another intraday run holds this worker's slot; try again shortly."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "another intraday run is in progress on this server; try again in a minute"
+        )
+
+
 class DatasetUnsupportedError(ExperimentError):
     """The resolved rule needs data the active dataset does not hold.
 

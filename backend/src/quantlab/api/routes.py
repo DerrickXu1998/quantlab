@@ -684,6 +684,10 @@ def create_run(request: Request, body: schemas.RunRequest, user: CurrentUser) ->
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except research_errors.ParameterValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except research_errors.IntradayBusyError as exc:
+        raise HTTPException(
+            status_code=429, detail=str(exc), headers={"Retry-After": "60"}
+        ) from exc
     except (
         research_errors.InvalidWindowError,
         research_errors.WindowTooShortError,

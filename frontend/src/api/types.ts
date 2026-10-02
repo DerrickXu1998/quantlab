@@ -332,6 +332,8 @@ export interface ExecutionConfig {
   price_adjustment: PriceAdjustment;
   /** daily (default) or minute: see INTRADAY_RESOLUTION_EXPLAINERS. */
   intraday_resolution: IntradayResolution;
+  /** The bars signals run on: '1d' (default) or intraday '1h' | '15m' | '5m'. */
+  bar_frequency: '1d' | '1h' | '15m' | '5m';
 }
 
 /** The contract's own defaults, §4, field for field. */
@@ -356,6 +358,7 @@ export const DEFAULT_EXECUTION: ExecutionConfig = {
   borrow_cost_bps: 0,
   price_adjustment: 'split_dividend',
   intraday_resolution: 'daily',
+  bar_frequency: '1d',
 };
 
 /** Which sizing modes read `sizing_value`, and what it means to each. */

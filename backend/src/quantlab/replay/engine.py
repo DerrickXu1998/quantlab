@@ -133,10 +133,23 @@ def load_replay_inputs(backend, experiments, run: dict) -> tuple[list[dict], dic
     from quantlab.research import runner as research_runner
 
     signals = experiments.get_run_signals(run["id"])
-    lookback = _lookback_days(run)
-    warmup_start = _shift(run["start_date"], -lookback * research_runner._CALENDAR_DAYS_PER_BAR)
-    bars = backend.load_bars_for(list(run["symbols"]), warmup_start, run["end_date"])
+    config = execution_config_for(run)
+    warmup_start = _warmup_start(run, config)
+    # At the run's own frequency: an intraday run re-executes on its bars.
+    bars = research_runner.load_bars(
+        backend, list(run["symbols"]), warmup_start, run["end_date"], config
+    )
     return signals, bars
+
+
+def _warmup_start(run: dict, config: ExecutionConfig) -> str:
+    from datetime import date
+
+    from quantlab.research import runner as research_runner
+
+    return research_runner.warmup_start_for(
+        date.fromisoformat(run["start_date"]), _lookback_days(run), config.bar_frequency
+    )
 
 
 def load_corporate_actions(backend, run: dict, config: ExecutionConfig | None = None) -> dict:
@@ -147,13 +160,11 @@ def load_corporate_actions(backend, run: dict, config: ExecutionConfig | None = 
     run recorded before the setting existed).
     """
     from quantlab.execution import adjustments
-    from quantlab.research import runner as research_runner
 
     config = config or execution_config_for(run)
     if config.price_adjustment == "none":
         return {}
-    lookback = _lookback_days(run)
-    warmup_start = _shift(run["start_date"], -lookback * research_runner._CALENDAR_DAYS_PER_BAR)
+    warmup_start = _warmup_start(run, config)
     rows = backend.corporate_actions(list(run["symbols"]), warmup_start, run["end_date"])
     return adjustments.by_symbol(rows, config.price_adjustment, end=run["end_date"])
 
@@ -177,11 +188,6 @@ def _lookback_days(run: dict) -> int:
     except (KeyError, TypeError):
         return 0
 
-
-def _shift(iso_date: str, days: int) -> str:
-    from datetime import date, timedelta
-
-    return (date.fromisoformat(iso_date) + timedelta(days=days)).isoformat()
 
 
 def replay_events(

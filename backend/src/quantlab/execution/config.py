@@ -17,6 +17,12 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from quantlab.execution.adjustments import PRICE_ADJUSTMENT
+from quantlab.execution.bars import (
+    BAR_FREQUENCIES,
+    BARS_PER_SESSION,
+    SESSIONS_PER_YEAR,
+    is_intraday,
+)
 
 #: Notional book size when the caller does not set one. Arbitrary but fixed:
 #: every ratio the performance module reports is scale-invariant, so this only
@@ -145,6 +151,13 @@ class ExecutionConfig:
     #: minute bars only decide what happens between them.
     intraday_resolution: str = "daily"
 
+    # --- signal bars ---
+    #: The bars signals are computed on and the engine steps through: ``1d``
+    #: (default) or intraday ``1h`` / ``15m`` / ``5m``, built from the IEX
+    #: minute bars. Intraday, every count of "days" below -- holding periods,
+    #: cooldown, ATR period -- counts bars, and annualisation is per bar.
+    bar_frequency: str = "1d"
+
     def __post_init__(self) -> None:
         self.validate()
 
@@ -163,6 +176,14 @@ class ExecutionConfig:
             raise ValueError(
                 f"fill_timing must be one of {FILL_TIMING}, got {self.fill_timing!r}"
             )
+        if self.bar_frequency not in BAR_FREQUENCIES:
+            raise ValueError(
+                f"bar_frequency must be one of {BAR_FREQUENCIES}, got {self.bar_frequency!r}"
+            )
+        if is_intraday(self.bar_frequency) and self.intraday_resolution != "daily":
+            # Minute accuracy refines a daily bar; an intraday bar is already
+            # the unit execution steps through.
+            raise ValueError("intraday_resolution minute applies to bar_frequency 1d only")
         if self.intraday_resolution not in INTRADAY_RESOLUTION:
             raise ValueError(
                 f"intraday_resolution must be one of {INTRADAY_RESOLUTION}, "
@@ -220,6 +241,17 @@ class ExecutionConfig:
             and self.min_holding_days > self.max_holding_days
         ):
             raise ValueError("min_holding_days must be <= max_holding_days")
+
+    # -- time units --------------------------------------------------------
+
+    @property
+    def bars_per_session(self) -> int:
+        return BARS_PER_SESSION[self.bar_frequency]
+
+    @property
+    def periods_per_year(self) -> int:
+        """Bars a year, for annualising volatility and accruing borrow."""
+        return SESSIONS_PER_YEAR * self.bars_per_session
 
     # -- warm-up -----------------------------------------------------------
 
@@ -369,6 +401,15 @@ class ExecutionConfig:
                 "day the feed missed), or whose minutes never reach the level the daily "
                 "range shows, falls back to the daily rule; the summary counts them as "
                 "minute_fallbacks."
+            )
+
+        if is_intraday(self.bar_frequency):
+            out.append(
+                f"Signals and fills are on {self.bar_frequency} bars built from the IEX minute "
+                "feed, regular hours only; a bar's open and close are that feed's, not the "
+                "official auction prices. Holding periods, cooldown and the ATR period count "
+                "bars, not days. Fundamentals and macro series are read as of the previous "
+                "session, since a day's close and filings are not known mid-session."
             )
 
         if self.max_holding_days is not None:

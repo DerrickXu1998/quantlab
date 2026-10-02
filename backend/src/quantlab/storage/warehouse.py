@@ -23,6 +23,9 @@ from urllib.parse import parse_qs, unquote, urlparse
 # rather than a second copy of them. This module has no other business knowing
 # about quantlab.signals, and the dependency is worth the exception: two
 # implementations of "unknown is not zero" is one that stops being maintained.
+import numpy as np
+
+from quantlab.execution.bars import BarSeries
 from quantlab.execution.minutes import MinuteBar
 from quantlab.signals import fundamental as fundamental_rules
 from quantlab.storage import facts
@@ -561,6 +564,89 @@ def load_bars_for(
         symbol = by_id[int(instrument_id)]
         out.setdefault(symbol, []).append(
             Bar(ts.date().isoformat(), float(o), float(h), float(lo), float(c), int(v))
+        )
+    return out
+
+
+#: How each intraday frequency buckets the minute bars. Clock-aligned in UTC,
+#: which is clock-aligned in New York too (its offsets are whole hours), so
+#: the first 1h bar is the half hour 09:30-10:00.
+_INTRADAY_BUCKET = {
+    "5m": "toStartOfFiveMinutes(ts)",
+    "15m": "toStartOfFifteenMinutes(ts)",
+    "1h": "toStartOfHour(ts)",
+}
+
+
+#: Instruments per intraday read (see load_intraday_bars).
+INTRADAY_QUERY_CHUNK = 5
+
+
+def load_intraday_bars(
+    wh: Warehouse, symbols: list[str], start: str, end: str, frequency: str
+) -> dict[str, BarSeries]:
+    """Intraday signal bars, built from the minute bars at read time.
+
+    No stored 5m/15m/1h tables: ClickHouse groups the 1m rows itself, at the
+    cost of scanning them, which measured ~1 s for a symbol-year. Columns come
+    back as NumPy arrays and stay that way (``BarSeries``), batched
+    ``BAR_QUERY_CHUNK`` instruments a query like every other selection read.
+    A bar's key is the exchange-local time of its first minute.
+    """
+    if frequency not in _INTRADAY_BUCKET:
+        raise ValueError(f"no intraday bars at {frequency!r}")
+    ids = _instrument_ids(wh, symbols)
+    if not ids:
+        return {}
+    by_id = {instrument_id: symbol for symbol, instrument_id in ids.items()}
+    sql = f"""
+        SELECT instrument_id AS id,
+               intDiv(toUnixTimestamp(min(ts))
+                      + timeZoneOffset(toTimeZone(min(ts), 'America/New_York')), 60) AS minute,
+               argMin(open, ts) AS o, max(high) AS h, min(low) AS l,
+               argMax(close, ts) AS c, sum(volume) AS v
+          FROM {BARS_VIEW}
+         WHERE instrument_id IN %(ids)s AND frequency = '1m'
+           AND ts >= %(start)s AND ts <= %(end)s
+           -- Only sessions the daily bars know: the minute feed also carries
+           -- flat placeholder bars on market holidays (2024-07-04, ...),
+           -- which would read as real, perfectly quiet sessions.
+           AND (instrument_id, toDate(toTimeZone(ts, 'America/New_York'))) IN (
+               SELECT instrument_id, toDate(ts) FROM {BARS_VIEW}
+                WHERE instrument_id IN %(ids)s AND frequency = '1d'
+                  AND ts >= %(start)s AND ts <= %(end)s)
+         GROUP BY instrument_id, {_INTRADAY_BUCKET[frequency]}
+         ORDER BY instrument_id, minute
+    """
+    parts: dict[int, list] = {}
+    ordered = sorted(by_id)
+    with wh.bars() as client:
+        # Fewer instruments a query than a daily read: an intraday block is
+        # ~390x denser, and the client holds a whole block at once.
+        for first in range(0, len(ordered), INTRADAY_QUERY_CHUNK):
+            batch = tuple(ordered[first : first + INTRADAY_QUERY_CHUNK])
+            block = client.query_np(
+                sql,
+                parameters={
+                    "ids": batch,
+                    "start": f"{start} 00:00:00",
+                    "end": f"{end} 23:59:59",
+                },
+            )
+            if not len(block):
+                continue
+            # Ordered by instrument, so each instrument is one contiguous run.
+            ident = block["id"].astype(np.int64)
+            cuts = np.flatnonzero(ident[1:] != ident[:-1]) + 1
+            for rows in np.split(block, cuts):
+                parts.setdefault(int(rows["id"][0]), []).append(rows)
+
+    out: dict[str, BarSeries] = {}
+    for instrument_id, chunks in parts.items():
+        rows = chunks[0] if len(chunks) == 1 else np.concatenate(chunks)
+        out[by_id[instrument_id]] = BarSeries(
+            rows["minute"].astype(np.int64).astype("datetime64[m]"),
+            rows["o"], rows["h"], rows["l"], rows["c"], rows["v"],
         )
     return out
 

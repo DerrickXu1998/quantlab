@@ -65,6 +65,8 @@ from bisect import bisect_right
 from dataclasses import dataclass, field
 from typing import Any
 
+from quantlab.execution.bars import as_of_day
+
 # ---------------------------------------------------------------------------
 # Concepts
 # ---------------------------------------------------------------------------
@@ -380,7 +382,12 @@ class FactSeries:
         A company that stopped filing in 2019 should not be gating a 2024 trade
         on its last balance sheet, and without a bound the forward-fill happily
         carries it forever.
+
+        ``on`` may be an intraday bar key (``YYYY-MM-DDTHH:MM``): it then reads
+        as of the previous date, since nothing filed that day is known
+        mid-session (``execution.bars.as_of_day``).
         """
+        on = as_of_day(on)
         chain = self.steps.get((concept, scope or default_scope(concept)))
         if chain is None:
             return None

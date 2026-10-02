@@ -1207,6 +1207,12 @@ export interface components {
              * @enum {string}
              */
             intraday_resolution: "daily" | "minute";
+            /**
+             * @description The bars signals are computed on and execution steps through. 1d is the daily bar. 1h, 15m and 5m are built from the IEX minute bars, regular hours, market holidays excluded; every count of days (holding periods, cooldown, ATR period) then counts bars, and fundamentals and macro series are read as of the previous session. An intraday run is refused before anything is read when it would hold more than 2,000,000 bars. intraday_resolution must be daily.
+             * @default 1d
+             * @enum {string}
+             */
+            bar_frequency: "1d" | "1h" | "15m" | "5m";
         };
         /** @description What the engine did, including what it refused to do. The rejection counters matter as much as the fills: a strategy whose signals were mostly dropped for want of a free slot has not been tested, and without these it looks identical to one that simply signalled rarely. */
         ExecutionSummary: {

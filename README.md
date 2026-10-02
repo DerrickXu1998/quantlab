@@ -204,6 +204,46 @@ feature is checked to fail *softly* offline rather than inventing data.
 250 symbols × 900 bars × 28 features in ~35s on 8 threads. A 5,000-name daily refresh is
 roughly 10–15 minutes of compute, plus fetch time dominated by provider rate limits.
 
+## Backtest size limits
+
+A backtest runs inside the API request, in a backend worker. On the production
+VM the backend container may use **1 GiB of memory, shared by 2 workers**
+(`deploy/docker-compose.prod.yml`), and an idle worker uses ~56 MB. The limits
+below keep one run from exhausting that; a run past one is refused with a `422`
+that says how big it was, before any data is read.
+
+| Bars | Limit (`research/runner.py`) | Largest run that fits | Peak memory at the limit |
+|---|---|---|---|
+| Daily (`bar_frequency` `1d`, default) | 2,000,000 instrument-days (symbols × calendar days) | all 503 S&P 500 names × ~10 years | ~500 MB (estimated) |
+| Intraday (`1h`, `15m`, `5m`) | 2,000,000 bars, estimated as symbols × weekdays × bars per session | see below | ~330 MB (measured, 1.8M bars) |
+
+Bars per session: `1h` 7, `15m` 26, `5m` 78 (regular hours, 09:30–16:00 New
+York). So 2M intraday bars is about:
+
+| Frequency | Bars per symbol-year | 2M bars allows, e.g. |
+|---|---|---|
+| `5m` | ~19,600 | 10 symbols × 10 years, 20 × 5, 100 × 1 |
+| `15m` | ~6,550 | 30 symbols × 10 years, 300 × 1 |
+| `1h` | ~1,760 | all 503 symbols × 2 years |
+
+The estimate includes the warm-up before the window (the strategy's lookback),
+so a window right at the edge can be refused.
+
+**One intraday run at a time per worker.** A second intraday request on the
+same worker waits up to 30 s for the first to finish, then gets `429` with
+`Retry-After: 60`. Daily runs are not limited this way.
+
+**Time.** Roughly 25 s per million intraday bars of compute, plus the read:
+~6 s for 2 symbols × 1 year at `5m`, ~45 s for 20 symbols × 4.5 years.
+
+**Minute data.** Intraday bars are built from the IEX minute feed, which starts
+on 2016-12-12. Market holidays are excluded (the feed carries flat placeholder
+bars on them).
+
+Raising these limits safely needs more memory or less concurrency first --
+a larger container, one large run per server rather than per worker, or the
+compact (columnar) bars that intraday runs use applied to daily runs too.
+
 ## Licence
 
 MIT for this code. The data is a separate matter entirely — see
