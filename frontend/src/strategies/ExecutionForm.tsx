@@ -110,6 +110,8 @@ export interface ExecutionFormProps {
 
 export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
   const patch = (next: Partial<ExecutionConfig>) => onChange({ ...value, ...next });
+  // Set from the Universe & window panel; here it only rules options out.
+  const intradayBars = (value.bar_frequency ?? '1d') !== '1d';
 
   /** Blank means "off", not zero: a 0% stop would exit instantly. */
   const optionalNumber = (raw: string): number | null => {
@@ -246,13 +248,18 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
       >
         <Field
           label="Execution accuracy"
-          explainer={INTRADAY_RESOLUTION_EXPLAINERS[value.intraday_resolution]}
+          explainer={
+            intradayBars
+              ? 'Intraday bars already step through the session, so fills and stops are decided bar by bar; minute accuracy applies to daily bars only.'
+              : INTRADAY_RESOLUTION_EXPLAINERS[value.intraday_resolution]
+          }
           full
         >
           {({ id, describedBy }) => (
             <Select
               id={id}
               aria-describedby={describedBy}
+              disabled={intradayBars}
               value={value.intraday_resolution}
               onChange={(event) => {
                 const intraday_resolution = event.target.value as IntradayResolution;
@@ -285,7 +292,8 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
             >
               {FILL_TIMINGS.map((timing) => {
                 const needsMinute =
-                  MINUTE_ONLY_FILL_TIMINGS.includes(timing) && value.intraday_resolution !== 'minute';
+                  MINUTE_ONLY_FILL_TIMINGS.includes(timing) &&
+                  (value.intraday_resolution !== 'minute' || intradayBars);
                 return (
                   <option key={timing} value={timing} disabled={needsMinute}>
                     {FILL_TIMING_LABELS[timing]}

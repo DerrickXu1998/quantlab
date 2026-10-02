@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as apiClient from '../../src/api/client';
@@ -392,6 +392,42 @@ describe('StrategyBuilder', () => {
     expect(screen.queryByTestId('strategy-blockers')).not.toBeInTheDocument();
     expect(run).toBeEnabled();
     expect(apiClient.createStrategyRun).not.toHaveBeenCalled();
+  });
+
+  it('runs on the bars chosen in Universe & window', async () => {
+    vi.mocked(apiClient.createStrategyRun).mockRejectedValue(
+      new apiClient.ApiError(0, 'no backend'),
+    );
+    const person = await openBuilder();
+    await person.click(addFrom('rsi-threshold', 'Entry'));
+    await person.type(screen.getByLabelText(/add tickers/i), 'ZZTRND{Enter}');
+    fireEvent.change(screen.getByLabelText('Start'), { target: { value: '2024-01-01' } });
+    fireEvent.change(screen.getByLabelText('End'), { target: { value: '2024-03-31' } });
+
+    await person.selectOptions(screen.getByLabelText('Bars'), '5m');
+    // 65 sessions x 78 bars, said before anything is sent.
+    expect(screen.getByTestId('strategy-run-size')).toHaveTextContent('5,070 bars');
+    await person.click(screen.getByRole('button', { name: /run backtest/i }));
+
+    await waitFor(() => expect(apiClient.createStrategyRun).toHaveBeenCalledTimes(1));
+    const body = vi.mocked(apiClient.createStrategyRun).mock.calls[0][0];
+    expect(body.strategy?.execution).toMatchObject({
+      bar_frequency: '5m',
+      intraday_resolution: 'daily',
+    });
+  });
+
+  it('will not send an intraday run from before the minute data starts', async () => {
+    const person = await openBuilder();
+    await person.click(addFrom('rsi-threshold', 'Entry'));
+    await person.type(screen.getByLabelText(/add tickers/i), 'ZZTRND{Enter}');
+    fireEvent.change(screen.getByLabelText('Start'), { target: { value: '2015-01-02' } });
+    fireEvent.change(screen.getByLabelText('End'), { target: { value: '2015-12-31' } });
+
+    await person.selectOptions(screen.getByLabelText('Bars'), '15m');
+
+    expect(screen.getByTestId('strategy-size-blocker')).toHaveTextContent('2016-12-12');
+    expect(screen.getByRole('button', { name: /run backtest/i })).toBeDisabled();
   });
 
   it('runs the strategy that is on screen, not the last one that was saved', async () => {
