@@ -66,6 +66,8 @@ class ReplayFill:
     reason: str = "signal"
     commission: float = 0.0
     slippage: float = 0.0
+    #: Exchange-local HH:MM when minute bars placed the fill inside the session.
+    time: str | None = None
 
 
 @dataclass(frozen=True)
@@ -191,6 +193,7 @@ def replay_events(
     step: int = 1,
     config: ExecutionConfig | None = None,
     corporate_actions: dict | None = None,
+    minute_source: Any = None,
 ) -> Iterator[ReplayEvent]:
     """Yield the run's window as a chronological event stream.
 
@@ -212,7 +215,9 @@ def replay_events(
     for same_day in signals_on.values():
         same_day.sort(key=lambda s: s["symbol"])  # deterministic within a date
 
-    simulator = ExecutionSimulator(symbols, bars_by_symbol, config, corporate_actions)
+    simulator = ExecutionSimulator(
+        symbols, bars_by_symbol, config, corporate_actions, minute_source
+    )
     # Absent when a caller hands over only the window's bars and has no warm-up
     # to skip -- in which case every date supplied is part of the replay.
     window_start = run.get("start_date")
@@ -251,6 +256,7 @@ def replay_events(
                 reason=fill.reason,
                 commission=fill.commission,
                 slippage=fill.slippage,
+                time=fill.time,
             )
 
         yield ReplayEquity(
@@ -313,6 +319,7 @@ def replay_summary(
     initial_cash: float | None = None,
     config: ExecutionConfig | None = None,
     corporate_actions: dict | None = None,
+    minute_source: Any = None,
 ) -> ReplaySummary:
     """Run the same engine to completion and keep only the terminal event."""
     for event in replay_events(
@@ -322,6 +329,7 @@ def replay_summary(
         initial_cash=initial_cash,
         config=config,
         corporate_actions=corporate_actions,
+        minute_source=minute_source,
     ):
         if isinstance(event, ReplaySummary):
             return event

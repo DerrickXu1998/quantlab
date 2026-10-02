@@ -21,7 +21,7 @@ from fastapi.responses import StreamingResponse
 from quantlab import auth as auth_lib
 from quantlab.api import schemas, security
 from quantlab.api.security import CurrentUser, owner_scope
-from quantlab.execution import adjustments
+from quantlab.execution import adjustments, minutes
 from quantlab.replay import engine as replay_engine
 from quantlab.research import errors as research_errors
 from quantlab.research import performance, runner, studies
@@ -780,6 +780,7 @@ def get_run_performance(request: Request, run_id: str, user: CurrentUser) -> dic
         window_start=run["start_date"],
         window_end=run["end_date"],
         corporate_actions=replay_engine.load_corporate_actions(backend(request), run, config),
+        minute_source=minutes.source_for(backend(request), config),
     )
     return asdict(result)
 
@@ -1036,6 +1037,7 @@ def stream_run_replay(
     run = _replayable_run(request, run_id, user)
     signals, bars = replay_engine.load_replay_inputs(backend(request), experiments(request), run)
     actions = replay_engine.load_corporate_actions(backend(request), run)
+    minute_source = minutes.source_for(backend(request), runner.execution_config_for(run))
     # Acquired only after validation above: a request that raises before the
     # response exists must not leak a slot its generator would never release.
     slots = _acquire_stream_slot(request, user)
@@ -1048,7 +1050,12 @@ def stream_run_replay(
         # the optional pacing sleep never blocks the event loop.
         try:
             for event in replay_engine.replay_events(
-                run, signals, bars, step=step, corporate_actions=actions
+                run,
+                signals,
+                bars,
+                step=step,
+                corporate_actions=actions,
+                minute_source=minute_source,
             ):
                 if emitted >= max_events:
                     truncated = f"max_events={max_events} reached before the summary"
@@ -1085,7 +1092,12 @@ def get_run_replay_summary(request: Request, run_id: str, user: CurrentUser) -> 
     run = _replayable_run(request, run_id, user)
     signals, bars = replay_engine.load_replay_inputs(backend(request), experiments(request), run)
     actions = replay_engine.load_corporate_actions(backend(request), run)
-    return asdict(replay_engine.replay_summary(run, signals, bars, corporate_actions=actions))
+    minute_source = minutes.source_for(backend(request), runner.execution_config_for(run))
+    return asdict(
+        replay_engine.replay_summary(
+            run, signals, bars, corporate_actions=actions, minute_source=minute_source
+        )
+    )
 
 
 # --- Live replay over the event bus -------------------------------------------

@@ -82,6 +82,8 @@ class Trade:
     fees: float = 0.0
     #: Dividends received (long) or paid (short, negative) while held.
     dividends: float = 0.0
+    #: Exchange-local HH:MM of the exit, when minute bars placed it.
+    exit_time: str | None = None
 
 
 @dataclass(frozen=True)
@@ -465,6 +467,7 @@ def compute_performance(
     window_start: str | None = None,
     window_end: str | None = None,
     corporate_actions: dict | None = None,
+    minute_source: Any = None,
 ) -> RunPerformance:
     """The whole answer for one run, from its signals and its window's bars.
 
@@ -488,7 +491,9 @@ def compute_performance(
     # the window only. Warm-up bars are inputs to the signals, not part of the
     # period being measured, and a curve that began in the warm-up would put a
     # flat stretch of untraded capital at the front of every result.
-    result = simulate(symbols, bars_by_symbol, to_decisions(signals), config, corporate_actions)
+    result = simulate(
+        symbols, bars_by_symbol, to_decisions(signals), config, corporate_actions, minute_source
+    )
 
     trades = [
         Trade(
@@ -505,6 +510,7 @@ def compute_performance(
             pnl=t.pnl,
             fees=t.fees,
             dividends=t.dividends,
+            exit_time=t.exit_time,
         )
         for t in result.trades
     ]

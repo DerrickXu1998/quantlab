@@ -23,6 +23,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 # rather than a second copy of them. This module has no other business knowing
 # about quantlab.signals, and the dependency is worth the exception: two
 # implementations of "unknown is not zero" is one that stops being maintained.
+from quantlab.execution.minutes import MinuteBar
 from quantlab.signals import fundamental as fundamental_rules
 from quantlab.storage import facts
 from quantlab.storage.pool import ClientPool, pool_config
@@ -560,6 +561,49 @@ def load_bars_for(
         symbol = by_id[int(instrument_id)]
         out.setdefault(symbol, []).append(
             Bar(ts.date().isoformat(), float(o), float(h), float(lo), float(c), int(v))
+        )
+    return out
+
+
+def minute_bars(
+    wh: Warehouse, symbol: str, start: str, end: str, instrument_id: int | None = None
+) -> dict[str, list[MinuteBar]]:
+    """One instrument's minute bars across [start, end], keyed by session date.
+
+    For the execution engine's minute source, which asks a symbol-month at a
+    time: one instrument and a bounded range keeps a read through the FINAL
+    view to a few MiB, where an unbounded minute read would be ~390x a daily
+    one and past the per-query memory cap. Times are converted to the
+    exchange's own clock, so a session is one date and 09:30 means the open.
+    ``instrument_id`` skips the catalog lookup when the caller already has it:
+    a run asks for many months of the same symbol.
+    """
+    if instrument_id is None:
+        ids = _instrument_ids(wh, [symbol])
+        if not ids:
+            return {}
+        instrument_id = ids[symbol]
+    with wh.bars() as client:
+        rows = client.query(
+            f"""
+            SELECT toTimeZone(ts, 'America/New_York') AS local,
+                   open, high, low, close, volume
+              FROM {BARS_VIEW}
+             WHERE instrument_id = %(id)s AND frequency = '1m'
+               AND ts >= %(start)s AND ts <= %(end)s
+             ORDER BY ts ASC
+            """,
+            parameters={
+                "id": instrument_id,
+                "start": f"{start} 00:00:00",
+                "end": f"{end} 23:59:59",
+            },
+        ).result_rows
+
+    out: dict[str, list[MinuteBar]] = {}
+    for local, o, h, lo, c, v in rows:
+        out.setdefault(local.date().isoformat(), []).append(
+            MinuteBar(local.strftime("%H:%M"), float(o), float(h), float(lo), float(c), int(v))
         )
     return out
 

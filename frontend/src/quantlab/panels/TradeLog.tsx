@@ -75,6 +75,8 @@ export function TradeLog({ trades }: { trades: TradeV2[] }) {
                 </td>
                 <td className="px-3 py-1.5 font-mono text-[11px] tabular-nums text-muted-foreground">
                   {trade.exit_date ?? <StatusBadge tone="active">Open</StatusBadge>}
+                  {/* Present only when minute bars placed the exit in the session. */}
+                  {trade.exit_date && trade.exit_time ? ` ${trade.exit_time}` : null}
                 </td>
                 <td className="px-3 py-1.5 text-right">
                   <Numeric value={trade.qty} format="ratio" className="text-xs" />

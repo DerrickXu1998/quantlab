@@ -38,6 +38,8 @@ class StorageBackend(Protocol):
     def load_bars_for(self, symbols: list[str], start: str, end: str) -> dict: ...
     def earliest_bar_dates(self, symbols: list[str]) -> dict: ...
     def corporate_actions(self, symbols: list[str], start: str, end: str) -> list[dict]: ...
+    #: {session date: minute bars} for one symbol; empty where the store has none.
+    def minute_bars(self, symbol: str, start: str, end: str) -> dict: ...
     def instrument_ids(self, symbols: list[str]) -> dict: ...
     def ingest_run_ids(self, symbols: list[str], start: str, end: str) -> list: ...
 
@@ -128,6 +130,11 @@ class SqliteBackend:
         # The synthetic dataset has none. Answering rather than raising is what
         # keeps the runner free of branching on which store it is talking to.
         return []
+
+    def minute_bars(self, symbol: str, start: str, end: str) -> dict:
+        # No minute bars in the demo: a minute-resolution run falls back to
+        # the daily rule session by session, and says how often it did.
+        return {}
 
     def instrument_ids(self, symbols: list[str]) -> dict[str, int]:
         # The demo has no surrogate identities; symbols are its identity.
@@ -325,6 +332,16 @@ class WarehouseBackend:
 
     def corporate_actions(self, symbols: list[str], start: str, end: str) -> list[dict]:
         return warehouse.corporate_actions(self.wh, symbols, start, end)
+
+    def minute_bars(self, symbol: str, start: str, end: str) -> dict:
+        # A run reads many months of the same few symbols: resolve each id
+        # once rather than paying a catalog round trip per month.
+        ids = self.__dict__.setdefault("_minute_ids", {})
+        if symbol not in ids:
+            ids[symbol] = warehouse._instrument_ids(self.wh, [symbol]).get(symbol)
+        if ids[symbol] is None:
+            return {}
+        return warehouse.minute_bars(self.wh, symbol, start, end, ids[symbol])
 
     def instrument_ids(self, symbols: list[str]) -> dict[str, int]:
         return warehouse._instrument_ids(self.wh, symbols)

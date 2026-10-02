@@ -987,6 +987,8 @@ export interface components {
              * @default 0
              */
             dividends: number;
+            /** @description Exchange-local HH:MM of the exit, when minute bars placed it. */
+            exit_time?: string | null;
         };
         PerformanceMetrics: {
             /** @description Fraction, e.g. 0.12 for +12%. */
@@ -1154,11 +1156,11 @@ export interface components {
             /** @default 1 */
             max_position_pct: number;
             /**
-             * @description Where signal entries and exits fill. `signal_close`: the close of the bar that produced the signal (optimistic -- that close is also the rule's input). `next_open` / `next_close`: the open or close of the following session. `next_typical`: (high + low + close) / 3 of the following session, a stand-in for VWAP. The `next_*` timings drop a signal on the window's last bar. Protective exits (stops, targets) are unaffected: they fill against the bar that hit them.
+             * @description Where signal entries and exits fill. `signal_close`: the close of the bar that produced the signal (optimistic -- that close is also the rule's input). `next_open` / `next_close`: the open or close of the following session. `next_typical`: (high + low + close) / 3 of the following session, a stand-in for VWAP. `next_vwap`: the following session's volume-weighted average price from its minute bars; needs intraday_resolution minute. The `next_*` timings drop a signal on the window's last bar. Protective exits (stops, targets) are unaffected: they fill against the bar that hit them.
              * @default signal_close
              * @enum {string}
              */
-            fill_timing: "signal_close" | "next_open" | "next_close" | "next_typical";
+            fill_timing: "signal_close" | "next_open" | "next_close" | "next_typical" | "next_vwap";
             /**
              * @description Charged per side, on notional.
              * @default 0
@@ -1199,6 +1201,12 @@ export interface components {
              * @enum {string}
              */
             price_adjustment: "split_dividend" | "split" | "none";
+            /**
+             * @description How finely execution looks inside a session. daily: fills and protective exits are decided from the daily bar alone. minute: when a session's range touches a stop, trailing stop or target, its minute bars decide which was crossed first and when, and next_vwap fills use the session's real volume-weighted price. Opens and closes remain the daily bar's auction prices. Signals are daily either way.
+             * @default daily
+             * @enum {string}
+             */
+            intraday_resolution: "daily" | "minute";
         };
         /** @description What the engine did, including what it refused to do. The rejection counters matter as much as the fills: a strategy whose signals were mostly dropped for want of a free slot has not been tested, and without these it looks identical to one that simply signalled rarely. */
         ExecutionSummary: {
@@ -1215,6 +1223,10 @@ export interface components {
             total_dividends?: number;
             splits_applied?: number;
             dividends_applied?: number;
+            /** @description Protective exits whose level and time came from minute bars. */
+            minute_resolved_exits?: number;
+            /** @description Sessions where minute resolution fell back to the daily rule: no minute bars, or none reaching the level the daily range shows. */
+            minute_fallbacks?: number;
             /** @description Dates where the entry logic said both "long" and "short", and so said nothing. Neither side was taken. */
             contradictions?: number;
         };

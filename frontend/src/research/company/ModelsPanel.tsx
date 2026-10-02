@@ -1,12 +1,16 @@
 import { Eye, EyeOff, Hourglass, Play, Sigma, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import type { CatalogModel, FillTiming, ParamSpecV2 } from '../../api/types';
+import type { CatalogModel, FillTiming, IntradayResolution, ParamSpecV2 } from '../../api/types';
 import {
   CATEGORY_LABELS,
   FILL_TIMINGS,
   FILL_TIMING_EXPLAINERS,
   FILL_TIMING_LABELS,
   FILL_TIMING_SHORT,
+  INTRADAY_RESOLUTIONS,
+  INTRADAY_RESOLUTION_EXPLAINERS,
+  INTRADAY_RESOLUTION_LABELS,
+  MINUTE_ONLY_FILL_TIMINGS,
   UNIT_PRESENTATION,
   unitOf,
 } from '../../api/types';
@@ -46,6 +50,7 @@ const DEFAULT_MODEL = 'sma-crossover';
 /** How the overlay traded, beside its parameters: the return depends on both. */
 function executionSummary(execution: ExecutionChoice): string {
   const parts = [FILL_TIMING_SHORT[execution.fill_timing]];
+  if (execution.intraday_resolution === 'minute') parts.push('minute accuracy');
   if (execution.commission_bps > 0) parts.push(`${execution.commission_bps} bps commission`);
   if (execution.slippage_bps > 0) parts.push(`${execution.slippage_bps} bps slippage`);
   if (execution.commission_bps === 0 && execution.slippage_bps === 0) parts.push('no costs');
@@ -299,6 +304,9 @@ export function ModelsPanel({
   // Execution survives a change of model: it describes the trading, not the
   // rule, and re-picking it for every model would be busywork.
   const [fillTiming, setFillTiming] = useState<FillTiming>(DEFAULT_EXECUTION_CHOICE.fill_timing);
+  const [accuracy, setAccuracy] = useState<IntradayResolution>(
+    DEFAULT_EXECUTION_CHOICE.intraday_resolution,
+  );
   const [commission, setCommission] = useState(String(DEFAULT_EXECUTION_CHOICE.commission_bps));
   const [slippage, setSlippage] = useState(String(DEFAULT_EXECUTION_CHOICE.slippage_bps));
   const commissionError = bpsError(commission);
@@ -317,6 +325,7 @@ export function ModelsPanel({
     }
     onApply(model, parameters, {
       fill_timing: fillTiming,
+      intraday_resolution: accuracy,
       commission_bps: commission.trim() === '' ? 0 : Number(commission),
       slippage_bps: slippage.trim() === '' ? 0 : Number(slippage),
     });
@@ -386,6 +395,34 @@ export function ModelsPanel({
           <legend className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
             Execution
           </legend>
+          <Label htmlFor="model-accuracy">
+            Execution accuracy
+            <Select
+              id="model-accuracy"
+              value={accuracy}
+              aria-describedby="model-accuracy-explainer"
+              onChange={(event) => {
+                const next = event.target.value as IntradayResolution;
+                setAccuracy(next);
+                // VWAP needs minute bars; fall back to its daily stand-in.
+                if (next === 'daily' && MINUTE_ONLY_FILL_TIMINGS.includes(fillTiming)) {
+                  setFillTiming('next_typical');
+                }
+              }}
+            >
+              {INTRADAY_RESOLUTIONS.map((mode) => (
+                <option key={mode} value={mode}>
+                  {INTRADAY_RESOLUTION_LABELS[mode]}
+                </option>
+              ))}
+            </Select>
+          </Label>
+          <p
+            id="model-accuracy-explainer"
+            className="text-xs leading-relaxed text-muted-foreground"
+          >
+            {INTRADAY_RESOLUTION_EXPLAINERS[accuracy]}
+          </p>
           <Label htmlFor="model-fill-timing">
             Fills at
             <Select
@@ -394,11 +431,16 @@ export function ModelsPanel({
               aria-describedby="model-fill-timing-explainer"
               onChange={(event) => setFillTiming(event.target.value as FillTiming)}
             >
-              {FILL_TIMINGS.map((timing) => (
-                <option key={timing} value={timing}>
-                  {FILL_TIMING_LABELS[timing]}
-                </option>
-              ))}
+              {FILL_TIMINGS.map((timing) => {
+                const needsMinute =
+                  MINUTE_ONLY_FILL_TIMINGS.includes(timing) && accuracy !== 'minute';
+                return (
+                  <option key={timing} value={timing} disabled={needsMinute}>
+                    {FILL_TIMING_LABELS[timing]}
+                    {needsMinute ? ' — needs Minute accuracy' : ''}
+                  </option>
+                );
+              })}
             </Select>
           </Label>
           <p
