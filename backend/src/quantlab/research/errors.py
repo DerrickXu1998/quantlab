@@ -81,12 +81,13 @@ class IntradaySelectionTooLargeError(SelectionTooLargeError):
         self.frequency = frequency
 
 
-class IntradayBusyError(ExperimentError):
-    """Another intraday run holds this worker's slot; try again shortly."""
+class LargeRunBusyError(ExperimentError):
+    """Another large backtest holds the server-wide slot; try again shortly."""
 
     def __init__(self) -> None:
         super().__init__(
-            "another intraday run is in progress on this server; try again in a minute"
+            "another large backtest is in progress on this server; try again in a minute, "
+            "or narrow this one (fewer symbols, a shorter window, a coarser frequency)"
         )
 
 

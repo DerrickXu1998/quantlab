@@ -257,21 +257,54 @@ def test_the_demo_refuses_intraday_bars():
     assert SqliteBackend.load_intraday_bars(object(), ["AAA"], "a", "b", "5m") == {}
 
 
-def test_a_second_intraday_run_waits_then_is_refused(monkeypatch):
-    monkeypatch.setattr(runner, "INTRADAY_WAIT_SECONDS", 0)
-    assert runner._INTRADAY_SLOT.acquire(timeout=1)
-    try:
-        with pytest.raises(errors.IntradayBusyError):
-            runner.run_experiment(
-                _store(),
-                symbols=["AAA"],
-                start_date="2024-02-01",
-                end_date="2024-03-22",
-                model_name="sma-crossover",
-                execution={"bar_frequency": "5m"},
-            )
-    finally:
-        runner._INTRADAY_SLOT.release()
+def test_a_large_run_waits_for_the_slot_then_is_refused(monkeypatch):
+    from contextlib import contextmanager
+
+    store = _store()
+
+    @contextmanager
+    def busy(timeout):
+        yield False  # someone else holds it
+
+    monkeypatch.setattr(store, "large_run_slot", busy, raising=False)
+    monkeypatch.setattr(runner, "LARGE_RUN_BARS", 100)
+    with pytest.raises(errors.LargeRunBusyError):
+        runner.run_experiment(
+            store,
+            symbols=["AAA"],
+            start_date="2024-02-01",
+            end_date="2024-03-22",
+            model_name="sma-crossover",
+            execution={"bar_frequency": "5m"},
+        )
+
+
+def test_a_small_run_never_asks_for_the_slot(monkeypatch):
+    store = _store()
+    monkeypatch.setattr(
+        store, "large_run_slot", lambda timeout: pytest.fail("asked"), raising=False
+    )
+    monkeypatch.setattr(runner, "LARGE_RUN_BARS", 10_000_000)
+    runner.run_experiment(
+        store,
+        symbols=["AAA"],
+        start_date="2024-02-01",
+        end_date="2024-03-22",
+        model_name="sma-crossover",
+        execution={"bar_frequency": "5m"},
+    )
+
+
+def test_the_demo_slot_is_exclusive():
+    from quantlab.storage.backends import SqliteBackend
+
+    demo = SqliteBackend.__new__(SqliteBackend)
+    with demo.large_run_slot(1) as first:
+        assert first
+        with demo.large_run_slot(0) as second:
+            assert not second
+    with demo.large_run_slot(0) as again:
+        assert again
 
 
 def test_warm_up_is_counted_in_sessions_of_bars():
