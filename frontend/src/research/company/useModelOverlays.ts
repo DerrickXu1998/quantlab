@@ -16,12 +16,16 @@ import { DEFAULT_EXECUTION } from '../../api/types';
  * one ticker, all in, no stops -- because this panel asks "does the model read
  * this stock", not "how should I size it", which is the Strategies builder's.
  */
-export type ExecutionChoice = Pick<ExecutionConfig, 'fill_timing' | 'commission_bps' | 'slippage_bps'>;
+export type ExecutionChoice = Pick<
+  ExecutionConfig,
+  'fill_timing' | 'commission_bps' | 'slippage_bps' | 'intraday_resolution'
+>;
 
 export const DEFAULT_EXECUTION_CHOICE: ExecutionChoice = {
   fill_timing: DEFAULT_EXECUTION.fill_timing,
   commission_bps: DEFAULT_EXECUTION.commission_bps,
   slippage_bps: DEFAULT_EXECUTION.slippage_bps,
+  intraday_resolution: DEFAULT_EXECUTION.intraday_resolution,
 };
 
 /** One model applied to the ticker on screen. */

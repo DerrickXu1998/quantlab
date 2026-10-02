@@ -31,7 +31,7 @@ from datetime import UTC, datetime, timedelta
 from datetime import date as _date
 from typing import Any
 
-from quantlab.execution import ExecutionConfig, adjustments, simulate
+from quantlab.execution import ExecutionConfig, adjustments, minutes, simulate
 from quantlab.logging import get_logger
 from quantlab.research import errors
 from quantlab.signals.registry import get_rule
@@ -353,7 +353,16 @@ def run_experiment(
     # Execute over the full loaded series -- an ATR stop set on the first
     # session of the window needs the bars behind it -- but score only from the
     # window start. Nothing can happen before it: no decision exists there.
-    result = simulate(requested_symbols, bars_by_symbol, in_window, spec.execution, actions)
+    result = simulate(
+        requested_symbols,
+        bars_by_symbol,
+        in_window,
+        spec.execution,
+        actions,
+        # Read lazily, a symbol-month at a time, and only for sessions where
+        # an order or a protective level lands; None for a daily run.
+        minutes.source_for(backend, spec.execution),
+    )
 
     # Surrogate identities, where the store has them. Recorded because the
     # canonical symbol is unique but editable, while instrument_id is the

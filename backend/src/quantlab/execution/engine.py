@@ -44,6 +44,7 @@ from quantlab.execution.config import (
     TRADING_DAYS_PER_YEAR,
     ExecutionConfig,
 )
+from quantlab.execution.minutes import MinuteBar, MinuteSource, vwap
 from quantlab.indicators.technical import atr as atr_indicator
 
 #: Resolution order within one date; mirrors the composer's own ordering.
@@ -87,6 +88,9 @@ class Fill:
     realized_pnl: float
     #: "signal" on the way in; the exit reason on the way out.
     reason: str
+    #: Exchange-local HH:MM, when minute bars placed the fill inside the
+    #: session (a protective exit under intraday_resolution="minute").
+    time: str | None = None
 
 
 @dataclass(frozen=True)
@@ -105,6 +109,8 @@ class ExecutedTrade:
     fees: float
     #: Dividends received (long) or paid (short, negative) while held.
     dividends: float = 0.0
+    #: Exchange-local HH:MM of the exit, when minute bars placed it.
+    exit_time: str | None = None
 
 
 @dataclass(frozen=True)
@@ -136,6 +142,12 @@ class ExecutionSummary:
     total_dividends: float = 0.0
     splits_applied: int = 0
     dividends_applied: int = 0
+    #: Under intraday_resolution="minute": protective exits whose level and
+    #: time came from minute bars, and sessions that had to fall back to the
+    #: daily rule (no minute bars, or none reaching the level the daily range
+    #: shows) -- including VWAP fills that fell back to the typical price.
+    minute_resolved_exits: int = 0
+    minute_fallbacks: int = 0
 
 
 @dataclass(frozen=True)
@@ -277,10 +289,14 @@ class ExecutionSimulator:
         bars_by_symbol: dict[str, list[Any]],
         config: ExecutionConfig | None = None,
         corporate_actions: dict[str, list[CorporateAction]] | None = None,
+        minute_source: MinuteSource | None = None,
     ) -> None:
         """``bars_by_symbol`` are raw, as traded. ``corporate_actions`` are the
         splits and dividends to apply; only those the config's
-        ``price_adjustment`` covers are used, and none at all under ``none``."""
+        ``price_adjustment`` covers are used, and none at all under ``none``.
+        ``minute_source`` supplies a session's minute bars (also raw, so they
+        sit on the same basis as every level the book holds); it is consulted
+        only under ``intraday_resolution="minute"``."""
         if not symbols:
             raise ValueError("a run needs at least one symbol")
         self.symbols = list(symbols)
@@ -310,6 +326,12 @@ class ExecutionSimulator:
         self._dividends = 0.0
         self._splits_applied = 0
         self._dividends_applied = 0
+
+        self._minute_source = (
+            minute_source if self.config.intraday_resolution == "minute" else None
+        )
+        self._minute_resolved = 0
+        self._minute_fallbacks = 0
 
         self.sleeved = self.config.position_sizing == "equal_weight"
         sleeve = self.config.initial_capital / len(self.symbols)
@@ -620,7 +642,13 @@ class ExecutionSimulator:
         return stop_price, target_price
 
     def _close(
-        self, date: str, symbol: str, price: float, index: int, reason: str
+        self,
+        date: str,
+        symbol: str,
+        price: float,
+        index: int,
+        reason: str,
+        time: str | None = None,
     ) -> Fill | None:
         position = self._positions.get(symbol)
         if position is None:
@@ -667,6 +695,7 @@ class ExecutionSimulator:
                 pnl=gross - fees + position.dividends,
                 fees=fees,
                 dividends=position.dividends,
+                exit_time=time,
             )
         )
         del self._positions[symbol]
@@ -683,6 +712,7 @@ class ExecutionSimulator:
             slippage=slippage,
             realized_pnl=net,
             reason=reason,
+            time=time,
         )
         self.fills.append(fill)
         self._counters["fills"] += 1
@@ -803,6 +833,72 @@ class ExecutionSimulator:
 
         return None
 
+    # -- inside the session ------------------------------------------------
+
+    def _pending_fill_price(self, symbol: str, date: str, bar: Any) -> float:
+        """Where a queued order fills today. Opens and closes are the daily
+        bar's auction prices; a VWAP is the session's own, from its minutes,
+        falling back to the typical price for a session without any."""
+        if self.config.fill_timing != "next_vwap":
+            return _deferred_fill_price(self.config.fill_timing, bar)
+        minutes = self._minute_source(symbol, date) if self._minute_source else []
+        price = vwap(minutes)
+        if price is None:
+            self._minute_fallbacks += 1
+            return _deferred_fill_price("next_typical", bar)
+        return price
+
+    def _protective_exit_minutes(
+        self, bar: Any, position: _Position, minutes: list[MinuteBar]
+    ) -> tuple[str, float, str] | None:
+        """The first protective level the session crossed, minute by minute.
+
+        The daily rule has to assume the stop whenever a stop and a target both
+        sit inside one bar's range. Minutes say which came first. The same
+        conventions hold everywhere else: the official open is checked first
+        (a gap through a stop fills there; through a target, at the target);
+        a level crossed inside a minute fills at the level, or at that minute's
+        open if it opened beyond it; and when one minute contains both, the
+        stop wins, because a minute bar cannot say which came first either.
+
+        None when the minutes never reach a level the daily range reached --
+        the minute feed is one venue's trades, and its extremes can fall short
+        of the consolidated ones. The caller then keeps the daily answer.
+        """
+        if not minutes:
+            return None
+        config = self.config
+        long = position.side == "long"
+        stops: list[tuple[str, float]] = []
+        if position.stop_price is not None:
+            stops.append(("stop_loss", position.stop_price))
+        if config.trailing_stop_pct is not None:
+            trail = (
+                position.best_close * (1 - config.trailing_stop_pct)
+                if long
+                else position.best_close * (1 + config.trailing_stop_pct)
+            )
+            stops.append(("trailing_stop", trail))
+        target = position.target_price
+
+        opening = float(bar.open)
+        for reason, level in stops:
+            if (opening <= level) if long else (opening >= level):
+                return reason, opening, minutes[0].time
+        if target is not None and ((opening >= target) if long else (opening <= target)):
+            return "take_profit", target, minutes[0].time
+
+        for minute in minutes:
+            for reason, level in stops:
+                if (minute.low <= level) if long else (minute.high >= level):
+                    price = min(level, minute.open) if long else max(level, minute.open)
+                    return reason, price, minute.time
+            if target is not None and (
+                (minute.high >= target) if long else (minute.low <= target)
+            ):
+                return "take_profit", target, minute.time
+        return None
+
     # -- the main loop -----------------------------------------------------
 
     def ingest(self, symbol: str, bar: Any) -> None:
@@ -877,19 +973,32 @@ class ExecutionSimulator:
             if not live:
                 continue
             outcome = self._protective_exit(bar, position)
+            exit_time = None
+            if outcome is not None and self._minute_source is not None:
+                # The daily range says a level was touched; the minutes say
+                # which one first, and when.
+                resolved = self._protective_exit_minutes(
+                    bar, position, self._minute_source(symbol, date)
+                )
+                if resolved is None:
+                    self._minute_fallbacks += 1
+                else:
+                    reason, price, exit_time = resolved
+                    outcome = (reason, price)
+                    self._minute_resolved += 1
             if outcome is None and self.config.max_holding_days is not None:
                 if index - position.entry_index >= self.config.max_holding_days:
                     outcome = ("max_holding", float(bar.close))
             if outcome is not None:
                 reason, price = outcome
-                fill = self._close(date, symbol, price, index, reason)
+                fill = self._close(date, symbol, price, index, reason, exit_time)
                 if fill is not None:
                     fills_today.append(fill)
 
         # 2b. Orders queued yesterday for today's close or typical price fill
         #     only now: a stop the session hit on the way happened first, and
         #     re-checking the book below means it wins over the queued exit.
-        if self.config.fill_timing in ("next_close", "next_typical"):
+        if self.config.fill_timing in ("next_close", "next_typical", "next_vwap"):
             fills_today.extend(self._drain_pending(date, bars_today, indices))
 
         # 3 and 4. Today's decisions: closers first, then openers.
@@ -965,7 +1074,7 @@ class ExecutionSimulator:
                 still_waiting.append(order)
                 continue
             index = indices[order.symbol]
-            price = _deferred_fill_price(self.config.fill_timing, bar)
+            price = self._pending_fill_price(order.symbol, date, bar)
             if order.kind == "close":
                 # Re-checked against the book rather than assumed still valid:
                 # a stop may have taken this position out in the meantime.
@@ -1097,6 +1206,8 @@ class ExecutionSimulator:
             total_dividends=self._dividends,
             splits_applied=self._splits_applied,
             dividends_applied=self._dividends_applied,
+            minute_resolved_exits=self._minute_resolved,
+            minute_fallbacks=self._minute_fallbacks,
             **self._counters,
         )
 
@@ -1116,9 +1227,12 @@ def simulate(
     decisions: list[Decision],
     config: ExecutionConfig | None = None,
     corporate_actions: dict[str, list[CorporateAction]] | None = None,
+    minute_source: MinuteSource | None = None,
 ) -> ExecutionResult:
     """Run a whole window and keep the result. The batch entry point."""
-    simulator = ExecutionSimulator(symbols, bars_by_symbol, config, corporate_actions)
+    simulator = ExecutionSimulator(
+        symbols, bars_by_symbol, config, corporate_actions, minute_source
+    )
     curve: list[EquityPoint] = []
     for day in simulator.iter_days(decisions):
         # Only dates with a bar enter the curve: a date on which nothing in the

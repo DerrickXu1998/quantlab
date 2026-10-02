@@ -250,6 +250,8 @@ class Trade(BaseModel):
     fees: float = 0.0
     #: Dividends received (long) or paid (short, negative) while held.
     dividends: float = 0.0
+    #: Exchange-local HH:MM of the exit, when minute bars placed it.
+    exit_time: str | None = None
 
 
 class PerformanceMetrics(BaseModel):
@@ -399,9 +401,9 @@ class ExecutionConfigModel(BaseModel):
     sizing_value: float | None = None
     max_positions: int | None = None
     max_position_pct: float = 1.0
-    fill_timing: Literal["signal_close", "next_open", "next_close", "next_typical"] = (
-        "signal_close"
-    )
+    fill_timing: Literal[
+        "signal_close", "next_open", "next_close", "next_typical", "next_vwap"
+    ] = "signal_close"
     commission_bps: float = 0.0
     slippage_bps: float = 0.0
     stop_loss_pct: float | None = None
@@ -417,6 +419,9 @@ class ExecutionConfigModel(BaseModel):
     #: Splits and dividends: back-adjusted prices for signals, events for
     #: execution. ``none`` is raw prices throughout, as before it existed.
     price_adjustment: Literal["split_dividend", "split", "none"] = "split_dividend"
+    #: daily (default) or minute: whether minute bars decide which protective
+    #: level a session crossed first, and supply next_vwap fills.
+    intraday_resolution: Literal["daily", "minute"] = "daily"
 
 
 class StrategyRequest(BaseModel):
@@ -477,6 +482,8 @@ class ExecutionSummaryModel(BaseModel):
     total_dividends: float = 0.0
     splits_applied: int = 0
     dividends_applied: int = 0
+    minute_resolved_exits: int = 0
+    minute_fallbacks: int = 0
     #: Dates where the entry logic said both "long" and "short", and so said
     #: nothing. Neither side was taken.
     contradictions: int = 0

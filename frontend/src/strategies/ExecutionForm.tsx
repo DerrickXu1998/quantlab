@@ -1,9 +1,19 @@
 import { useId, type ReactNode } from 'react';
-import type { ExecutionConfig, FillTiming, PositionSizing, PriceAdjustment } from '../api/types';
+import type {
+  ExecutionConfig,
+  FillTiming,
+  IntradayResolution,
+  PositionSizing,
+  PriceAdjustment,
+} from '../api/types';
 import {
   FILL_TIMINGS,
   FILL_TIMING_EXPLAINERS,
   FILL_TIMING_LABELS,
+  INTRADAY_RESOLUTIONS,
+  INTRADAY_RESOLUTION_EXPLAINERS,
+  INTRADAY_RESOLUTION_LABELS,
+  MINUTE_ONLY_FILL_TIMINGS,
   POSITION_SIZING_MODES,
   PRICE_ADJUSTMENTS,
   PRICE_ADJUSTMENT_EXPLAINERS,
@@ -234,6 +244,37 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
         title="Entry & exit timing"
         note="When an order that a signal asked for actually gets filled, and how long a position is allowed to live."
       >
+        <Field
+          label="Execution accuracy"
+          explainer={INTRADAY_RESOLUTION_EXPLAINERS[value.intraday_resolution]}
+          full
+        >
+          {({ id, describedBy }) => (
+            <Select
+              id={id}
+              aria-describedby={describedBy}
+              value={value.intraday_resolution}
+              onChange={(event) => {
+                const intraday_resolution = event.target.value as IntradayResolution;
+                // A VWAP fill needs minute bars: back to its daily stand-in
+                // rather than leaving a combination the engine refuses.
+                const fill_timing =
+                  intraday_resolution === 'daily' &&
+                  MINUTE_ONLY_FILL_TIMINGS.includes(value.fill_timing)
+                    ? 'next_typical'
+                    : value.fill_timing;
+                patch({ intraday_resolution, fill_timing });
+              }}
+            >
+              {INTRADAY_RESOLUTIONS.map((mode) => (
+                <option key={mode} value={mode}>
+                  {INTRADAY_RESOLUTION_LABELS[mode]}
+                </option>
+              ))}
+            </Select>
+          )}
+        </Field>
+
         <Field label="Fill timing" explainer={FILL_TIMING_EXPLAINERS[value.fill_timing]} full>
           {({ id, describedBy }) => (
             <Select
@@ -242,11 +283,16 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
               value={value.fill_timing}
               onChange={(event) => patch({ fill_timing: event.target.value as FillTiming })}
             >
-              {FILL_TIMINGS.map((timing) => (
-                <option key={timing} value={timing}>
-                  {FILL_TIMING_LABELS[timing]}
-                </option>
-              ))}
+              {FILL_TIMINGS.map((timing) => {
+                const needsMinute =
+                  MINUTE_ONLY_FILL_TIMINGS.includes(timing) && value.intraday_resolution !== 'minute';
+                return (
+                  <option key={timing} value={timing} disabled={needsMinute}>
+                    {FILL_TIMING_LABELS[timing]}
+                    {needsMinute ? ' — needs Minute accuracy' : ''}
+                  </option>
+                );
+              })}
             </Select>
           )}
         </Field>

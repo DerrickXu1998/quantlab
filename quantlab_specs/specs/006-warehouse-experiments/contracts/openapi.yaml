@@ -2109,6 +2109,10 @@ components:
           description: >
             Dividend cash while held: received on a long, paid (negative) on a
             short. Included in pnl and return_pct.
+        exit_time:
+          type: string
+          nullable: true
+          description: Exchange-local HH:MM of the exit, when minute bars placed it.
 
     PerformanceMetrics:
       type: object
@@ -2502,14 +2506,16 @@ components:
           default: 1
         fill_timing:
           type: string
-          enum: [signal_close, next_open, next_close, next_typical]
+          enum: [signal_close, next_open, next_close, next_typical, next_vwap]
           default: signal_close
           description: >
             Where signal entries and exits fill. `signal_close`: the close of
             the bar that produced the signal (optimistic -- that close is also
             the rule's input). `next_open` / `next_close`: the open or close of
             the following session. `next_typical`: (high + low + close) / 3 of
-            the following session, a stand-in for VWAP. The `next_*` timings
+            the following session, a stand-in for VWAP. `next_vwap`: the
+            following session's volume-weighted average price from its minute
+            bars; needs intraday_resolution minute. The `next_*` timings
             drop a signal on the window's last bar. Protective exits (stops,
             targets) are unaffected: they fill against the bar that hit them.
         commission_bps:
@@ -2585,6 +2591,18 @@ components:
             is paid to a long (charged to a short) in cash on its ex-date.
             split: the same for splits only. none: raw prices and no events --
             what a run stored before this field existed re-executes under.
+        intraday_resolution:
+          type: string
+          enum: [daily, minute]
+          default: daily
+          description: >
+            How finely execution looks inside a session. daily: fills and
+            protective exits are decided from the daily bar alone. minute: when
+            a session's range touches a stop, trailing stop or target, its
+            minute bars decide which was crossed first and when, and next_vwap
+            fills use the session's real volume-weighted price. Opens and
+            closes remain the daily bar's auction prices. Signals are daily
+            either way.
 
     ExecutionSummary:
       type: object
@@ -2608,6 +2626,14 @@ components:
         total_dividends: { type: number }
         splits_applied: { type: integer }
         dividends_applied: { type: integer }
+        minute_resolved_exits:
+          type: integer
+          description: Protective exits whose level and time came from minute bars.
+        minute_fallbacks:
+          type: integer
+          description: >
+            Sessions where minute resolution fell back to the daily rule: no
+            minute bars, or none reaching the level the daily range shows.
         contradictions:
           type: integer
           description: >

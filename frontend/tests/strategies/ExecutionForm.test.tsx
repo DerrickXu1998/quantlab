@@ -26,6 +26,24 @@ function config(): ExecutionConfig {
 }
 
 describe('ExecutionForm', () => {
+  it('backtests at daily accuracy unless minute is chosen, and gates VWAP on it', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const accuracy = screen.getByLabelText(/execution accuracy/i);
+    const fills = screen.getByLabelText(/fill timing/i);
+
+    expect(accuracy).toHaveValue('daily');
+    expect(screen.getByRole('option', { name: /VWAP \(minute bars\)/ })).toBeDisabled();
+
+    await user.selectOptions(accuracy, 'minute');
+    await user.selectOptions(fills, 'next_vwap');
+    expect(config()).toMatchObject({ intraday_resolution: 'minute', fill_timing: 'next_vwap' });
+
+    // Back to daily: VWAP has no daily form, so it falls back to its stand-in.
+    await user.selectOptions(accuracy, 'daily');
+    expect(config()).toMatchObject({ intraday_resolution: 'daily', fill_timing: 'next_typical' });
+  });
+
   it('covers §4 in four named groups rather than one wall of inputs', () => {
     render(<Harness />);
 

@@ -258,6 +258,7 @@ describe('ModelsPanel', () => {
 
     expect(onApply).toHaveBeenCalledWith(rsiThreshold, { period: 21 }, {
       fill_timing: 'signal_close',
+      intraday_resolution: 'daily',
       commission_bps: 0,
       slippage_bps: 0,
     });
@@ -280,9 +281,42 @@ describe('ModelsPanel', () => {
 
     expect(onApply).toHaveBeenCalledWith(expect.anything(), {}, {
       fill_timing: 'next_typical',
+      intraday_resolution: 'daily',
       commission_bps: 5,
       slippage_bps: 2.5,
     });
+  });
+
+  it('offers VWAP fills only at minute accuracy, and sends both', async () => {
+    const user = userEvent.setup();
+    const onApply = renderPanel();
+    const fills = screen.getByLabelText('Fills at');
+
+    // Daily bars have no volume profile: the option is there but unavailable.
+    expect(within(fills).getByRole('option', { name: /VWAP \(minute bars\)/ })).toBeDisabled();
+
+    await user.selectOptions(screen.getByLabelText('Execution accuracy'), 'minute');
+    await user.selectOptions(fills, 'next_vwap');
+    await user.click(screen.getByRole('button', { name: /apply to aapl\.us/i }));
+
+    expect(onApply).toHaveBeenCalledWith(expect.anything(), {}, {
+      fill_timing: 'next_vwap',
+      intraday_resolution: 'minute',
+      commission_bps: 0,
+      slippage_bps: 0,
+    });
+  });
+
+  it('drops a VWAP fill back to its daily stand-in when accuracy goes back to daily', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    const accuracy = screen.getByLabelText('Execution accuracy');
+
+    await user.selectOptions(accuracy, 'minute');
+    await user.selectOptions(screen.getByLabelText('Fills at'), 'next_vwap');
+    await user.selectOptions(accuracy, 'daily');
+
+    expect(screen.getByLabelText('Fills at')).toHaveValue('next_typical');
   });
 
   it('will not apply a negative cost', async () => {

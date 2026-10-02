@@ -30,11 +30,23 @@ POSITION_SIZING: tuple[str, ...] = (
     "volatility_target",
 )
 
-FILL_TIMING: tuple[str, ...] = ("signal_close", "next_open", "next_close", "next_typical")
+FILL_TIMING: tuple[str, ...] = (
+    "signal_close",
+    "next_open",
+    "next_close",
+    "next_typical",
+    "next_vwap",
+)
 
 #: Fill timings that queue the order for the session after the signal. The
 #: rest of the engine asks this rather than comparing names.
-DEFERRED_FILL_TIMING: tuple[str, ...] = ("next_open", "next_close", "next_typical")
+DEFERRED_FILL_TIMING: tuple[str, ...] = ("next_open", "next_close", "next_typical", "next_vwap")
+
+#: How finely execution looks inside a session. ``daily``: every fill and
+#: protective exit is decided from the daily bar alone. ``minute``: the
+#: session's minute bars decide which protective level was touched first and
+#: when, and supply a real VWAP. Signals are daily either way.
+INTRADAY_RESOLUTION: tuple[str, ...] = ("daily", "minute")
 
 #: Why a position was closed. Recorded per trade, because "the strategy said so"
 #: and "the stop caught it" are different facts about a strategy and averaging
@@ -127,6 +139,12 @@ class ExecutionConfig:
     #: and what a stored run without it re-executes under.
     price_adjustment: str = "split_dividend"
 
+    # --- intraday accuracy ---
+    #: ``daily`` (default) or ``minute``: see INTRADAY_RESOLUTION. Opens and
+    #: closes are auction prices and come from the daily bar in both modes;
+    #: minute bars only decide what happens between them.
+    intraday_resolution: str = "daily"
+
     def __post_init__(self) -> None:
         self.validate()
 
@@ -145,6 +163,16 @@ class ExecutionConfig:
             raise ValueError(
                 f"fill_timing must be one of {FILL_TIMING}, got {self.fill_timing!r}"
             )
+        if self.intraday_resolution not in INTRADAY_RESOLUTION:
+            raise ValueError(
+                f"intraday_resolution must be one of {INTRADAY_RESOLUTION}, "
+                f"got {self.intraday_resolution!r}"
+            )
+        # A VWAP needs the session's volume profile, which only minute bars
+        # have. Quietly substituting the typical price would be a different
+        # fill from the one the form asked for.
+        if self.fill_timing == "next_vwap" and self.intraday_resolution != "minute":
+            raise ValueError("fill_timing next_vwap needs intraday_resolution minute")
 
         # Modes that need a value must have one; equal_weight must not, because
         # silently ignoring a number the user typed is how a run quietly does
@@ -274,6 +302,13 @@ class ExecutionConfig:
                     "signal date -- a stand-in for VWAP, since daily bars carry no intraday "
                     "volume profile"
                 ),
+                "next_vwap": (
+                    "the volume-weighted average price of the session after the signal "
+                    "date, from its minute bars -- an order worked through the whole "
+                    "session. Volume is the IEX feed's, which weights the minutes but is "
+                    "a small share of all trading; a session without minute bars falls back "
+                    "to the typical price"
+                ),
             }[self.fill_timing]
             out.append(
                 f"Signal entries and exits are filled at {where}; a signal on the last bar "
@@ -323,6 +358,18 @@ class ExecutionConfig:
                     "the target, not at the better opening price: collecting every "
                     "favourable gap would add up to an edge no live book earns."
                 )
+
+        if self.intraday_resolution == "minute" and risk:
+            out.append(
+                "Protective exits are resolved on minute bars: when a session's range "
+                "touches a level, its minutes decide which level was crossed first and "
+                "when, so a target reached before the stop is taken. Within one minute "
+                "the stop still wins. A gap through a level at the open fills at the "
+                "official open. A session with no minute bars (before 2016-12-12, or a "
+                "day the feed missed), or whose minutes never reach the level the daily "
+                "range shows, falls back to the daily rule; the summary counts them as "
+                "minute_fallbacks."
+            )
 
         if self.max_holding_days is not None:
             out.append(f"Positions are closed after {self.max_holding_days} sessions regardless.")

@@ -215,7 +215,13 @@ export const POSITION_SIZING_MODES = [
 
 export type PositionSizing = (typeof POSITION_SIZING_MODES)[number];
 
-export const FILL_TIMINGS = ['signal_close', 'next_open', 'next_close', 'next_typical'] as const;
+export const FILL_TIMINGS = [
+  'signal_close',
+  'next_open',
+  'next_close',
+  'next_typical',
+  'next_vwap',
+] as const;
 
 export type FillTiming = (typeof FILL_TIMINGS)[number];
 
@@ -225,6 +231,7 @@ export const FILL_TIMING_LABELS: Record<FillTiming, string> = {
   next_open: 'Next bar’s open',
   next_close: 'Next bar’s close',
   next_typical: 'Next bar’s typical price (≈VWAP)',
+  next_vwap: 'Next session’s VWAP (minute bars)',
 };
 
 /** Why each fill timing is or is not a price you could have traded. */
@@ -237,6 +244,8 @@ export const FILL_TIMING_EXPLAINERS: Record<FillTiming, string> = {
     'Fills at the next bar’s close, like a market-on-close order placed the day after the signal. A stop hit during that session wins over a queued exit.',
   next_typical:
     'Fills at the next bar’s (high + low + close) / 3, a stand-in for VWAP: an order worked through the session rather than at either extreme. Daily bars carry no volume profile, so it is not true VWAP.',
+  next_vwap:
+    'Fills at the next session’s volume-weighted average price, computed from its minute bars: what an order worked through the whole day would average. Needs Minute execution accuracy. A session without minute bars falls back to the typical price.',
 };
 
 /** The same, in the few words a result line has room for. */
@@ -245,6 +254,27 @@ export const FILL_TIMING_SHORT: Record<FillTiming, string> = {
   next_open: 'fills next open',
   next_close: 'fills next close',
   next_typical: 'fills next typical price',
+  next_vwap: 'fills next VWAP',
+};
+
+/** Fill timings that need minute bars, and so Minute execution accuracy. */
+export const MINUTE_ONLY_FILL_TIMINGS: readonly FillTiming[] = ['next_vwap'];
+
+export const INTRADAY_RESOLUTIONS = ['daily', 'minute'] as const;
+
+export type IntradayResolution = (typeof INTRADAY_RESOLUTIONS)[number];
+
+export const INTRADAY_RESOLUTION_LABELS: Record<IntradayResolution, string> = {
+  daily: 'Daily',
+  minute: 'Minute',
+};
+
+/** What each accuracy level changes about the fills. */
+export const INTRADAY_RESOLUTION_EXPLAINERS: Record<IntradayResolution, string> = {
+  daily:
+    'Every fill and stop is decided from the daily bar. When a stop and a target both sit inside one day’s range, the stop is assumed to have come first.',
+  minute:
+    'Minute bars decide which stop or target a session crossed first, and at what time, and enable VWAP fills. Opens and closes are still the official auction prices. Signals are daily either way; runs read more data and take longer.',
 };
 
 export const PRICE_ADJUSTMENTS = ['split_dividend', 'split', 'none'] as const;
@@ -300,6 +330,8 @@ export interface ExecutionConfig {
    * 'none' (RunResultsView).
    */
   price_adjustment: PriceAdjustment;
+  /** daily (default) or minute: see INTRADAY_RESOLUTION_EXPLAINERS. */
+  intraday_resolution: IntradayResolution;
 }
 
 /** The contract's own defaults, §4, field for field. */
@@ -323,6 +355,7 @@ export const DEFAULT_EXECUTION: ExecutionConfig = {
   allow_shorts: false,
   borrow_cost_bps: 0,
   price_adjustment: 'split_dividend',
+  intraday_resolution: 'daily',
 };
 
 /** Which sizing modes read `sizing_value`, and what it means to each. */
@@ -376,6 +409,9 @@ export interface ExecutionSummary {
   total_dividends?: number;
   splits_applied?: number;
   dividends_applied?: number;
+  /** Protective exits placed by minute bars, and sessions that fell back to daily. */
+  minute_resolved_exits?: number;
+  minute_fallbacks?: number;
   rejected_max_positions?: number;
   rejected_cooldown?: number;
   rejected_shorts_disabled?: number;
@@ -402,6 +438,8 @@ export type TradeV2 = Trade & {
   fees?: number | null;
   /** Dividend cash while held; negative on a short. Included in pnl. */
   dividends?: number | null;
+  /** Exchange-local HH:MM of the exit, when minute bars placed it. */
+  exit_time?: string | null;
 };
 
 export type RunPerformanceV2 = Omit<RunPerformance, 'trades'> & {
