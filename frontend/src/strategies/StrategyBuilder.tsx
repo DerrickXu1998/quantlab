@@ -14,6 +14,14 @@ import { Panel } from '../quantlab/chrome/Panel';
 import { useRuns } from '../runs/RunsContext';
 import { useDataWindow } from '../workbench/useDataWindow';
 import { CoverageWarning } from './CoverageWarning';
+import {
+  BAR_FREQUENCIES,
+  BAR_FREQUENCY_EXPLAINERS,
+  BAR_FREQUENCY_LABELS,
+  isIntraday,
+  runSize,
+  type BarFrequency,
+} from './barFrequency';
 import { ExecutionForm } from './ExecutionForm';
 import { isFundamental } from './fundamentals';
 import { useFundamentalsCoverage } from './useFundamentals';
@@ -129,6 +137,32 @@ export function StrategyBuilder({
   );
   const hasErrors = useMemo(() => draftHasErrors(draft, catalog), [draft, catalog]);
   const blockers = useMemo(() => draftBlockers(draft), [draft]);
+  const frequency: BarFrequency = draft.execution.bar_frequency ?? '1d';
+  // The backend's own size check, run here first so an oversized run is
+  // refused on screen rather than after a round trip.
+  const size = useMemo(
+    () => runSize(symbols.length, startDate, endDate, frequency),
+    [symbols.length, startDate, endDate, frequency],
+  );
+  const setFrequency = (next: BarFrequency) =>
+    setDraft((current) => ({
+      ...current,
+      execution: {
+        ...current.execution,
+        bar_frequency: next,
+        // Minute accuracy and VWAP fills refine daily bars; an intraday run
+        // already steps through the session, and the backend refuses both.
+        ...(isIntraday(next)
+          ? {
+              intraday_resolution: 'daily' as const,
+              fill_timing:
+                current.execution.fill_timing === 'next_vwap'
+                  ? ('next_typical' as const)
+                  : current.execution.fill_timing,
+            }
+          : {}),
+      },
+    }));
 
   const addComponent = useCallback((model: CatalogModel, role: StrategyRole) => {
     setDraft((current) => ({ ...current, components: [...current.components, componentFor(model, role)] }));
@@ -202,7 +236,7 @@ export function StrategyBuilder({
   };
 
   const run = () => {
-    if (symbols.length === 0 || hasErrors || blockers.length > 0) return;
+    if (symbols.length === 0 || hasErrors || blockers.length > 0 || size.blocker) return;
     // The inline spec, never the stored id: what runs is what is on screen,
     // including edits that have not been saved. A run pinned to an id would
     // quietly execute the last saved version instead.
@@ -708,12 +742,35 @@ export function StrategyBuilder({
         <Panel
           title="Universe & window"
           actions={
-            <StatusBadge tone="idle" title="The backend serves daily bars only.">
-              Daily
+            <StatusBadge tone="idle" title={BAR_FREQUENCY_EXPLAINERS[frequency]}>
+              {BAR_FREQUENCY_LABELS[frequency]}
             </StatusBadge>
           }
           bodyClassName="space-y-3"
         >
+          <div className="space-y-1">
+            <label className={MICRO} htmlFor="strategy-bars">
+              Bars
+            </label>
+            <Select
+              id="strategy-bars"
+              value={frequency}
+              aria-describedby="strategy-bars-explainer"
+              onChange={(event) => setFrequency(event.target.value as BarFrequency)}
+            >
+              {BAR_FREQUENCIES.map((option) => (
+                <option key={option} value={option}>
+                  {BAR_FREQUENCY_LABELS[option]}
+                </option>
+              ))}
+            </Select>
+            <p id="strategy-bars-explainer" className="text-xs text-muted-foreground">
+              {BAR_FREQUENCY_EXPLAINERS[frequency]}
+              {isIntraday(frequency)
+                ? ' Percentage stops sized for daily bars will rarely trigger; ATR stops scale on their own. Positions may be held overnight.'
+                : ''}
+            </p>
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <label className={MICRO} htmlFor="strategy-start">
@@ -746,6 +803,18 @@ export function StrategyBuilder({
             <UniversePicker instruments={instruments} selected={symbols} onChange={setSymbols} />
           </div>
 
+          {symbols.length > 0 && isIntraday(frequency) ? (
+            <p data-testid="strategy-run-size" className="font-mono text-xs text-muted-foreground">
+              ≈ {size.bars.toLocaleString()} bars
+              {size.seconds !== null ? ` · about ${size.seconds} s` : ''}
+            </p>
+          ) : null}
+          {size.blocker ? (
+            <p data-testid="strategy-size-blocker" role="alert" className="text-xs text-destructive">
+              {size.blocker}
+            </p>
+          ) : null}
+
           <div className="flex items-center justify-end gap-2 border-t border-border pt-3">
             {inFlight ? (
               <Button type="button" variant="outline" onClick={cancel}>
@@ -755,7 +824,13 @@ export function StrategyBuilder({
             <Button
               type="button"
               className="px-4"
-              disabled={inFlight || symbols.length === 0 || hasErrors || blockers.length > 0}
+              disabled={
+                inFlight ||
+                symbols.length === 0 ||
+                hasErrors ||
+                blockers.length > 0 ||
+                Boolean(size.blocker)
+              }
               onClick={run}
             >
               <Play size={16} strokeWidth={1.5} aria-hidden="true" />
