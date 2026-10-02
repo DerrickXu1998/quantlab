@@ -396,3 +396,21 @@ def test_the_benchmark_starts_at_the_windows_first_close_after_adjustment():
     )
 
     assert [p.value for p in result.benchmark] == pytest.approx([INITIAL, INITIAL * 1.1])
+
+
+def test_the_benchmark_applies_only_what_the_runs_mode_applies():
+    """Handed every action, a split-only run must leave the dividend out of the
+    benchmark exactly as the simulator leaves it out of the strategy."""
+    from quantlab.execution import ExecutionConfig
+
+    by_symbol = {"AAA": bars(100.0, 100.0, 98.0)}
+    signals = [signal("AAA", "2024-01-01", "bullish")]
+
+    result = performance.compute_performance(
+        run_id="split-only", signals=signals, bars_by_symbol=by_symbol, symbols=["AAA"],
+        execution=ExecutionConfig(price_adjustment="split"),
+        corporate_actions=_actions(("2024-01-03", "dividend", None, 2.0)),
+    )
+
+    assert result.benchmark[-1].value == pytest.approx(INITIAL * 0.98)
+    assert result.equity[-1].value == pytest.approx(result.benchmark[-1].value)

@@ -529,9 +529,15 @@ def compute_performance(
     # raw benchmark to match its raw strategy. Adjusting the whole loaded
     # series first and trimming after means an ex-date on the window's first
     # session still finds the session before it.
-    from quantlab.execution.adjustments import adjust_all
+    from quantlab.execution.adjustments import adjust_all, applies
 
-    benchmark_bars = adjust_all(bars_by_symbol, corporate_actions or {})
+    # Filtered by the run's mode here as the simulator does internally, so the
+    # two sides agree by construction even for a caller passing every action.
+    benchmark_actions = {
+        symbol: [a for a in actions if applies(a, config.price_adjustment)]
+        for symbol, actions in (corporate_actions or {}).items()
+    }
+    benchmark_bars = adjust_all(bars_by_symbol, benchmark_actions)
     in_window = {
         symbol: _within(bars, window_start, window_end)
         for symbol, bars in benchmark_bars.items()
