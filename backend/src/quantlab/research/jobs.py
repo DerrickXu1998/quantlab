@@ -96,6 +96,7 @@ _CATEGORIES: tuple[tuple[type[Exception], str], ...] = (
     (errors.LargeRunBusyError, "limit"),
     (errors.UnknownSymbolError, "data"),
     (errors.NoFactCoverageError, "data"),
+    (errors.MissingSeriesError, "data"),
     (errors.DatasetUnsupportedError, "data"),
     (errors.UnknownModelError, "validation"),
     (errors.ParameterValidationError, "validation"),

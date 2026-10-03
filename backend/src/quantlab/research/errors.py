@@ -128,6 +128,29 @@ class NoFactCoverageError(ExperimentError):
         )
 
 
+class MissingSeriesError(ExperimentError):
+    """The strategy reads macro series (VIX.FRED, HYSPREAD.FRED, ...) that this
+    dataset has not loaded.
+
+    Refused at submission, before the run is queued: a gate reading an empty
+    series stays shut, and a run that never trades for want of data would be
+    indistinguishable from one that found nothing.
+    """
+
+    def __init__(self, series: list[str]) -> None:
+        self.series = sorted(series)
+        fred = [name for name in self.series if name.endswith(".FRED")]
+        how = (
+            " Load them with `quantlab ingest-macro --provider fred` (make ingest-fred)."
+            if fred
+            else ""
+        )
+        super().__init__(
+            f"this strategy reads {', '.join(self.series)}, which "
+            f"{'is' if len(self.series) == 1 else 'are'} not loaded in this dataset.{how}"
+        )
+
+
 class RunCancelledError(ExperimentError):
     """The run's owner cancelled it while it was running.
 

@@ -52,6 +52,22 @@ from quantlab.indicators.technical import atr as atr_indicator
 _KIND_ORDER = {"exit": 0, "both": 1, "entry": 2}
 
 
+
+def _session_numbers(bars: Any) -> np.ndarray:
+    """0, 0, ..., 1, 1, ...: which trading day each bar belongs to.
+
+    A new number wherever the date changes, so it counts the instrument's own
+    sessions -- a holiday it did not trade is not a day it was held.
+    """
+    if isinstance(bars, BarSeries):
+        days = bars.stamps.astype("datetime64[D]")
+    else:
+        days = np.array([str(bar.date)[:10] for bar in (bars or [])])
+    if len(days) == 0:
+        return np.zeros(0, dtype=np.int64)
+    changes = np.concatenate(([0], (days[1:] != days[:-1]).astype(np.int64)))
+    return np.cumsum(changes)
+
 @dataclass(frozen=True)
 class Decision:
     """One instruction from a strategy: open something, or close it.
@@ -410,6 +426,14 @@ class ExecutionSimulator:
         # Built for row-wise (daily) bars only. A columnar run walks a merged
         # timeline with one pointer per instrument instead: a dict entry per
         # bar is ~100 B, which at 2M intraday bars is most of the budget.
+        # Each bar's trading session, numbered from the symbol's first. Holding
+        # periods and cooldowns are in *days* at every bar size: on daily bars
+        # this is the bar index itself; on 5-minute bars, 78 bars share a
+        # number. Two sessions held means two trading days, never two bars.
+        self._session_of: dict[str, np.ndarray] = {
+            symbol: _session_numbers(bars) for symbol, bars in self.bars_by_symbol.items()
+        }
+
         self._bar_on: dict[str, dict[str, Any]] = {}
         self._index_on: dict[str, dict[str, int]] = {}
         if not self._columnar:
@@ -567,6 +591,13 @@ class ExecutionSimulator:
         notional = min(notional, equity * config.max_position_pct, available)
         return notional / price if notional > 0 else 0.0
 
+    def _sessions_between(self, symbol: str, earlier: int, later: int) -> int:
+        """Trading days from bar ``earlier`` to bar ``later`` of one symbol."""
+        sessions = self._session_of.get(symbol)
+        if sessions is None or later >= len(sessions) or earlier >= len(sessions):
+            return later - earlier
+        return int(sessions[later] - sessions[earlier])
+
     # -- opening and closing -----------------------------------------------
 
     def _open(
@@ -578,7 +609,10 @@ class ExecutionSimulator:
             return None
         if config.cooldown_days:
             last_exit = self._last_exit_index.get(symbol)
-            if last_exit is not None and index - last_exit < config.cooldown_days:
+            if (
+                last_exit is not None
+                and self._sessions_between(symbol, last_exit, index) < config.cooldown_days
+            ):
                 self._counters["rejected_cooldown"] += 1
                 return None
 
@@ -1028,7 +1062,8 @@ class ExecutionSimulator:
                     outcome = (reason, price)
                     self._minute_resolved += 1
             if outcome is None and self.config.max_holding_days is not None:
-                if index - position.entry_index >= self.config.max_holding_days:
+                held = self._sessions_between(symbol, position.entry_index, index)
+                if held >= self.config.max_holding_days:
                     outcome = ("max_holding", float(bar.close))
             if outcome is not None:
                 reason, price = outcome
@@ -1190,7 +1225,11 @@ class ExecutionSimulator:
 
         if closes_position and may_close:
             index = indices.get(symbol)
-            if index is not None and index - position.entry_index < config.min_holding_days:
+            if (
+                index is not None
+                and self._sessions_between(symbol, position.entry_index, index)
+                < config.min_holding_days
+            ):
                 return None
             action = "close"
         elif position is None and may_open:
