@@ -149,14 +149,13 @@ export function StrategyBuilder({
   const hasErrors = useMemo(() => draftHasErrors(draft, catalog), [draft, catalog]);
   const blockers = useMemo(() => draftBlockers(draft), [draft]);
   const frequency: BarFrequency = draft.execution.bar_frequency ?? '1d';
-  const unit = isIntraday(frequency) ? 'bars' : 'days';
   // The backend's own size check, run here first so an oversized run is
   // refused on screen rather than after a round trip.
   const size = useMemo(
     () => runSize(symbols.length, startDate, endDate, frequency, draft.components.length),
     [symbols.length, startDate, endDate, frequency, draft.components.length],
   );
-  const summary = useMemo(() => executionSummary(draft.execution, unit), [draft.execution, unit]);
+  const summary = useMemo(() => executionSummary(draft.execution), [draft.execution]);
   const changedCount = summary.filter((item) => item.changed).length;
 
   // Unsaved changes: the spec as it would be sent, against the one last
@@ -662,7 +661,7 @@ export function StrategyBuilder({
                 <p id="strategy-bars-explainer" className="text-xs text-muted-foreground">
                   {BAR_FREQUENCY_EXPLAINERS[frequency]}
                   {isIntraday(frequency)
-                    ? ` Indicator periods, holding times and the agreement window count ${BAR_FREQUENCY_LABELS[frequency]} bars (${BARS_PER_SESSION[frequency]} a session). Percentage stops sized for daily bars will rarely trigger; ATR stops scale on their own. Positions may be held overnight.`
+                    ? ` Indicator periods and the agreement window count ${BAR_FREQUENCY_LABELS[frequency]} bars (${BARS_PER_SESSION[frequency]} a session); holding periods and cooldowns stay in trading days. Percentage stops sized for daily bars will rarely trigger; ATR stops scale on their own. Positions may be held overnight.`
                     : ''}
                 </p>
               </div>

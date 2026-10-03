@@ -146,10 +146,7 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
           )}
         </Field>
 
-        <Field
-          label="Position sizing"
-          explainer={SIZING_EXPLAINERS[value.position_sizing]}
-        >
+        <Field label="Position sizing" explainer={SIZING_EXPLAINERS[value.position_sizing]}>
           {({ id, describedBy }) => (
             <Select
               id={id}
@@ -181,9 +178,7 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
             and a field that is ignored is worse than no field. */}
         {sizingMeaning ? (
           <Field
-            label={
-              value.position_sizing === 'fixed_notional' ? 'Cash per trade' : 'Sizing value'
-            }
+            label={value.position_sizing === 'fixed_notional' ? 'Cash per trade' : 'Sizing value'}
             explainer={sizingMeaning}
             suffix={value.position_sizing === 'fixed_notional' ? 'USD' : 'fraction'}
           >
@@ -246,41 +241,41 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
         title="Entry & exit timing"
         note="When an order that a signal asked for actually gets filled, and how long a position is allowed to live."
       >
-        <Field
-          label="Execution accuracy"
-          explainer={
-            intradayBars
-              ? 'Intraday bars already step through the session, so fills and stops are decided bar by bar; minute accuracy applies to daily bars only.'
-              : INTRADAY_RESOLUTION_EXPLAINERS[value.intraday_resolution]
-          }
-          full
-        >
-          {({ id, describedBy }) => (
-            <Select
-              id={id}
-              aria-describedby={describedBy}
-              disabled={intradayBars}
-              value={value.intraday_resolution}
-              onChange={(event) => {
-                const intraday_resolution = event.target.value as IntradayResolution;
-                // A VWAP fill needs minute bars: back to its daily stand-in
-                // rather than leaving a combination the engine refuses.
-                const fill_timing =
-                  intraday_resolution === 'daily' &&
-                  MINUTE_ONLY_FILL_TIMINGS.includes(value.fill_timing)
-                    ? 'next_typical'
-                    : value.fill_timing;
-                patch({ intraday_resolution, fill_timing });
-              }}
-            >
-              {INTRADAY_RESOLUTIONS.map((mode) => (
-                <option key={mode} value={mode}>
-                  {INTRADAY_RESOLUTION_LABELS[mode]}
-                </option>
-              ))}
-            </Select>
-          )}
-        </Field>
+        {/* Only daily bars have a choice to make: intraday bars already step
+            through the session, so the control would be a disabled select
+            explaining itself. */}
+        {intradayBars ? null : (
+          <Field
+            label="Execution accuracy"
+            explainer={INTRADAY_RESOLUTION_EXPLAINERS[value.intraday_resolution]}
+            full
+          >
+            {({ id, describedBy }) => (
+              <Select
+                id={id}
+                aria-describedby={describedBy}
+                value={value.intraday_resolution}
+                onChange={(event) => {
+                  const intraday_resolution = event.target.value as IntradayResolution;
+                  // A VWAP fill needs minute bars: back to its daily stand-in
+                  // rather than leaving a combination the engine refuses.
+                  const fill_timing =
+                    intraday_resolution === 'daily' &&
+                    MINUTE_ONLY_FILL_TIMINGS.includes(value.fill_timing)
+                      ? 'next_typical'
+                      : value.fill_timing;
+                  patch({ intraday_resolution, fill_timing });
+                }}
+              >
+                {INTRADAY_RESOLUTIONS.map((mode) => (
+                  <option key={mode} value={mode}>
+                    {INTRADAY_RESOLUTION_LABELS[mode]}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+        )}
 
         <Field label="Fill timing" explainer={FILL_TIMING_EXPLAINERS[value.fill_timing]} full>
           {({ id, describedBy }) => (
@@ -307,8 +302,8 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
 
         <Field
           label="Min holding days"
-          explainer="Signal exits are suppressed until a position is this old. Protective exits ignore it — a stop still fires on day one."
-          suffix="bars"
+          explainer="Signal exits are suppressed until a position has been held this many trading days. Protective exits ignore it — a stop still fires on day one. Days at every bar size: on 5-minute bars, 1 means the next session."
+          suffix="days"
         >
           {({ id, describedBy }) => (
             <Input
@@ -325,8 +320,8 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
 
         <Field
           label="Max holding days"
-          explainer="Forces an exit after this many bars, whatever the signals say. Blank lets a position run to the end of the window."
-          suffix="bars"
+          explainer="Forces an exit once a position has been held this many trading days, whatever the signals say: at the first bar of that session. Days at every bar size, never bars. Blank lets a position run to the end of the window."
+          suffix="days"
         >
           {({ id, describedBy }) => (
             <Input
@@ -344,8 +339,8 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
 
         <Field
           label="Cooldown"
-          explainer="Bars to wait after closing a name before that name may be entered again. Stops one choppy instrument monopolising the book."
-          suffix="bars"
+          explainer="Trading days to wait after closing a name before it may be entered again; 1 means not before the next session. Stops one choppy instrument monopolising the book."
+          suffix="days"
         >
           {({ id, describedBy }) => (
             <Input
