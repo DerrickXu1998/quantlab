@@ -28,10 +28,11 @@ function pct(fraction: number): string {
  * What the collapsed execution settings amount to. A changed setting is never
  * hidden behind a closed disclosure: it is listed first, marked, and counted.
  *
- * `unit` is "days" for daily bars and "bars" intraday, where the engine counts
- * holding periods and cooldowns in bars.
+ * Holding periods and cooldowns are trading days at every bar size (the
+ * engine counts sessions), so they always read in days.
  */
-export function executionSummary(execution: ExecutionConfig, unit: 'days' | 'bars'): SummaryItem[] {
+export function executionSummary(execution: ExecutionConfig): SummaryItem[] {
+  const unit = 'days';
   const d = DEFAULT_EXECUTION;
   const items: SummaryItem[] = [];
   const push = (key: keyof ExecutionConfig, text: string, caution?: string) =>

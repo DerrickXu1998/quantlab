@@ -313,3 +313,67 @@ def test_warm_up_is_counted_in_sessions_of_bars():
     # 48 bars of 5m lookback is one session: two calendar days of padding.
     assert runner.warmup_start_for(date(2024, 3, 5), 48, "5m") == "2024-03-03"
     assert runner.warmup_start_for(date(2024, 3, 5), 48, "1d") == "2023-11-30"  # as before
+
+
+# --- holding periods are days at every bar size ----------------------------------
+
+FOUR_DAYS = ("2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05")
+
+
+def _four_sessions():
+    return series(*(session(day, [100.0 + i for i in range(10)]) for day in FOUR_DAYS))
+
+
+def _both_paths(bars, decisions, config):
+    """Columnar and row-wise must agree on every holding rule."""
+    rows = [Bar(b.date, b.open, b.high, b.low, b.close, b.volume) for b in bars]
+    columnar = simulate(["AAA"], {"AAA": bars}, decisions, config)
+    row_wise = simulate(["AAA"], {"AAA": rows}, decisions, config)
+    assert columnar.trades == row_wise.trades
+    return columnar
+
+
+def test_max_holding_days_counts_trading_days_on_intraday_bars():
+    """2 days held on 5-minute bars is two sessions, not two bars."""
+    buy = Decision(date="2024-01-02T09:35", symbol="AAA", kind="entry", direction="bullish")
+    result = _both_paths(
+        _four_sessions(), [buy], ExecutionConfig(bar_frequency="5m", max_holding_days=2)
+    )
+
+    (trade,) = result.trades
+    assert trade.exit_reason == "max_holding"
+    # Entered on the 2nd, out at the first bar two sessions later.
+    assert trade.exit_date.startswith("2024-01-04")
+
+
+def test_min_holding_days_suppresses_signal_exits_for_whole_sessions():
+    buy = Decision(date="2024-01-02T09:35", symbol="AAA", kind="entry", direction="bullish")
+    same_day = Decision(date="2024-01-02T10:00", symbol="AAA", kind="exit", direction="bearish")
+    next_day = Decision(date="2024-01-03T09:45", symbol="AAA", kind="exit", direction="bearish")
+    result = _both_paths(
+        _four_sessions(),
+        [buy, same_day, next_day],
+        ExecutionConfig(bar_frequency="5m", min_holding_days=1),
+    )
+
+    (trade,) = result.trades
+    assert trade.exit_reason == "signal"
+    assert trade.exit_date.startswith("2024-01-03")
+
+
+def test_a_cooldown_day_blocks_reentry_for_the_rest_of_that_session():
+    decisions = [
+        Decision(date="2024-01-02T09:35", symbol="AAA", kind="entry", direction="bullish"),
+        Decision(date="2024-01-02T09:50", symbol="AAA", kind="exit", direction="bearish"),
+        # Same session as the exit: refused under a one-day cooldown.
+        Decision(date="2024-01-02T10:05", symbol="AAA", kind="entry", direction="bullish"),
+        # The next session: allowed.
+        Decision(date="2024-01-03T09:40", symbol="AAA", kind="entry", direction="bullish"),
+    ]
+    result = _both_paths(
+        _four_sessions(), decisions, ExecutionConfig(bar_frequency="5m", cooldown_days=1)
+    )
+
+    entries = sorted(trade.entry_date for trade in result.trades)
+    assert [e[:10] for e in entries] == ["2024-01-02", "2024-01-03"]
+    assert result.summary.rejected_cooldown == 1

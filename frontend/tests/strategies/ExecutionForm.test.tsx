@@ -44,10 +44,29 @@ describe('ExecutionForm', () => {
     expect(config()).toMatchObject({ intraday_resolution: 'daily', fill_timing: 'next_typical' });
   });
 
-  it('rules out minute accuracy and VWAP on intraday bars', () => {
+  it('hides execution accuracy on intraday bars and rules out VWAP', () => {
     render(<Harness initial={{ ...DEFAULT_EXECUTION, bar_frequency: '5m' }} />);
-    expect(screen.getByLabelText(/execution accuracy/i)).toBeDisabled();
+    // Intraday bars already step through the session: nothing to choose.
+    expect(screen.queryByLabelText(/execution accuracy/i)).not.toBeInTheDocument();
     expect(screen.getByRole('option', { name: /VWAP \(minute bars\)/ })).toBeDisabled();
+  });
+
+  it('offers execution accuracy on daily bars', () => {
+    render(<Harness />);
+    expect(screen.getByLabelText(/execution accuracy/i)).toBeEnabled();
+  });
+
+  it('states holding periods and cooldowns in trading days, never bars', () => {
+    render(<Harness initial={{ ...DEFAULT_EXECUTION, bar_frequency: '5m' }} />);
+    for (const field of [/min holding days/i, /max holding days/i, /cooldown/i]) {
+      // The unit printed beside the input.
+      const unit = screen.getByLabelText(field).parentElement;
+      expect(unit).toHaveTextContent(/^days$/);
+      const help = document.getElementById(
+        screen.getByLabelText(field).getAttribute('aria-describedby') ?? '',
+      );
+      expect(help).toHaveTextContent(/trading days/i);
+    }
   });
 
   it('covers §4 in four named groups rather than one wall of inputs', () => {
