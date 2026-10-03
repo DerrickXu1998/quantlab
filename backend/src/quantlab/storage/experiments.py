@@ -73,13 +73,18 @@ def _fact_coverage(result: Any) -> dict | None:
 
 #: The queue's columns, read with every run after the original 24.
 _QUEUE_COLUMNS = (
-    "estimated_bars, started_at, finished_at, error_category, attempts, cancel_requested"
+    "estimated_bars, started_at, finished_at, error_category, attempts, cancel_requested, "
+    "headline"
 )
 
 
-def _queue_fields(values: tuple, iso) -> dict:
-    estimated_bars, started_at, finished_at, error_category, attempts, cancel = values
+def _queue_fields(values: tuple, iso, parse=lambda value: value) -> dict:
+    estimated_bars, started_at, finished_at, error_category, attempts, cancel, headline = values
     return {
+        # performance.metrics, stored with the performance: the run list's
+        # figures. Null until the run completes (or, for a run from before the
+        # queue, until its performance is first read).
+        "metrics": parse(headline) if headline else None,
         "estimated_bars": estimated_bars,
         "started_at": iso(started_at),
         "finished_at": iso(finished_at),
@@ -87,6 +92,10 @@ def _queue_fields(values: tuple, iso) -> dict:
         "attempts": attempts or 0,
         "cancel_requested": bool(cancel),
     }
+
+
+def _headline(performance: dict | None) -> dict | None:
+    return (performance or {}).get("metrics") or None
 
 
 def _now(offset_seconds: float = 0) -> datetime:
@@ -138,7 +147,7 @@ class SqliteExperimentStore:
             strategy, execution, execution_summary, fact_coverage,
         ) = row[:24]
         return {
-            **_queue_fields(row[24:], lambda value: value),
+            **_queue_fields(row[24:], lambda value: value, json.loads),
             "id": run_id,
             "name": name,
             "model_name": model_name,
@@ -403,7 +412,7 @@ class SqliteExperimentStore:
                 "instruments_full_warmup = ?, model_name = ?, model_version = ?, "
                 "parameters = ?, symbols = ?, dataset = ?, instrument_ids = ?, "
                 "ingest_run_ids = ?, corporate_actions = ?, strategy = ?, execution = ?, "
-                "execution_summary = ?, fact_coverage = ?, performance = ?, "
+                "execution_summary = ?, fact_coverage = ?, performance = ?, headline = ?, "
                 "finished_at = ?, lease_until = NULL "
                 "WHERE id = ? AND status = 'running' AND cancel_requested = 0",
                 (
@@ -425,6 +434,7 @@ class SqliteExperimentStore:
                     _json_or_none(getattr(result, "execution_summary", None)),
                     _json_or_none(_fact_coverage(result)),
                     canonical_json(performance) if performance is not None else None,
+                    _json_or_none(_headline(performance)),
                     _stamp(_now()),
                     result.id,
                 ),
@@ -548,8 +558,8 @@ class SqliteExperimentStore:
     def set_performance(self, run_id: str, performance: dict) -> None:
         with db.connect(self.db_path) as conn:
             conn.execute(
-                "UPDATE experiment_runs SET performance = ? WHERE id = ?",
-                (canonical_json(performance), run_id),
+                "UPDATE experiment_runs SET performance = ?, headline = ? WHERE id = ?",
+                (canonical_json(performance), _json_or_none(_headline(performance)), run_id),
             )
             conn.commit()
 
@@ -900,7 +910,7 @@ class PostgresExperimentStore:
                 "instruments_full_warmup = %s, model_name = %s, model_version = %s, "
                 "parameters = %s, symbols = %s, dataset = %s, instrument_ids = %s, "
                 "ingest_run_ids = %s, corporate_actions = %s, strategy = %s, execution = %s, "
-                "execution_summary = %s, fact_coverage = %s, performance = %s, "
+                "execution_summary = %s, fact_coverage = %s, performance = %s, headline = %s, "
                 "finished_at = now(), lease_until = NULL "
                 "WHERE run_id = %s AND status = 'running' AND NOT cancel_requested",
                 (
@@ -922,6 +932,7 @@ class PostgresExperimentStore:
                     _pg_json(getattr(result, "execution_summary", None)),
                     _pg_json(_fact_coverage(result)),
                     json.dumps(performance) if performance is not None else None,
+                    _pg_json(_headline(performance)),
                     result.id,
                 ),
             ).rowcount
@@ -1030,8 +1041,8 @@ class PostgresExperimentStore:
     def set_performance(self, run_id: str, performance: dict) -> None:
         with self._connect() as conn:
             conn.execute(
-                "UPDATE experiment_runs SET performance = %s WHERE run_id = %s",
-                (json.dumps(performance), run_id),
+                "UPDATE experiment_runs SET performance = %s, headline = %s WHERE run_id = %s",
+                (json.dumps(performance), _pg_json(_headline(performance)), run_id),
             )
             conn.commit()
 

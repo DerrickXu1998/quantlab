@@ -1959,6 +1959,15 @@ components:
         cancel_requested:
           type: boolean
           description: A running run was asked to stop; it stops at the worker's next checkpoint.
+        metrics:
+          oneOf:
+            - $ref: "#/components/schemas/PerformanceMetrics"
+            - type: "null"
+          description: >
+            The run's headline performance, stored when it completed (the same
+            object GET /runs/{run_id}/performance returns as metrics). Null
+            until then, and on runs recorded before the queue until their
+            performance is first read.
         signal_count:
           type: integer
           minimum: 0

@@ -101,6 +101,9 @@ def test_the_worker_completes_a_run_and_stores_its_performance(client, symbols):
     stored = client.app.state.experiments.get_performance(run_id)
     assert stored is not None
     assert client.get(f"/api/v1/runs/{run_id}/performance").json() == stored
+    # The list carries the headline figures without loading the curves.
+    listed = {r["id"]: r for r in client.get("/api/v1/runs").json()["items"]}
+    assert listed[run_id]["metrics"] == stored["metrics"]
 
 
 def test_stored_performance_matches_a_fresh_computation(client, symbols):

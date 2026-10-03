@@ -27,6 +27,8 @@ import { StrategyLabView } from '../quantlab/views/StrategyLabView';
 import { ThemeToggle } from '../theme/ThemeToggle';
 import { DatasetBadge } from '../workbench/DatasetBadge';
 import { cn } from '../lib/utils';
+import { useOptionalRuns } from '../runs/RunsContext';
+import { RunNotices } from '../runs/RunNotices';
 import { MobileHeader, type NavItem } from './MobileMenu';
 import { navigate, replaceRoute, useRoute } from './router';
 import { useIsDesktop } from './useMediaQuery';
@@ -100,6 +102,10 @@ export function AppShell() {
     if (!route.canonical) replaceRoute(route.destination, route.params);
   }, [route]);
 
+  // Backtests run in the background; the Strategies tab says how many are
+  // queued or running, wherever you are.
+  const activeRuns = useOptionalRuns()?.activeCount ?? 0;
+
   return (
     <div className="relative flex h-screen flex-col">
       <GrainOverlay />
@@ -141,7 +147,13 @@ export function AppShell() {
                       // aria-label overrides the element's contents, and without
                       // this the `sim` badge would drop out of the accessible
                       // name that previously included it.
-                      aria-label={item.simulated ? `${item.label} (simulated)` : item.label}
+                      aria-label={
+                        item.simulated
+                          ? `${item.label} (simulated)`
+                          : item.id === 'strategies' && activeRuns > 0
+                            ? `${item.label}, ${activeRuns} backtest${activeRuns === 1 ? '' : 's'} running or queued`
+                            : item.label
+                      }
                       title={item.simulated ?? item.label}
                       onClick={() => navigate(item.id)}
                       className={cn(
@@ -156,6 +168,14 @@ export function AppShell() {
                     >
                       <item.icon size={20} strokeWidth={1.5} aria-hidden="true" />
                       <span className="hidden lg:inline">{item.label}</span>
+                      {item.id === 'strategies' && activeRuns > 0 ? (
+                        <span
+                          data-testid="nav-active-runs"
+                          className="rounded-sm border border-primary/50 px-1 font-mono text-[10px] tabular-nums text-primary"
+                        >
+                          {activeRuns}
+                        </span>
+                      ) : null}
                       {item.simulated ? (
                         <StatusBadge
                           tone="simulated"
@@ -207,6 +227,8 @@ export function AppShell() {
           ) : (
             <ExecutionView instruments={instruments} feedError={error} />
           )}
+
+          <RunNotices />
 
           <footer className="shrink-0">
             <TickerTape />

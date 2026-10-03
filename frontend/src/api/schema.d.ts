@@ -920,6 +920,8 @@ export interface components {
             attempts?: number;
             /** @description A running run was asked to stop; it stops at the worker's next checkpoint. */
             cancel_requested?: boolean;
+            /** @description The run's headline performance, stored when it completed (the same object GET /runs/{run_id}/performance returns as metrics). Null until then, and on runs recorded before the queue until their performance is first read. */
+            metrics?: components["schemas"]["PerformanceMetrics"] | null;
             /** @description Zero is a valid result, not a failure. */
             signal_count: number;
             coverage: components["schemas"]["RunCoverage"];

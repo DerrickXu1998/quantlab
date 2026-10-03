@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { TabBar } from '../../components/ui/tabs';
 import { Building2, Filter, type LucideIcon } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { FillColumn } from '../../components/ui/layout';
@@ -60,36 +61,17 @@ function ModeSwitcher({
   onChange: (mode: ResearchMode) => void;
 }) {
   return (
-    <div role="tablist" aria-label="Research mode" className="flex flex-wrap items-center gap-1">
-      {RESEARCH_MODES.map((id) => {
-        const definition = MODE_DEFINITIONS[id];
-        const Icon = definition.icon;
-        const active = id === mode;
-        return (
-          <button
-            key={id}
-            type="button"
-            role="tab"
-            aria-selected={active}
-            aria-controls={`research-panel-${id}`}
-            id={`research-tab-${id}`}
-            onClick={() => onChange(id)}
-            className={cn(
-              // 44px of target on a phone, the original dense row at `lg`.
-              'inline-flex h-11 items-center gap-2 rounded-sm border px-3 lg:h-auto lg:py-1.5',
-              'font-mono text-[11px] uppercase tracking-[0.12em] transition-colors',
-              'focus-visible:outline-none focus-visible:border-primary',
-              active
-                ? 'border-primary bg-primary text-primary-foreground'
-                : 'border-border bg-card text-muted-foreground hover:border-primary/50 hover:text-foreground',
-            )}
-          >
-            <Icon size={16} strokeWidth={1.5} aria-hidden />
-            {definition.label}
-          </button>
-        );
-      })}
-    </div>
+    <TabBar
+      label="Research mode"
+      idPrefix="research"
+      value={mode}
+      onChange={onChange}
+      items={RESEARCH_MODES.map((id) => ({
+        id,
+        label: MODE_DEFINITIONS[id].label,
+        icon: MODE_DEFINITIONS[id].icon,
+      }))}
+    />
   );
 }
 

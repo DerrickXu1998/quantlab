@@ -34,7 +34,10 @@ ALTER TABLE experiment_runs
     ADD COLUMN IF NOT EXISTS cancel_requested BOOLEAN NOT NULL DEFAULT false,
     -- research.performance's result, stored at completion. Null on runs that
     -- predate the queue; those are computed on first read and stored then.
-    ADD COLUMN IF NOT EXISTS performance      JSONB;
+    ADD COLUMN IF NOT EXISTS performance      JSONB,
+    -- performance.metrics alone (return, Sharpe, drawdown, trades): what the
+    -- run list shows, without reading every run's equity curve to show it.
+    ADD COLUMN IF NOT EXISTS headline         JSONB;
 
 -- The worker's claim query: the oldest queued run. Partial, so it stays tiny
 -- however many finished runs accumulate.

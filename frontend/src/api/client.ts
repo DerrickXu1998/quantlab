@@ -210,6 +210,20 @@ export function deleteRun(runId: string): Promise<void> {
   return send<void>(`/runs/${encodeURIComponent(runId)}`, 'DELETE');
 }
 
+/**
+ * Cancel a queued run now, or ask a running one to stop at the worker's next
+ * checkpoint. The answer is the run afterwards: `cancelled`, or still
+ * `running` with `cancel_requested` until the worker winds it down.
+ */
+export function cancelRun(runId: string): Promise<RunV2> {
+  return send<RunV2>(`/runs/${encodeURIComponent(runId)}/cancel`, 'POST');
+}
+
+/** A run that has not finished yet: the worker owes it a result. */
+export function isActiveRun(run: Pick<Run, 'status'>): boolean {
+  return run.status === 'queued' || run.status === 'running';
+}
+
 // --- Run performance (Quant Lab) -------------------------------------------
 // Derived figures come from the backend, never from the browser: the frontend
 // must not embed analytical computation (Constitution V).

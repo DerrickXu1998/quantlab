@@ -200,6 +200,9 @@ class Run(BaseModel):
     attempts: int = 0
     #: A running run asked to stop; it stops at the worker's next checkpoint.
     cancel_requested: bool = False
+    #: The run's headline performance (performance.metrics), stored when it
+    #: completed. Null until then, and on older runs until first opened.
+    metrics: PerformanceMetrics | None = None
     signal_count: int
     coverage: RunCoverage
     dataset: Dataset
