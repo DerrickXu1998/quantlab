@@ -102,8 +102,9 @@ describe('Runs table', () => {
 
     const queuedRow = within(table).getByTestId('run-row-q1');
     expect(within(queuedRow).getByTestId('run-status')).toHaveTextContent('Queued #2');
-    // Not yet run: an expected duration, never a fake figure.
-    expect(queuedRow).toHaveTextContent('~40 s');
+    // Not yet run: an expected duration, never a fake figure. 2M bars, one
+    // component: read 10 s + signals 36 s + backtest 12 s.
+    expect(queuedRow).toHaveTextContent('~58 s');
 
     const failedRow = within(table).getByTestId('run-row-f1');
     expect(within(failedRow).getByTestId('run-status')).toHaveTextContent('Failed');

@@ -22,6 +22,7 @@ import { BAR_FREQUENCY_LABELS, type BarFrequency } from '../strategies/barFreque
 import { runDisplayName } from './labels';
 import { useRuns } from './RunsContext';
 import {
+  componentCount,
   durationBetween,
   expectedDuration,
   FAILURE_LABELS,
@@ -56,12 +57,13 @@ function submittedAt(iso: string): string {
 }
 
 function durationCell(run: RunV2): string {
+  const components = componentCount(run);
   if (run.status === 'queued') {
-    const expected = expectedDuration(run.estimated_bars);
+    const expected = expectedDuration(run.estimated_bars, components);
     return expected ? `~${expected}` : '—';
   }
   if (run.status === 'running') {
-    const expected = expectedDuration(run.estimated_bars);
+    const expected = expectedDuration(run.estimated_bars, components);
     return expected ? `running · ~${expected}` : 'running';
   }
   return durationBetween(run.started_at, run.finished_at) ?? '—';
