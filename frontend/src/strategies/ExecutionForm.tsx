@@ -21,6 +21,8 @@ import {
   SIZING_VALUE_MEANING,
 } from '../api/types';
 import { Input, Select } from '../components/ui/field';
+import { Term } from '../glossary/Term';
+import type { TermId } from '../glossary/terms';
 
 /**
  * Execution criteria: §4 of the contract, field for field.
@@ -74,12 +76,15 @@ function Section({ title, note, children }: { title: string; note?: string; chil
 
 function Field({
   label,
+  term,
   explainer,
   suffix,
   children,
   full,
 }: {
   label: string;
+  /** The glossary entry the label explains, on hover. */
+  term?: TermId;
   explainer: string;
   suffix?: string;
   children: (ids: { id: string; describedBy: string }) => ReactNode;
@@ -90,7 +95,7 @@ function Field({
   return (
     <div className={`space-y-1 ${full ? 'sm:col-span-2' : ''}`}>
       <label className={MICRO} htmlFor={id}>
-        {label}
+        {term ? <Term id={term}>{label}</Term> : label}
       </label>
       <div className="flex items-center gap-2">
         {children({ id, describedBy })}
@@ -130,6 +135,7 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
       >
         <Field
           label="Initial capital"
+          term="initial_capital"
           explainer="The notional book the run starts with. Every figure the run reports is measured against it."
           suffix="USD"
         >
@@ -146,7 +152,11 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
           )}
         </Field>
 
-        <Field label="Position sizing" explainer={SIZING_EXPLAINERS[value.position_sizing]}>
+        <Field
+          label="Position sizing"
+          term="position_sizing"
+          explainer={SIZING_EXPLAINERS[value.position_sizing]}
+        >
           {({ id, describedBy }) => (
             <Select
               id={id}
@@ -199,6 +209,7 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
 
         <Field
           label="Max positions"
+          term="max_positions"
           explainer="Cap on how many positions may be open at once. Blank means no cap, and a wide signal can then take the whole book."
         >
           {({ id, describedBy }) => (
@@ -217,6 +228,7 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
 
         <Field
           label="Max position size"
+          term="max_position_pct"
           explainer="Ceiling for any single name, as a share of equity. 100% allows one position to be the entire book."
           suffix="%"
         >
@@ -247,6 +259,7 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
         {intradayBars ? null : (
           <Field
             label="Execution accuracy"
+            term="execution_accuracy"
             explainer={INTRADAY_RESOLUTION_EXPLAINERS[value.intraday_resolution]}
             full
           >
@@ -277,7 +290,12 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
           </Field>
         )}
 
-        <Field label="Fill timing" explainer={FILL_TIMING_EXPLAINERS[value.fill_timing]} full>
+        <Field
+          label="Fill timing"
+          term="fill_timing"
+          explainer={FILL_TIMING_EXPLAINERS[value.fill_timing]}
+          full
+        >
           {({ id, describedBy }) => (
             <Select
               id={id}
@@ -302,6 +320,7 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
 
         <Field
           label="Min holding days"
+          term="min_holding_days"
           explainer="Signal exits are suppressed until a position has been held this many trading days. Protective exits ignore it — a stop still fires on day one. Days at every bar size: on 5-minute bars, 1 means the next session."
           suffix="days"
         >
@@ -320,6 +339,7 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
 
         <Field
           label="Max holding days"
+          term="max_holding_days"
           explainer="Forces an exit once a position has been held this many trading days, whatever the signals say: at the first bar of that session. Days at every bar size, never bars. Blank lets a position run to the end of the window."
           suffix="days"
         >
@@ -339,6 +359,7 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
 
         <Field
           label="Cooldown"
+          term="cooldown"
           explainer="Trading days to wait after closing a name before it may be entered again; 1 means not before the next session. Stops one choppy instrument monopolising the book."
           suffix="days"
         >
@@ -357,6 +378,7 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
 
         <Field
           label="Allow shorts"
+          term="allow_shorts"
           explainer="When on, a bearish entry opens a short and a bullish signal covers it. When off, bearish entries are simply ignored."
         >
           {({ id, describedBy }) => (
@@ -380,6 +402,7 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
       >
         <Field
           label="Stop loss"
+          term="stop_loss"
           explainer="Exit once price has moved this far against the entry. Blank means no stop at all."
           suffix="%"
         >
@@ -402,6 +425,7 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
 
         <Field
           label="Take profit"
+          term="take_profit"
           explainer="Exit once price has moved this far in favour of the entry. Caps the winners as well as banking them."
           suffix="%"
         >
@@ -424,6 +448,7 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
 
         <Field
           label="Trailing stop"
+          term="trailing_stop"
           explainer="Exit once price falls this far from the best close seen while the position was held."
           suffix="%"
         >
@@ -446,6 +471,7 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
 
         <Field
           label="ATR stop multiple"
+          term="atr_stop"
           explainer="Places the stop this many ATRs from the entry, so a volatile name gets more room than a quiet one."
           suffix="× ATR"
         >
@@ -467,6 +493,7 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
         {value.atr_stop_multiple !== null ? (
           <Field
             label="ATR period"
+            term="atr"
             explainer="Bars of history the ATR behind that stop is measured over."
             suffix="bars"
           >
@@ -494,6 +521,7 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
       >
         <Field
           label="Commission"
+          term="commission"
           explainer="Basis points of notional, deducted as cash on entry and again on exit."
           suffix="bps"
         >
@@ -512,6 +540,7 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
 
         <Field
           label="Slippage"
+          term="slippage"
           explainer="Basis points the fill moves against you — buys fill higher, sells fill lower — on each side."
           suffix="bps"
         >
@@ -533,6 +562,7 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
         {value.allow_shorts ? (
           <Field
             label="Short borrow"
+            term="borrow_cost"
             explainer="Annual cost of borrowing the stock you short, as basis points of the short's market value, charged each day it is held. Liquid large caps: 25-50 bps; hard to borrow: hundreds. 0 means shorting is free — which it is not."
             suffix="bps / yr"
           >
@@ -558,6 +588,7 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
       >
         <Field
           label="Price adjustment"
+          term="price_adjustment"
           explainer={PRICE_ADJUSTMENT_EXPLAINERS[value.price_adjustment ?? 'split_dividend']}
           full
         >

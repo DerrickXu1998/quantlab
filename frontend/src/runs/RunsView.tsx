@@ -1,4 +1,12 @@
-import { ArrowLeft, Ban, Copy, FlaskConical, Hourglass, RotateCcw, ServerCrash } from 'lucide-react';
+import {
+  ArrowLeft,
+  Ban,
+  Copy,
+  FlaskConical,
+  Hourglass,
+  RotateCcw,
+  ServerCrash,
+} from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { isActiveRun } from '../api/client';
 import type { RunDetailV2, RunV2 } from '../api/types';
@@ -19,6 +27,7 @@ import {
 } from '../components/ui/table';
 import { Panel } from '../quantlab/chrome/Panel';
 import { BAR_FREQUENCY_LABELS, type BarFrequency } from '../strategies/barFrequency';
+import { GlossaryFrequency, Term } from '../glossary/Term';
 import { runDisplayName } from './labels';
 import { Sparkline } from './Sparkline';
 import { useRuns } from './RunsContext';
@@ -134,7 +143,10 @@ function RunsAggregate({ rows }: { rows: RunV2[] }) {
   );
   const cell = 'space-y-1 border-l border-border px-3 first:border-l-0 first:pl-0';
   return (
-    <dl data-testid="runs-aggregate" className="flex flex-wrap gap-y-2 border border-border bg-card px-3 py-2">
+    <dl
+      data-testid="runs-aggregate"
+      className="flex flex-wrap gap-y-2 border border-border bg-card px-3 py-2"
+    >
       <div className={cell}>
         <dt className={MICRO}>With results</dt>
         <dd className="font-mono text-sm tabular-nums">
@@ -145,29 +157,43 @@ function RunsAggregate({ rows }: { rows: RunV2[] }) {
         </dd>
       </div>
       <div className={cell}>
-        <dt className={MICRO}>Beat buy &amp; hold</dt>
+        <dt className={MICRO}>
+          <Term id="benchmark">Beat buy &amp; hold</Term>
+        </dt>
         <dd className="font-mono text-sm tabular-nums">
           {excess.length > 0 ? `${beat} of ${excess.length}` : '—'}
         </dd>
       </div>
       <div className={cell}>
-        <dt className={MICRO}>Median excess vs B&amp;H</dt>
+        <dt className={MICRO}>
+          <Term id="excess_return">Median excess vs B&amp;H</Term>
+        </dt>
         <dd className="text-sm">
           <Numeric value={median(excess)} format="signedPercent" tone="signed" />
         </dd>
       </div>
       <div className={cell}>
-        <dt className={MICRO}>Median Sharpe</dt>
+        <dt className={MICRO}>
+          <Term id="sharpe">Median Sharpe</Term>
+        </dt>
         <dd className="text-sm">
           <Numeric value={sharpe} format="ratio" />
         </dd>
       </div>
       <div className={cell}>
-        <dt className={MICRO}>Best return</dt>
+        <dt className={MICRO}>
+          <Term id="total_return">Best return</Term>
+        </dt>
         <dd className="flex items-baseline gap-2 text-sm">
-          <Numeric value={best?.metrics?.total_return ?? null} format="signedPercent" tone="signed" />
+          <Numeric
+            value={best?.metrics?.total_return ?? null}
+            format="signedPercent"
+            tone="signed"
+          />
           {best ? (
-            <span className="max-w-[12rem] truncate text-xs text-muted-foreground">{runDisplayName(best)}</span>
+            <span className="max-w-[12rem] truncate text-xs text-muted-foreground">
+              {runDisplayName(best)}
+            </span>
           ) : null}
         </dd>
       </div>
@@ -175,7 +201,13 @@ function RunsAggregate({ rows }: { rows: RunV2[] }) {
   );
 }
 
-function RunsTable({ onOpen, onClone }: { onOpen: (runId: string) => void; onClone: (clone: RunClone) => void }) {
+function RunsTable({
+  onOpen,
+  onClone,
+}: {
+  onOpen: (runId: string) => void;
+  onClone: (clone: RunClone) => void;
+}) {
   const { allRuns, runsStatus, reloadRuns, cancelRun, remove, submitStrategyRun } = useRuns();
   const [status, setStatus] = useState<StatusFilter>('all');
   const [bars, setBars] = useState<'any' | BarFrequency>('any');
@@ -273,7 +305,10 @@ function RunsTable({ onOpen, onClone }: { onOpen: (runId: string) => void; onClo
       <div className="flex flex-wrap items-end gap-3">
         <label className="space-y-1">
           <span className={MICRO}>Status</span>
-          <Select value={status} onChange={(event) => setStatus(event.target.value as StatusFilter)}>
+          <Select
+            value={status}
+            onChange={(event) => setStatus(event.target.value as StatusFilter)}
+          >
             <option value="all">All</option>
             <option value="active">Queued or running</option>
             {(Object.keys(STATUS_LABELS) as RunStatus[]).map((value) => (
@@ -285,7 +320,10 @@ function RunsTable({ onOpen, onClone }: { onOpen: (runId: string) => void; onClo
         </label>
         <label className="space-y-1">
           <span className={MICRO}>Bars</span>
-          <Select value={bars} onChange={(event) => setBars(event.target.value as 'any' | BarFrequency)}>
+          <Select
+            value={bars}
+            onChange={(event) => setBars(event.target.value as 'any' | BarFrequency)}
+          >
             <option value="any">Any</option>
             {(Object.keys(BAR_FREQUENCY_LABELS) as BarFrequency[]).map((value) => (
               <option key={value} value={value}>
@@ -295,7 +333,11 @@ function RunsTable({ onOpen, onClone }: { onOpen: (runId: string) => void; onClo
           </Select>
         </label>
         <label className="flex h-9 items-center gap-2 text-xs">
-          <input type="checkbox" checked={savedOnly} onChange={(event) => setSavedOnly(event.target.checked)} />
+          <input
+            type="checkbox"
+            checked={savedOnly}
+            onChange={(event) => setSavedOnly(event.target.checked)}
+          />
           Saved only
         </label>
         <label className="min-w-[10rem] flex-1 space-y-1 sm:max-w-xs">
@@ -395,28 +437,44 @@ function RunsTable({ onOpen, onClone }: { onOpen: (runId: string) => void; onClo
                       aria-label="Select every run shown"
                       checked={chosen.length === rows.length}
                       onChange={(event) =>
-                        setSelected(event.target.checked ? new Set(rows.map((run) => run.id)) : new Set())
+                        setSelected(
+                          event.target.checked ? new Set(rows.map((run) => run.id)) : new Set(),
+                        )
                       }
                     />
                   </TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Name</TableHead>
-                  <TableHead>Bars</TableHead>
-                  <TableHead>Universe</TableHead>
+                  <TableHead>
+                    <Term id="bar_frequency">Bars</Term>
+                  </TableHead>
+                  <TableHead>
+                    <Term id="universe">Universe</Term>
+                  </TableHead>
                   <TableHead>Window</TableHead>
                   <TableHead>Submitted</TableHead>
                   <TableHead>Duration</TableHead>
-                  <TableHead className="text-right">Return</TableHead>
-                  <TableHead className="text-right" title="Equal-weight buy-and-hold of the same tickers over the same window">
-                    Benchmark
+                  <TableHead className="text-right">
+                    <Term id="total_return">Return</Term>
                   </TableHead>
-                  <TableHead className="text-right" title="The strategy's return minus buy-and-hold's">
-                    vs B&amp;H
+                  <TableHead className="text-right">
+                    <Term id="benchmark">Benchmark</Term>
                   </TableHead>
-                  <TableHead>Strategy vs B&amp;H</TableHead>
-                  <TableHead className="text-right">Sharpe</TableHead>
-                  <TableHead className="text-right">Max DD</TableHead>
-                  <TableHead className="text-right">Trades</TableHead>
+                  <TableHead className="text-right">
+                    <Term id="excess_return">vs B&amp;H</Term>
+                  </TableHead>
+                  <TableHead>
+                    <Term id="equity_curve">Strategy vs B&amp;H</Term>
+                  </TableHead>
+                  <TableHead className="text-right">
+                    <Term id="sharpe">Sharpe</Term>
+                  </TableHead>
+                  <TableHead className="text-right">
+                    <Term id="max_drawdown">Max DD</Term>
+                  </TableHead>
+                  <TableHead className="text-right">
+                    <Term id="trades">Trades</Term>
+                  </TableHead>
                   <TableHead>
                     <span className="sr-only">Actions</span>
                   </TableHead>
@@ -469,15 +527,28 @@ function RunRow({
   return (
     <TableRow data-testid={`run-row-${run.id}`} aria-selected={selected}>
       <TableCell>
-        <input type="checkbox" aria-label={`Select ${name}`} checked={selected} onChange={onToggle} />
+        <input
+          type="checkbox"
+          aria-label={`Select ${name}`}
+          checked={selected}
+          onChange={onToggle}
+        />
       </TableCell>
       <TableCell>
-        <StatusBadge tone={STATUS_TONES[run.status]} testId="run-status" title={run.error ?? undefined}>
+        <StatusBadge
+          tone={STATUS_TONES[run.status]}
+          testId="run-status"
+          title={run.error ?? undefined}
+        >
           {statusLabel(run)}
         </StatusBadge>
       </TableCell>
       <TableCell className="max-w-[16rem]">
-        <button type="button" className="block max-w-full truncate text-left hover:text-primary" onClick={onOpen}>
+        <button
+          type="button"
+          className="block max-w-full truncate text-left hover:text-primary"
+          onClick={onOpen}
+        >
           {name}
         </button>
         {preparing ? (
@@ -502,14 +573,19 @@ function RunRow({
       </TableCell>
       <TableCell className="font-mono text-[11px]">{BAR_FREQUENCY_LABELS[barsOf(run)]}</TableCell>
       <TableCell className="max-w-[12rem] truncate text-xs" title={run.symbols.join(', ')}>
-        <span className="tabular-nums">{run.symbols.length}</span> · {run.symbols.slice(0, 3).join(' ')}
+        <span className="tabular-nums">{run.symbols.length}</span> ·{' '}
+        {run.symbols.slice(0, 3).join(' ')}
         {run.symbols.length > 3 ? '…' : ''}
       </TableCell>
       <TableCell className="whitespace-nowrap font-mono text-[11px] tabular-nums">
         {run.start_date} → {run.end_date}
       </TableCell>
-      <TableCell className="whitespace-nowrap font-mono text-[11px] tabular-nums">{submittedAt(run.created_at)}</TableCell>
-      <TableCell className="whitespace-nowrap font-mono text-[11px] tabular-nums">{durationCell(run)}</TableCell>
+      <TableCell className="whitespace-nowrap font-mono text-[11px] tabular-nums">
+        {submittedAt(run.created_at)}
+      </TableCell>
+      <TableCell className="whitespace-nowrap font-mono text-[11px] tabular-nums">
+        {durationCell(run)}
+      </TableCell>
       <TableCell className="text-right">
         <Numeric value={metrics?.total_return ?? null} format="signedPercent" tone="signed" />
       </TableCell>
@@ -542,15 +618,36 @@ function RunRow({
       <TableCell>
         <span className="flex items-center justify-end gap-1">
           {active ? (
-            <Button type="button" size="sm" variant="ghost" aria-label={`Cancel ${name}`} onClick={onCancel} disabled={run.cancel_requested}>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              aria-label={`Cancel ${name}`}
+              onClick={onCancel}
+              disabled={run.cancel_requested}
+            >
               <Ban size={16} strokeWidth={1.5} aria-hidden="true" />
             </Button>
           ) : (
-            <Button type="button" size="sm" variant="ghost" aria-label={`Re-run ${name}`} onClick={onRerun} disabled={!run.strategy}>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              aria-label={`Re-run ${name}`}
+              onClick={onRerun}
+              disabled={!run.strategy}
+            >
               <RotateCcw size={16} strokeWidth={1.5} aria-hidden="true" />
             </Button>
           )}
-          <Button type="button" size="sm" variant="ghost" aria-label={`Clone ${name} to the editor`} onClick={onClone} disabled={!run.strategy}>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            aria-label={`Clone ${name} to the editor`}
+            onClick={onClone}
+            disabled={!run.strategy}
+          >
             <Copy size={16} strokeWidth={1.5} aria-hidden="true" />
           </Button>
         </span>
@@ -652,7 +749,9 @@ function RunDetail({
         </p>
       ) : null}
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        <RunResultsView run={run} />
+        <GlossaryFrequency frequency={barsOf(record)}>
+          <RunResultsView run={run} />
+        </GlossaryFrequency>
       </div>
     </div>
   );
