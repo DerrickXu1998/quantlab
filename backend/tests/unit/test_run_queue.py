@@ -302,3 +302,22 @@ def test_an_old_demo_database_is_widened_without_losing_signals(tmp_path):
     conn.execute("INSERT INTO experiment_runs (id, status) VALUES ('r2', 'queued')")
     assert conn.execute("PRAGMA foreign_keys").fetchone() == (1,)
     assert db.migrate(conn) == []  # idempotent
+
+
+def test_the_in_process_worker_runs_a_submitted_run(db_path, monkeypatch):
+    """The default development setup: the API starts its own worker and a
+    submitted run completes without anyone driving the queue."""
+    import time
+
+    monkeypatch.setenv("QUANTLAB_RUN_MODE", "queue")
+    monkeypatch.setenv("QUANTLAB_RUN_WORKER", "inprocess")
+    with TestClient(create_app(str(db_path))) as live:
+        symbols = [i["symbol"] for i in live.get("/api/v1/instruments").json()["items"][:1]]
+        run_id = live.post("/api/v1/runs", json=_body(symbols)).json()["id"]
+        deadline = time.monotonic() + 20
+        status = "queued"
+        while time.monotonic() < deadline and status in ("queued", "running"):
+            time.sleep(0.2)
+            status = live.get(f"/api/v1/runs/{run_id}").json()["status"]
+        assert status == "completed"
+        assert live.app.state.run_worker is not None

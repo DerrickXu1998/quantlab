@@ -82,7 +82,10 @@ export function StrategyLabView({ instruments }: { instruments: Instrument[] }) 
         id="strategies-panel-configure"
         aria-labelledby={tabId('strategies', 'configure')}
         hidden={tab !== 'configure'}
-        className="flex min-h-0 flex-1 flex-col"
+        // `hidden` alone loses to `flex`: the class sets display and wins. The
+        // builder stays mounted (a draft survives a look at Runs), so it is
+        // hidden by class, not by unmounting.
+        className={tab === 'configure' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}
       >
         <StrategyBuilder
           instruments={universe}

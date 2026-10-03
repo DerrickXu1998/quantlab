@@ -9,6 +9,7 @@ QUANTLAB_DB_PATH (set by the Docker image), default /data/quantlab.db;
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -135,17 +136,23 @@ def create_app(db_path: str | Path | None = None, backend=None) -> FastAPI:
     worker_mode = resolve_run_worker()
     app.state.run_worker = None
     if app.state.run_mode == "queue" and worker_mode == "inprocess":
+        # Wrapped around whatever lifespan the router already has. Lifespan,
+        # not startup/shutdown handlers: FastAPI removed add_event_handler.
+        inner = app.router.lifespan_context
 
-        def start_worker() -> None:
-            app.state.run_worker = jobs.Worker(app.state.backend, app.state.experiments)
-            app.state.run_worker.start()
+        @asynccontextmanager
+        async def lifespan(application: FastAPI):
+            application.state.run_worker = jobs.Worker(
+                application.state.backend, application.state.experiments
+            )
+            application.state.run_worker.start()
+            try:
+                async with inner(application) as state:
+                    yield state
+            finally:
+                application.state.run_worker.stop()
 
-        def stop_worker() -> None:
-            if app.state.run_worker is not None:
-                app.state.run_worker.stop()
-
-        app.add_event_handler("startup", start_worker)
-        app.add_event_handler("shutdown", stop_worker)
+        app.router.lifespan_context = lifespan
 
     @app.middleware("http")
     async def unhandled_errors_as_json(request: Request, call_next):
