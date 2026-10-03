@@ -315,10 +315,7 @@ describe('TabBar', () => {
 
 describe('executionSummary', () => {
   it('lists changed settings first and flags flattering defaults even when unchanged', () => {
-    const items = executionSummary(
-      { ...DEFAULT_EXECUTION, stop_loss_pct: 0.08, max_positions: 10 },
-      'days',
-    );
+    const items = executionSummary({ ...DEFAULT_EXECUTION, stop_loss_pct: 0.08, max_positions: 10 });
     expect(items.filter((item) => item.changed).map((item) => item.text)).toEqual([
       'max 10 positions',
       'stop 8%',
@@ -329,8 +326,8 @@ describe('executionSummary', () => {
     expect(items.find((item) => item.key === 'fill_timing')?.caution).toMatch(/market-on-close/);
   });
 
-  it('counts holding periods in bars on intraday runs', () => {
-    const items = executionSummary({ ...DEFAULT_EXECUTION, cooldown_days: 3 }, 'bars');
-    expect(items.find((item) => item.key === 'cooldown_days')?.text).toBe('cooldown 3 bars');
+  it('reads holding periods in trading days whatever the bars', () => {
+    const items = executionSummary({ ...DEFAULT_EXECUTION, bar_frequency: '5m', cooldown_days: 3 });
+    expect(items.find((item) => item.key === 'cooldown_days')?.text).toBe('cooldown 3 days');
   });
 });
