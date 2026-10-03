@@ -1,4 +1,4 @@
-import { AlertTriangle, Info, TriangleAlert } from 'lucide-react';
+import { AlertTriangle, Ban, Hourglass, Info, TriangleAlert } from 'lucide-react';
 import { useState } from 'react';
 import type { Run } from '../api/client';
 import type { ExecutionConfig, RunDetailV2 } from '../api/types';
@@ -12,6 +12,7 @@ import { ExitBreakdown } from '../quantlab/panels/ExitBreakdown';
 import { StatRow } from '../quantlab/panels/StatRow';
 import { TradeLog } from '../quantlab/panels/TradeLog';
 import { useRuns } from '../runs/RunsContext';
+import { FAILURE_LABELS, pendingDetail } from '../runs/status';
 import { Button } from './ui/button';
 import { EmptyState } from './ui/empty-state';
 import { Input } from './ui/field';
@@ -311,12 +312,35 @@ export function RunResultsView({ run }: { run: RunDetailV2 }) {
 
       {run.strategy ? <StrategyProvenance run={run} /> : null}
 
-      {run.status === 'failed' ? (
+      {run.status === 'queued' || run.status === 'running' ? (
+        <EmptyState
+          testId="run-pending"
+          icon={Hourglass}
+          role="status"
+          title={
+            run.status === 'queued'
+              ? `Queued${run.queue_position ? ` · #${run.queue_position} in line` : ''}`
+              : run.cancel_requested
+                ? 'Stopping…'
+                : 'Running in the background'
+          }
+          detail={pendingDetail(run)}
+        />
+      ) : run.status === 'cancelled' ? (
+        <EmptyState
+          testId="run-cancelled"
+          icon={Ban}
+          title="Cancelled"
+          detail="This backtest was cancelled before it finished, so it recorded no results. Re-run it from Strategies → Runs."
+        />
+      ) : run.status === 'failed' ? (
         <EmptyState
           testId="run-failed"
           icon={AlertTriangle}
           tone="error"
-          title="Backtest failed"
+          title={
+            run.error_category ? `Backtest failed · ${FAILURE_LABELS[run.error_category]}` : 'Backtest failed'
+          }
           detail={run.error ?? 'The run did not complete.'}
         />
       ) : run.signal_count === 0 ? (

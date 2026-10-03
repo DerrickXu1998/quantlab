@@ -44,7 +44,7 @@ export const MAX_INTRADAY_BARS = 6_000_000;
 export const MAX_DAILY_INSTRUMENT_DAYS = 8_400_000;
 
 /** Measured on production data: ~20 s per million intraday bars, end to end. */
-const SECONDS_PER_MILLION_BARS = 20;
+export const SECONDS_PER_MILLION_BARS = 20;
 
 export function isIntraday(frequency: BarFrequency): boolean {
   return frequency !== '1d';

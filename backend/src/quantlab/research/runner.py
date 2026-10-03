@@ -156,6 +156,10 @@ class RunResult:
     execution_summary: dict | None = None
     #: Who the run belongs to. Every read is filtered by it.
     owner_id: str | None = None
+    #: The bars the run read, kept only when asked (keep_bars): the worker
+    #: computes performance from them rather than reading every bar twice.
+    #: Never persisted.
+    bars: dict | None = field(default=None, repr=False, compare=False)
 
 
 def _parse(value: str, field_name: str) -> _date:
@@ -267,6 +271,42 @@ def _offending_field(message: str) -> str:
     return leaf or "strategy"
 
 
+@dataclass(frozen=True)
+class PreparedRun:
+    """A run that passed every check that needs no bars.
+
+    What the API does inside the request before queueing: everything here is
+    cheap, so a run that could never succeed is refused at once rather than
+    queued and failed minutes later.
+    """
+
+    spec: StrategySpec
+    symbols: list[str]
+    start_date: str
+    end_date: str
+    warmup_start: str
+    #: Bars the run will read, from weekdays alone (see estimate_bars).
+    estimated_bars: int
+
+    @property
+    def large(self) -> bool:
+        return self.estimated_bars > LARGE_RUN_BARS
+
+    def request(self) -> dict[str, Any]:
+        """Everything the worker needs to run this later, as plain JSON.
+
+        The resolved spec rather than the request as sent: a run pinned to a
+        saved strategy id would otherwise execute whatever that id holds when
+        the worker reaches it, not what was submitted.
+        """
+        return {
+            "strategy": self.spec.to_dict(),
+            "symbols": list(self.symbols),
+            "start_date": self.start_date,
+            "end_date": self.end_date,
+        }
+
+
 def run_experiment(
     backend,
     *,
@@ -285,6 +325,39 @@ def run_experiment(
     Takes a StorageBackend rather than a connection, so the runner does not
     know whether it is reading the synthetic demo or real ingested history.
     """
+    prepared = prepare_run(
+        backend,
+        symbols=symbols,
+        start_date=start_date,
+        end_date=end_date,
+        strategy=strategy,
+        model_name=model_name,
+        model_version=model_version,
+        overrides=overrides,
+        execution=execution,
+    )
+    if not prepared.large:
+        return execute_prepared(backend, prepared, owner_id=owner_id)
+    with backend.large_run_slot(LARGE_RUN_WAIT_SECONDS) as acquired:
+        if not acquired:
+            raise errors.LargeRunBusyError()
+        return execute_prepared(backend, prepared, owner_id=owner_id)
+
+
+def prepare_run(
+    backend,
+    *,
+    symbols: list[str],
+    start_date: str,
+    end_date: str,
+    strategy: StrategySpec | dict | None = None,
+    model_name: str | None = None,
+    model_version: str | None = None,
+    overrides: dict[str, Any] | None = None,
+    execution: dict[str, Any] | None = None,
+) -> PreparedRun:
+    """Resolve and check a run without reading a bar. Raises the same typed
+    errors run_experiment always has, so the API maps them to the same codes."""
     spec = resolve_spec(
         strategy=strategy,
         model_name=model_name,
@@ -335,17 +408,39 @@ def run_experiment(
     if intraday and estimate > MAX_INTRADAY_BARS:
         raise errors.IntradaySelectionTooLargeError(estimate, MAX_INTRADAY_BARS, frequency)
 
-    def execute() -> RunResult:
-        return _execute(
-            backend, spec, requested_symbols, start_date, end_date, warmup_start, owner_id
-        )
+    return PreparedRun(
+        spec=spec,
+        symbols=requested_symbols,
+        start_date=start_date,
+        end_date=end_date,
+        warmup_start=warmup_start,
+        estimated_bars=estimate,
+    )
 
-    if estimate <= LARGE_RUN_BARS:
-        return execute()
-    with backend.large_run_slot(LARGE_RUN_WAIT_SECONDS) as acquired:
-        if not acquired:
-            raise errors.LargeRunBusyError()
-        return execute()
+
+def execute_prepared(
+    backend,
+    prepared: PreparedRun,
+    *,
+    owner_id: str | None = None,
+    run_id: str | None = None,
+    should_cancel=None,
+    keep_bars: bool = False,
+) -> RunResult:
+    """Run a prepared run. ``run_id`` keeps the id the run was queued under;
+    ``should_cancel`` is asked between stages and raises RunCancelledError."""
+    return _execute(
+        backend,
+        prepared.spec,
+        prepared.symbols,
+        prepared.start_date,
+        prepared.end_date,
+        prepared.warmup_start,
+        owner_id,
+        run_id=run_id,
+        should_cancel=should_cancel,
+        keep_bars=keep_bars,
+    )
 
 
 def _execute(
@@ -356,9 +451,23 @@ def _execute(
     end_date: str,
     warmup_start: str,
     owner_id: str | None,
+    *,
+    run_id: str | None = None,
+    should_cancel=None,
+    keep_bars: bool = False,
 ) -> RunResult:
     """Load, compose, execute and summarise a validated run."""
+
+    def checkpoint() -> None:
+        # Between stages, never inside one: a stage is the unit of work that
+        # can be thrown away cleanly. Cancelling mid-read would leave nothing
+        # half-written anyway, since nothing is written until the end.
+        if should_cancel is not None and should_cancel():
+            raise errors.RunCancelledError()
+
+    checkpoint()
     bars_by_symbol = load_bars(backend, requested_symbols, warmup_start, end_date, spec.execution)
+    checkpoint()
 
     # Only the concepts this strategy's rules declared. Loading the whole
     # vocabulary would be several million rows for a question nobody asked, and
@@ -428,6 +537,7 @@ def _execute(
     )
     # Warm-up bars are inputs, not results: report only the requested window.
     in_window = [d for d in decisions if start_date <= d.date <= end_date]
+    checkpoint()
 
     # Execute over the full loaded series -- an ATR stop set on the first
     # session of the window needs the bars behind it -- but score only from the
@@ -442,6 +552,7 @@ def _execute(
         # an order or a protective level lands; None for a daily run.
         minutes.source_for(backend, spec.execution),
     )
+    checkpoint()
 
     # Surrogate identities, where the store has them. Recorded because the
     # canonical symbol is unique but editable, while instrument_id is the
@@ -474,7 +585,7 @@ def _execute(
     entry_rule = entry_component.resolve(0)
 
     run = RunResult(
-        id=uuid.uuid4().hex,
+        id=run_id or uuid.uuid4().hex,
         # Kept populated for clients that predate strategies: for a composed
         # strategy these carry the first entry component.
         model_name=entry_rule.name,
@@ -504,6 +615,7 @@ def _execute(
             "contradictions": composition.contradictions,
         },
         owner_id=owner_id,
+        bars=bars_by_symbol if keep_bars else None,
     )
 
     logger.info(

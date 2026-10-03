@@ -126,10 +126,32 @@ export interface paths {
         get: operations["listRuns"];
         put?: never;
         /**
-         * Run a model over a dataset selection
-         * @description Validates the requested parameters against the model's declared metadata, resolves a warm-up window of the model's lookback_days before start_date, executes, and returns the completed run. Signals dated outside [start_date, end_date] are computed for warm-up but not reported. Execution is synchronous; see research.md for the scaling boundary this implies.
+         * Submit a run over a dataset selection
+         * @description Validates the request -- parameters against the model's declared metadata, the window against the strategy's lookback, the selection against the size limits, every symbol against the catalog -- and answers 202 with the run queued. A worker then executes it, from a warm-up window of lookback_days before start_date, and records its signals and performance; poll GET /runs/{run_id} for its status. Signals dated outside [start_date, end_date] are computed for warm-up but not reported. A deployment in inline run mode executes inside the request instead and answers 201 with the finished run.
          */
         post: operations["createRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/runs/{run_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel a queued run, or ask a running one to stop
+         * @description A queued run is cancelled at once. A running run is marked cancel_requested and stops at the worker's next checkpoint (between reading bars, composing and simulating), recording nothing.
+         */
+        post: operations["cancelRun"];
         delete?: never;
         options?: never;
         head?: never;
@@ -869,12 +891,37 @@ export interface components {
             start_date: string;
             /** Format: date */
             end_date: string;
-            /** @enum {string} */
-            status: "completed" | "failed";
+            /**
+             * @description queued -> running -> completed | failed | cancelled. POST /runs answers with a queued run and a worker executes it; results (signals, coverage, performance) exist only once completed.
+             * @enum {string}
+             */
+            status: "queued" | "running" | "completed" | "failed" | "cancelled";
             /** @description Present when status is failed. */
             error?: string | null;
-            /** Format: date-time */
+            /**
+             * @description What kind of fix a failed run needs: data (the selection or the store), validation (the strategy or window), limit (too large), or worker (the process running it stopped; try again).
+             * @enum {string|null}
+             */
+            error_category?: "data" | "validation" | "limit" | "worker" | null;
+            /**
+             * Format: date-time
+             * @description When the run was submitted.
+             */
             created_at: string;
+            /** Format: date-time */
+            started_at?: string | null;
+            /** Format: date-time */
+            finished_at?: string | null;
+            /** @description Position among every queued run (they share one worker), 1 = next to start. Null unless queued. */
+            queue_position?: number | null;
+            /** @description Bars the run reads, estimated from weekdays at submission. */
+            estimated_bars?: number | null;
+            /** @description Times a worker has started this run. A run whose worker died is queued again once, then failed. */
+            attempts?: number;
+            /** @description A running run was asked to stop; it stops at the worker's next checkpoint. */
+            cancel_requested?: boolean;
+            /** @description The run's headline performance, stored when it completed (the same object GET /runs/{run_id}/performance returns as metrics). Null until then, and on runs recorded before the queue until their performance is first read. */
+            metrics?: components["schemas"]["PerformanceMetrics"] | null;
             /** @description Zero is a valid result, not a failure. */
             signal_count: number;
             coverage: components["schemas"]["RunCoverage"];
@@ -1605,8 +1652,17 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Run completed (a run producing zero signals is a success) */
+            /** @description Run completed inside the request (inline run mode only; a run producing zero signals is a success) */
             201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Run accepted and queued */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1628,6 +1684,46 @@ export interface operations {
              *     Also returned when the strategy reads fundamentals and not one selected instrument has a filing for any concept it reads -- on the synthetic demo, which has none, or on names that never filed them. Every gate would stay shut, and a recorded run with no signals would hide why.
              */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    cancelRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The run after the request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Unknown run */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The run already finished, failed or was cancelled */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

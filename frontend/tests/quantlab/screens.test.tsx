@@ -93,7 +93,14 @@ async function runStrategy(user: ReturnType<typeof userEvent.setup>, symbol = 'Z
     within(screen.getByTestId('signal-card-sma-crossover')).getByRole('button', { name: 'Entry' }),
   );
   await user.type(screen.getByLabelText(/add tickers/i), `${symbol}{Enter}`);
-  await user.click(screen.getByRole('button', { name: /run backtest/i }));
+  await user.click(screen.getByRole('button', { name: /submit backtest/i }));
+}
+
+/** Submit, then follow the confirmation to the run's page in Runs. */
+async function runAndOpen(user: ReturnType<typeof userEvent.setup>, symbol = 'ZZTRND') {
+  await runStrategy(user, symbol);
+  await user.click(await screen.findByRole('button', { name: /view in runs/i }));
+  return screen.findByTestId('run-results');
 }
 
 describe('App shell', () => {
@@ -452,7 +459,7 @@ describe('Strategies', () => {
 
   it('refuses to run until the strategy has a signal and a universe', async () => {
     const user = await openStrategies();
-    const run = screen.getByRole('button', { name: /run backtest/i });
+    const run = screen.getByRole('button', { name: /submit backtest/i });
     expect(run).toBeDisabled();
 
     await user.click(
@@ -464,7 +471,7 @@ describe('Strategies', () => {
     expect(apiClient.createStrategyRun).not.toHaveBeenCalled();
   });
 
-  it('runs the strategy over its universe and shows the results with the trade log', async () => {
+  it('submits the strategy over its universe, then shows the results with the trade log in Runs', async () => {
     vi.mocked(apiClient.createStrategyRun).mockResolvedValue(makeRun());
     const user = await openStrategies();
 
@@ -474,7 +481,13 @@ describe('Strategies', () => {
     const [body] = vi.mocked(apiClient.createStrategyRun).mock.calls[0];
     expect(body.symbols).toEqual(['ZZTRND']);
     expect(body.strategy?.components).toHaveLength(1);
+    // Submitting does not wait for the result: the builder stays put and says
+    // where the run went.
+    expect(await screen.findByTestId('run-queued')).toBeInTheDocument();
+    expect(screen.getByTestId('strategy-builder')).toBeVisible();
 
+    await user.click(screen.getByRole('button', { name: /view in runs/i }));
+    await waitFor(() => expect(window.location.hash).toBe('#/strategies?tab=runs&run=run-1'));
     const results = await screen.findByTestId('run-results');
     expect(within(results).getByTestId('run-coverage')).toHaveTextContent('1/1');
     const log = await screen.findByTestId('trade-log');
@@ -486,8 +499,7 @@ describe('Strategies', () => {
     vi.mocked(apiClient.saveRun).mockResolvedValue(makeRun({ name: 'base case' }));
     const user = await openStrategies();
 
-    await runStrategy(user);
-    await screen.findByTestId('run-results');
+    await runAndOpen(user);
 
     await user.type(screen.getByLabelText(/experiment name/i), 'base case');
     await user.click(screen.getByRole('button', { name: /save experiment/i }));
@@ -507,17 +519,19 @@ describe('Strategies', () => {
 });
 
 describe('cross-destination run state', () => {
-  it('a strategy run is still on screen after visiting another destination', async () => {
+  it('a submitted run is still listed after visiting another destination', async () => {
     vi.mocked(apiClient.createStrategyRun).mockResolvedValue(makeRun());
     const user = await openStrategies();
 
-    await runStrategy(user);
-    expect(await screen.findByTestId('run-results')).toBeInTheDocument();
+    await runAndOpen(user);
 
     await user.click(screen.getByRole('button', { name: /research/i }));
-    await user.click(screen.getByRole('button', { name: /strategies/i }));
+    await user.click(screen.getByRole('button', { name: /^strategies/i }));
+    await user.click(await screen.findByRole('tab', { name: /^runs/i }));
 
     // No re-running: the same run comes back from the shared store.
+    expect(await screen.findByTestId('runs-table')).toBeInTheDocument();
+    await user.click(within(screen.getByTestId('run-row-run-1')).getAllByRole('button')[0]);
     expect(await screen.findByTestId('run-results')).toBeInTheDocument();
     expect(apiClient.createStrategyRun).toHaveBeenCalledTimes(1);
   });
@@ -526,8 +540,7 @@ describe('cross-destination run state', () => {
     vi.mocked(apiClient.createStrategyRun).mockResolvedValue(makeRun());
     const user = await openStrategies();
 
-    await runStrategy(user);
-    await screen.findByTestId('run-results');
+    await runAndOpen(user);
 
     await user.click(screen.getByRole('button', { name: /watch in overview/i }));
 

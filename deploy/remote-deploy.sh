@@ -164,6 +164,16 @@ for i in $(seq 1 "$HEALTH_TRIES"); do
 	sleep "$HEALTH_INTERVAL"
 done
 
+# The backtest worker has no HTTP port to probe, but a dead one is not a quiet
+# failure to tolerate: every backtest would sit in the queue forever.
+wcid="$(compose ps -q worker 2>/dev/null || true)"
+wstate="$(docker inspect --format '{{.State.Status}}' "$wcid" 2>/dev/null || true)"
+if [ "$wstate" != "running" ]; then
+	compose logs --tail 80 worker >&2 || true
+	fail "the backtest worker is not running (state: ${wstate:-missing}); backtests would never start"
+fi
+printf 'backtest worker is running\n'
+
 # --- 6. prove the edge serves it ---------------------------------------------
 # Container health only says uvicorn answers on its own port. This is the path a
 # browser takes: Caddy -> uvicorn. A broken Caddyfile fails only here.

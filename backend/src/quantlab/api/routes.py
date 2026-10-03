@@ -15,7 +15,7 @@ from dataclasses import asdict
 from datetime import date
 from typing import Annotated, Literal, get_args
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
 from quantlab import auth as auth_lib
@@ -24,7 +24,7 @@ from quantlab.api.security import CurrentUser, owner_scope
 from quantlab.execution import adjustments, minutes
 from quantlab.replay import engine as replay_engine
 from quantlab.research import errors as research_errors
-from quantlab.research import performance, runner, studies
+from quantlab.research import jobs, performance, runner, studies
 from quantlab.signals import registry as signal_registry
 from quantlab.signals import templates as signal_templates
 from quantlab.storage import facts as fact_defs
@@ -595,9 +595,14 @@ def _run_response(
     run: dict,
     dataset: str = "sqlite",
     resolved_rules: dict[str, dict] | None = None,
+    queue: list[str] | None = None,
 ) -> dict:
     run = dict(run)
     run.pop("owner_id", None)  # internal; the caller is the owner by construction
+    # 1 = next to start. Counted across every owner's queued runs, because
+    # they share the worker: what is ahead of you is what you wait for.
+    queued = run["status"] == "queued" and queue is not None and run["id"] in queue
+    run["queue_position"] = queue.index(run["id"]) + 1 if queued else None
     snapshot = run.get("custom_rule")
     if snapshot is not None and resolved_rules is not None:
         # A custom-rule run is reproducible from its snapshot, but
@@ -653,31 +658,48 @@ def _resolve_request_strategy(request: Request, body: schemas.RunRequest, user) 
     return None
 
 
+def run_mode(request: Request) -> str:
+    """``queue`` (the default): POST /runs answers 202 with a queued run and a
+    worker executes it. ``inline``: it runs inside the request, as it did before
+    the queue existed -- kept for tests and for tooling that wants one call."""
+    return getattr(request.app.state, "run_mode", "queue")
+
+
 @router.post(
     "/runs",
     response_model=schemas.Run,
-    status_code=201,
+    status_code=202,
+    responses={201: {"model": schemas.Run, "description": "Completed inline (inline run mode)"}},
     tags=["runs"],
     operation_id="createRun",
     dependencies=[Depends(require_seeded)],
 )
-def create_run(request: Request, body: schemas.RunRequest, user: CurrentUser) -> dict:
+def create_run(
+    request: Request, response: Response, body: schemas.RunRequest, user: CurrentUser
+) -> dict:
     active = backend(request)
     store = experiments(request)
     spec = _resolve_request_strategy(request, body, user)
+    arguments = {
+        "strategy": spec,
+        "model_name": body.model_name,
+        "model_version": body.model_version,
+        "overrides": body.parameters,
+        "execution": body.execution.model_dump() if body.execution else None,
+        "symbols": body.symbols,
+        "start_date": body.start_date,
+        "end_date": body.end_date,
+    }
     try:
-        result = runner.run_experiment(
-            active,
-            strategy=spec,
-            model_name=body.model_name,
-            model_version=body.model_version,
-            overrides=body.parameters,
-            execution=body.execution.model_dump() if body.execution else None,
-            symbols=body.symbols,
-            start_date=body.start_date,
-            end_date=body.end_date,
-            owner_id=user.id,
-        )
+        if run_mode(request) == "queue":
+            # Everything that needs no bars is checked here, so a run that
+            # could never succeed is refused now rather than failed later.
+            prepared = runner.prepare_run(active, **arguments)
+            record = jobs.queued_record(prepared, dataset=active.name, owner_id=user.id)
+            store.enqueue_run(record)
+            stored = store.get_run(record["id"], owner_scope(user))
+            return _run_response(stored, active.name, queue=store.queued_run_ids())
+        result = runner.run_experiment(active, owner_id=user.id, **arguments)
     except research_errors.UnknownModelError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except research_errors.UnknownSymbolError as exc:
@@ -701,7 +723,35 @@ def create_run(request: Request, body: schemas.RunRequest, user: CurrentUser) ->
 
     store.save_run(result)
     stored = store.get_run(result.id, owner_scope(user))
+    response.status_code = 201
     return _run_response(stored, active.name)
+
+
+@router.post(
+    "/runs/{run_id}/cancel",
+    response_model=schemas.Run,
+    tags=["runs"],
+    operation_id="cancelRun",
+    dependencies=[Depends(require_seeded)],
+)
+def cancel_run(request: Request, run_id: str, user: CurrentUser) -> dict:
+    """Cancel a queued run at once, or ask a running one to stop.
+
+    A running run stops at the worker's next checkpoint (between reading,
+    composing and simulating) and records nothing; until then it reads as
+    running with ``cancel_requested``.
+    """
+    store = experiments(request)
+    outcome = store.cancel_run(run_id, owner_scope(user))
+    run = store.get_run(run_id, owner_scope(user))
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
+    if outcome is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"run {run_id} is {run['status']}; only queued or running runs can be cancelled",
+        )
+    return _run_response(run, backend(request).name)
 
 
 @router.get(
@@ -726,10 +776,12 @@ def list_runs(request: Request, user: CurrentUser, saved_only: bool = False) -> 
         if rule_ids
         else {}
     )
+    queue = experiments(request).queued_run_ids()
     return {
         "total": result["total"],
         "items": [
-            _run_response(r, active, resolved_rules=resolved) for r in result["items"]
+            _run_response(r, active, resolved_rules=resolved, queue=queue)
+            for r in result["items"]
         ],
     }
 
@@ -747,7 +799,8 @@ def get_run(request: Request, run_id: str, user: CurrentUser) -> dict:
     if run is None:
         raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
     signals = store.get_run_signals(run_id)
-    return {**_run_response(run, backend(request).name), "signals": signals}
+    queue = store.queued_run_ids() if run["status"] == "queued" else None
+    return {**_run_response(run, backend(request).name, queue=queue), "signals": signals}
 
 @router.get(
     "/runs/{run_id}/performance",
@@ -763,30 +816,24 @@ def get_run_performance(request: Request, run_id: str, user: CurrentUser) -> dic
     run = store.get_run(run_id, owner_scope(user))
     if run is None:
         raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
-    # A failed run has no performance. Zeroed figures would read as a flat
-    # book rather than as an absent result -- the same distinction the UI
+    # Only a completed run has performance. Zeroed figures would read as a
+    # flat book rather than as an absent result -- the same distinction the UI
     # already draws between an empty run and a failed one.
     if run["status"] != "completed":
-        raise HTTPException(status_code=409, detail=f"run {run_id} failed; it has no performance")
+        raise HTTPException(
+            status_code=409, detail=f"run {run_id} is {run['status']}; it has no performance"
+        )
 
-    symbols = list(run["symbols"])
-    # Bars are loaded from the warm-up start, not the window start: a stop set
-    # from an ATR on the first session of the window needs the sessions behind
-    # it. Nothing can happen in the warm-up -- no signal is dated there.
-    signals, bars = replay_engine.load_replay_inputs(backend(request), store, run)
-    config = runner.execution_config_for(run)
-    result = performance.compute_performance(
-        run_id=run_id,
-        signals=signals,
-        bars_by_symbol=bars,
-        symbols=symbols,
-        execution=config,
-        window_start=run["start_date"],
-        window_end=run["end_date"],
-        corporate_actions=replay_engine.load_corporate_actions(backend(request), run, config),
-        minute_source=minutes.source_for(backend(request), config),
-    )
-    return asdict(result)
+    # Stored by the worker when the run completed: opening a run is a read.
+    stored = store.get_performance(run_id)
+    if stored is not None:
+        return stored
+    # A run recorded before performance was stored: computed once, from the
+    # warm-up start (an ATR stop on the window's first session needs the
+    # sessions behind it), and kept so the next open is a read too.
+    computed = jobs.compute_run_performance(backend(request), store, run)
+    store.set_performance(run_id, computed)
+    return computed
 
 
 @router.get(
@@ -810,7 +857,9 @@ def get_run_studies(
     if run is None:
         raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
     if run["status"] != "completed":
-        raise HTTPException(status_code=409, detail=f"run {run_id} failed; it has no studies")
+        raise HTTPException(
+            status_code=409, detail=f"run {run_id} is {run['status']}; it has no studies"
+        )
 
     symbols = list(run["symbols"])
     if symbol is None:
@@ -1020,7 +1069,9 @@ def _replayable_run(request: Request, run_id: str, user) -> dict:
     # A failed run has nothing to replay; as with performance, zeroed output
     # would read as a flat book rather than as an absent result.
     if run["status"] != "completed":
-        raise HTTPException(status_code=409, detail=f"run {run_id} failed; it cannot be replayed")
+        raise HTTPException(
+            status_code=409, detail=f"run {run_id} is {run['status']}; it cannot be replayed"
+        )
     return run
 
 

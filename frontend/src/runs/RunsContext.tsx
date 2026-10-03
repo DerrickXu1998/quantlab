@@ -10,10 +10,12 @@ import {
 } from 'react';
 import {
   ApiError,
+  cancelRun as cancelRunRequest,
   createRun,
   createStrategyRun,
   deleteRun,
   getRun,
+  isActiveRun,
   listModels,
   listRuns,
   saveRun,
@@ -30,6 +32,17 @@ import {
 } from '../api/types';
 
 export type LoadStatus = 'loading' | 'ready' | 'error';
+
+/** How often the run list is refreshed while any run is queued or running. */
+export const ACTIVE_POLL_MS = 3000;
+
+/** A run that just finished, failed or was queued -- shown as a toast. */
+export interface RunNotice {
+  id: string;
+  runId: string;
+  tone: 'good' | 'bad' | 'idle';
+  text: string;
+}
 
 /** A registered model joined to its run history, newest first. */
 export interface ModelEntry {
@@ -62,7 +75,22 @@ export interface RunsContextValue {
   start: (request: RunRequest) => Promise<void>;
   /** The same run machinery, given a composed strategy instead of one model. */
   startStrategyRun: (request: StrategyRunRequest) => Promise<void>;
+  /**
+   * Queue a strategy backtest and return the queued run, without selecting
+   * it: the builder stays where it is so the next variant can be submitted.
+   */
+  submitStrategyRun: (request: StrategyRunRequest) => Promise<RunV2 | null>;
+  /** True while a submission is on its way to the server (seconds, not the run). */
+  submitting: boolean;
+  /** Stops waiting for a submission; the server-side run is unaffected. */
   cancel: () => void;
+  /** Cancel a queued run, or ask a running one to stop. */
+  cancelRun: (runId: string) => Promise<void>;
+  /** Queued + running runs: what the Strategies tab badge counts. */
+  activeCount: number;
+  /** Toasts for runs that finished or failed while the app was open. */
+  notices: RunNotice[];
+  dismissNotice: (id: string) => void;
   select: (runId: string) => Promise<void>;
   clearActiveRun: () => void;
 
@@ -100,8 +128,12 @@ export function RunsProvider({ children }: { children: ReactNode }) {
   const [sessionRuns, setSessionRuns] = useState<Run[]>([]);
   const [activeRun, setActiveRun] = useState<RunDetailV2 | null>(null);
   const [inFlight, setInFlight] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
+  const [notices, setNotices] = useState<RunNotice[]>([]);
   const abortRef = useRef<AbortController | null>(null);
+  // Last seen status per run, to notice queued/running -> finished.
+  const lastStatus = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     let cancelled = false;
@@ -140,6 +172,75 @@ export function RunsProvider({ children }: { children: ReactNode }) {
   }, [runsNonce]);
 
   const reloadRuns = useCallback(() => setRunsNonce((n) => n + 1), []);
+
+  const notify = useCallback((notice: Omit<RunNotice, 'id'>) => {
+    setNotices((current) => [
+      ...current.slice(-3),
+      { ...notice, id: `${notice.runId}:${Date.now()}:${Math.random()}` },
+    ]);
+  }, []);
+  const dismissNotice = useCallback(
+    (id: string) => setNotices((current) => current.filter((notice) => notice.id !== id)),
+    [],
+  );
+
+  const activeIds = useMemo(
+    () =>
+      [...allRuns, ...(activeRun ? [activeRun] : [])]
+        .filter(isActiveRun)
+        .map((run) => run.id)
+        .sort()
+        .join(','),
+    [allRuns, activeRun],
+  );
+
+  // While anything is queued or running, refresh the list on a timer and
+  // announce each run that finishes. Nothing streams: the worker writes a
+  // run's result once, and this picks it up within a few seconds.
+  useEffect(() => {
+    if (!activeIds) return undefined;
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      listRuns()
+        .then((result) => {
+          if (cancelled) return;
+          setAllRuns([...result.items].sort(byRecency));
+        })
+        .catch(() => {
+          // A missed poll is retried on the next tick; the list stays as it was.
+        });
+    }, ACTIVE_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeIds]);
+
+  useEffect(() => {
+    const seen = lastStatus.current;
+    for (const run of allRuns) {
+      const before = seen.get(run.id);
+      seen.set(run.id, run.status);
+      if (!before || before === run.status) continue;
+      if (before !== 'queued' && before !== 'running') continue;
+      const label = run.name ?? run.strategy?.name ?? run.model_name;
+      if (run.status === 'completed') {
+        notify({
+          runId: run.id,
+          tone: 'good',
+          text: `Backtest "${label}" finished — ${run.signal_count} signal${run.signal_count === 1 ? '' : 's'}.`,
+        });
+      } else if (run.status === 'failed') {
+        notify({ runId: run.id, tone: 'bad', text: `Backtest "${label}" failed: ${run.error ?? 'no reason given'}` });
+      }
+      // The run being inspected finished: load its signals and results.
+      if (activeRun?.id === run.id) {
+        getRun(run.id)
+          .then(setActiveRun)
+          .catch(() => undefined);
+      }
+    }
+  }, [allRuns, activeRun?.id, notify]);
 
   const select = useCallback(async (runId: string) => {
     try {
@@ -182,6 +283,36 @@ export function RunsProvider({ children }: { children: ReactNode }) {
     [runWith],
   );
 
+  const submitStrategyRun = useCallback(
+    async (request: StrategyRunRequest): Promise<RunV2 | null> => {
+      const controller = new AbortController();
+      abortRef.current = controller;
+      setSubmitting(true);
+      setRunError(null);
+      try {
+        const run = await createStrategyRun(request, controller.signal);
+        lastStatus.current.set(run.id, run.status);
+        setAllRuns((current) => [run, ...current.filter((existing) => existing.id !== run.id)]);
+        return run;
+      } catch (caught) {
+        if (caught instanceof DOMException && caught.name === 'AbortError') return null;
+        setRunError(caught instanceof ApiError ? caught.message : 'the run could not be submitted');
+        return null;
+      } finally {
+        abortRef.current = null;
+        setSubmitting(false);
+      }
+    },
+    [],
+  );
+
+  const cancelRun = useCallback(async (runId: string) => {
+    const run = await cancelRunRequest(runId);
+    lastStatus.current.set(run.id, run.status);
+    setAllRuns((current) => current.map((existing) => (existing.id === runId ? run : existing)));
+    setActiveRun((current) => (current?.id === runId ? { ...current, ...run } : current));
+  }, []);
+
   // Aborts the client's wait. The server finishes the computation it started —
   // at this data scale that costs milliseconds, and the UI must not claim
   // otherwise.
@@ -189,6 +320,7 @@ export function RunsProvider({ children }: { children: ReactNode }) {
     abortRef.current?.abort();
     abortRef.current = null;
     setInFlight(false);
+    setSubmitting(false);
   }, []);
 
   const clearActiveRun = useCallback(() => setActiveRun(null), []);
@@ -223,6 +355,8 @@ export function RunsProvider({ children }: { children: ReactNode }) {
     [allRuns],
   );
 
+  const activeCount = useMemo(() => allRuns.filter(isActiveRun).length, [allRuns]);
+
   const value: RunsContextValue = {
     models,
     catalog,
@@ -239,7 +373,13 @@ export function RunsProvider({ children }: { children: ReactNode }) {
     runError,
     start,
     startStrategyRun,
+    submitStrategyRun,
+    submitting,
     cancel,
+    cancelRun,
+    activeCount,
+    notices,
+    dismissNotice,
     select,
     clearActiveRun,
     save,

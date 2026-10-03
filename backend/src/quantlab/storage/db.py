@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -77,7 +78,8 @@ CREATE TABLE IF NOT EXISTS experiment_runs (
     symbols                  TEXT NOT NULL,
     start_date               TEXT NOT NULL,
     end_date                 TEXT NOT NULL,
-    status                   TEXT NOT NULL CHECK (status IN ('completed', 'failed')),
+    status                   TEXT NOT NULL CHECK (status IN (
+                                 'queued', 'running', 'completed', 'failed', 'cancelled')),
     error                    TEXT,
     created_at               TEXT NOT NULL,
     signal_count             INTEGER NOT NULL CHECK (signal_count >= 0),
@@ -203,7 +205,24 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # Whether a stored signal opens, closes, or (for a single-model run) does
     # both. Defaulted so existing rows keep their meaning exactly.
     ("experiment_signals", "kind", "TEXT NOT NULL DEFAULT 'both'"),
+    # The run queue (see _RUN_STATUSES and the Postgres migration 008): what
+    # the worker runs, when, whose lease it is, and the stored performance.
+    ("experiment_runs", "request", "TEXT"),
+    ("experiment_runs", "estimated_bars", "INTEGER"),
+    ("experiment_runs", "started_at", "TEXT"),
+    ("experiment_runs", "finished_at", "TEXT"),
+    ("experiment_runs", "error_category", "TEXT"),
+    ("experiment_runs", "attempts", "INTEGER NOT NULL DEFAULT 0"),
+    ("experiment_runs", "worker", "TEXT"),
+    ("experiment_runs", "lease_until", "TEXT"),
+    ("experiment_runs", "cancel_requested", "INTEGER NOT NULL DEFAULT 0"),
+    ("experiment_runs", "performance", "TEXT"),
+    ("experiment_runs", "headline", "TEXT"),
 )
+
+#: Every status a run can have. Older files constrain ``status`` to the two
+#: final ones; _widen_run_statuses rebuilds that table once.
+_RUN_STATUSES = ("queued", "running", "completed", "failed", "cancelled")
 
 # Fixed table + ordering for the deterministic dump hash.
 #
@@ -289,6 +308,8 @@ def migrate(conn: sqlite3.Connection) -> list[str]:
     which matters because a rollback must not require a restore.
     """
     applied: list[str] = []
+    if _widen_run_statuses(conn):
+        applied.append("experiment_runs.status")
     for table, column, definition in _ADDED_COLUMNS:
         if not _table_exists(conn, table):
             continue
@@ -297,6 +318,62 @@ def migrate(conn: sqlite3.Connection) -> list[str]:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
         applied.append(f"{table}.{column}")
     return applied
+
+
+def _widen_run_statuses(conn: sqlite3.Connection) -> bool:
+    """Let ``experiment_runs.status`` hold the queue's states. True if changed.
+
+    SQLite cannot alter a CHECK constraint, so the table is rebuilt from its
+    own recorded DDL with only that clause replaced -- every column added since
+    (owner_id, strategy, ...) comes along unchanged, in order.
+
+    Foreign keys are switched off for the swap: with them on, dropping the old
+    table would cascade-delete every run's signals. They are checked again
+    before committing, so a broken reference still fails the migration.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'experiment_runs'"
+    ).fetchone()
+    if row is None or "'queued'" in row[0]:
+        return False
+    old_check = re.search(r"CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)", row[0])
+    if old_check is None:
+        raise RuntimeError("experiment_runs has no recognisable status CHECK to widen")
+    statuses = ", ".join(f"'{status}'" for status in _RUN_STATUSES)
+    ddl = (
+        row[0][: old_check.start()]
+        + f"CHECK (status IN ({statuses}))"
+        + row[0][old_check.end():]
+    )
+    ddl = re.sub(r"^CREATE TABLE\s+(IF NOT EXISTS\s+)?\"?experiment_runs\"?",
+                 "CREATE TABLE experiment_runs_widened", ddl, count=1)
+    columns = ", ".join(_columns_in_order(conn, "experiment_runs"))
+
+    conn.commit()  # PRAGMA foreign_keys is a no-op inside a transaction
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN")
+        conn.execute(ddl)
+        conn.execute(
+            f"INSERT INTO experiment_runs_widened ({columns}) "
+            f"SELECT {columns} FROM experiment_runs"
+        )
+        conn.execute("DROP TABLE experiment_runs")
+        conn.execute("ALTER TABLE experiment_runs_widened RENAME TO experiment_runs")
+        broken = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if broken:
+            raise RuntimeError(f"widening experiment_runs broke references: {broken[:3]}")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    return True
+
+
+def _columns_in_order(conn: sqlite3.Connection, table: str) -> list[str]:
+    return [row[1] for row in conn.execute(f"PRAGMA table_info({table})")]
 
 
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:

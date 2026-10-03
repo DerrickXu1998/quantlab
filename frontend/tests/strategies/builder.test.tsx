@@ -65,6 +65,11 @@ async function openBuilder() {
   return person;
 }
 
+/** The library shows one list at a time: Mine, Templates or Signals. */
+async function showList(person: ReturnType<typeof userEvent.setup>, list: 'Mine' | 'Templates' | 'Signals') {
+  await person.click(screen.getByRole('tab', { name: new RegExp(`^${list}`) }));
+}
+
 function addFrom(name: string, role: 'Entry' | 'Exit' | 'Filter') {
   const card = screen.getByTestId(`signal-card-${name}`);
   return within(card).getByRole('button', { name: role });
@@ -257,7 +262,8 @@ describe('StrategyBuilder', () => {
   });
 
   it('offers the templates the server serves, not a list of its own', async () => {
-    await openBuilder();
+    const person = await openBuilder();
+    await showList(person, 'Templates');
 
     const list = await screen.findByTestId('template-list');
     expect(apiClient.listStrategyTemplates).toHaveBeenCalledTimes(1);
@@ -287,7 +293,8 @@ describe('StrategyBuilder', () => {
         },
       ],
     });
-    await openBuilder();
+    const person = await openBuilder();
+    await showList(person, 'Templates');
 
     const starters = await screen.findByTestId('template-shelf-starter');
     const book = screen.getByTestId('template-shelf-ai-quant-book');
@@ -300,6 +307,7 @@ describe('StrategyBuilder', () => {
 
   it('loads a template into the builder as a working, unsaved strategy', async () => {
     const person = await openBuilder();
+    await showList(person, 'Templates');
     await screen.findByTestId('template-list');
 
     await person.click(
@@ -320,6 +328,7 @@ describe('StrategyBuilder', () => {
   it('keeps a template honest against a registry that lacks its rules', async () => {
     vi.mocked(apiClient.listModels).mockResolvedValue({ total: 1, items: [rsiThreshold] });
     const person = await openBuilder();
+    await showList(person, 'Templates');
     await screen.findByTestId('template-list');
 
     // Donchian and volume-spike are not registered in this deployment.
@@ -337,7 +346,8 @@ describe('StrategyBuilder', () => {
     vi.mocked(apiClient.listStrategyTemplates).mockRejectedValue(
       new apiClient.ApiError(0, 'Backend unreachable'),
     );
-    await openBuilder();
+    const person = await openBuilder();
+    await showList(person, 'Templates');
 
     const error = await screen.findByTestId('templates-error');
     expect(error).toHaveAttribute('role', 'alert');
@@ -373,10 +383,10 @@ describe('StrategyBuilder', () => {
     expect(spec.entry_logic).toBe('all');
   });
 
-  it('will not run a strategy the engine would refuse, and says why beside Run', async () => {
+  it('will not run a strategy the engine would refuse, and says why beside Submit', async () => {
     const person = await openBuilder();
     await person.type(screen.getByLabelText(/add tickers/i), 'ZZTRND{Enter}');
-    const run = screen.getByRole('button', { name: /run backtest/i });
+    const run = screen.getByRole('button', { name: /submit backtest/i });
 
     // Nothing added yet: disabled with the reason, not enabled into a 422.
     expect(run).toBeDisabled();
@@ -407,7 +417,7 @@ describe('StrategyBuilder', () => {
     await person.selectOptions(screen.getByLabelText('Bars'), '5m');
     // 65 sessions x 78 bars, said before anything is sent.
     expect(screen.getByTestId('strategy-run-size')).toHaveTextContent('5,070 bars');
-    await person.click(screen.getByRole('button', { name: /run backtest/i }));
+    await person.click(screen.getByRole('button', { name: /submit backtest/i }));
 
     await waitFor(() => expect(apiClient.createStrategyRun).toHaveBeenCalledTimes(1));
     const body = vi.mocked(apiClient.createStrategyRun).mock.calls[0][0];
@@ -427,7 +437,7 @@ describe('StrategyBuilder', () => {
     await person.selectOptions(screen.getByLabelText('Bars'), '15m');
 
     expect(screen.getByTestId('strategy-size-blocker')).toHaveTextContent('2016-12-12');
-    expect(screen.getByRole('button', { name: /run backtest/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /submit backtest/i })).toBeDisabled();
   });
 
   it('runs the strategy that is on screen, not the last one that was saved', async () => {
@@ -437,10 +447,10 @@ describe('StrategyBuilder', () => {
     const person = await openBuilder();
 
     await person.click(addFrom('rsi-threshold', 'Entry'));
-    expect(screen.getByRole('button', { name: /run backtest/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /submit backtest/i })).toBeDisabled();
 
     await person.type(screen.getByLabelText(/add tickers/i), 'ZZTRND{Enter}');
-    await person.click(screen.getByRole('button', { name: /run backtest/i }));
+    await person.click(screen.getByRole('button', { name: /submit backtest/i }));
 
     await waitFor(() => expect(apiClient.createStrategyRun).toHaveBeenCalledTimes(1));
     const body = vi.mocked(apiClient.createStrategyRun).mock.calls[0][0];
@@ -470,7 +480,10 @@ describe('StrategyBuilder', () => {
   });
 
   it('distinguishes an empty library from one it could not read', async () => {
-    await openBuilder();
+    const person = await openBuilder();
+    // With nothing saved, the library opens on the signals to build from.
+    expect(screen.getByRole('tab', { name: /^Signals/ })).toHaveAttribute('aria-selected', 'true');
+    await showList(person, 'Mine');
     expect(screen.getByTestId('library-empty')).toHaveTextContent(/nothing saved yet/i);
   });
 
@@ -478,7 +491,8 @@ describe('StrategyBuilder', () => {
     vi.mocked(apiClient.listStrategies).mockRejectedValue(
       new apiClient.ApiError(0, 'Backend unreachable'),
     );
-    await openBuilder();
+    const person = await openBuilder();
+    await showList(person, 'Mine');
 
     const error = await screen.findByTestId('library-error');
     expect(error).toHaveAttribute('role', 'alert');

@@ -126,3 +126,14 @@ class NoFactCoverageError(ExperimentError):
             f"{', '.join(concepts)} on or before {end_date}, so every fundamental "
             "gate in this strategy would stay shut"
         )
+
+
+class RunCancelledError(ExperimentError):
+    """The run's owner cancelled it while it was running.
+
+    Raised by the runner between stages, never mid-stage, so nothing partial is
+    left behind: a run records its results only once it has all of them.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("cancelled")

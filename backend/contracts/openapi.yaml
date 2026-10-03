@@ -219,14 +219,17 @@ paths:
     post:
       tags: [runs]
       operationId: createRun
-      summary: Run a model over a dataset selection
+      summary: Submit a run over a dataset selection
       description: >
-        Validates the requested parameters against the model's declared
-        metadata, resolves a warm-up window of the model's lookback_days before
-        start_date, executes, and returns the completed run. Signals dated
-        outside [start_date, end_date] are computed for warm-up but not
-        reported. Execution is synchronous; see research.md for the scaling
-        boundary this implies.
+        Validates the request -- parameters against the model's declared
+        metadata, the window against the strategy's lookback, the selection
+        against the size limits, every symbol against the catalog -- and
+        answers 202 with the run queued. A worker then executes it, from a
+        warm-up window of lookback_days before start_date, and records its
+        signals and performance; poll GET /runs/{run_id} for its status.
+        Signals dated outside [start_date, end_date] are computed for warm-up
+        but not reported. A deployment in inline run mode executes inside the
+        request instead and answers 201 with the finished run.
       requestBody:
         required: true
         content:
@@ -234,8 +237,16 @@ paths:
             schema:
               $ref: "#/components/schemas/RunRequest"
       responses:
+        "202":
+          description: Run accepted and queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
         "201":
-          description: Run completed (a run producing zero signals is a success)
+          description: >
+            Run completed inside the request (inline run mode only; a run
+            producing zero signals is a success)
           content:
             application/json:
               schema:
@@ -280,6 +291,41 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RunList"
+
+  /runs/{run_id}/cancel:
+    parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [runs]
+      operationId: cancelRun
+      summary: Cancel a queued run, or ask a running one to stop
+      description: >
+        A queued run is cancelled at once. A running run is marked
+        cancel_requested and stops at the worker's next checkpoint (between
+        reading bars, composing and simulating), recording nothing.
+      responses:
+        "200":
+          description: The run after the request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "404":
+          description: Unknown run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: The run already finished, failed or was cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /runs/{run_id}:
     parameters:
@@ -1864,14 +1910,64 @@ components:
           format: date
         status:
           type: string
-          enum: [completed, failed]
+          enum: [queued, running, completed, failed, cancelled]
+          description: >
+            queued -> running -> completed | failed | cancelled. POST /runs
+            answers with a queued run and a worker executes it; results
+            (signals, coverage, performance) exist only once completed.
         error:
           type: string
           nullable: true
           description: Present when status is failed.
+        error_category:
+          type: string
+          nullable: true
+          enum: [data, validation, limit, worker, null]
+          description: >
+            What kind of fix a failed run needs: data (the selection or the
+            store), validation (the strategy or window), limit (too large), or
+            worker (the process running it stopped; try again).
         created_at:
           type: string
           format: date-time
+          description: When the run was submitted.
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+        queue_position:
+          type: integer
+          nullable: true
+          minimum: 1
+          description: >
+            Position among every queued run (they share one worker), 1 = next
+            to start. Null unless queued.
+        estimated_bars:
+          type: integer
+          nullable: true
+          description: Bars the run reads, estimated from weekdays at submission.
+        attempts:
+          type: integer
+          minimum: 0
+          description: >
+            Times a worker has started this run. A run whose worker died is
+            queued again once, then failed.
+        cancel_requested:
+          type: boolean
+          description: A running run was asked to stop; it stops at the worker's next checkpoint.
+        metrics:
+          oneOf:
+            - $ref: "#/components/schemas/PerformanceMetrics"
+            - type: "null"
+          description: >
+            The run's headline performance, stored when it completed (the same
+            object GET /runs/{run_id}/performance returns as metrics). Null
+            until then, and on runs recorded before the queue until their
+            performance is first read.
         signal_count:
           type: integer
           minimum: 0

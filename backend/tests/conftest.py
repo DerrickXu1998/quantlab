@@ -25,6 +25,12 @@ os.environ.setdefault("QUANTLAB_PBKDF2_ITERATIONS", "1000")
 # client and its runs in a module fixture would otherwise see the default
 # (enforced) mode and answer 401 before the fixture could take effect.
 os.environ.setdefault("QUANTLAB_AUTH_REQUIRED", "false")
+# **Runs execute inside the request here.** Every suite written before the run
+# queue posts a run and reads its result in the next line; inline mode keeps
+# that contract, and test_run_queue exercises the queue itself (with no
+# background worker, so nothing runs behind a test's back).
+os.environ.setdefault("QUANTLAB_RUN_MODE", "inline")
+os.environ.setdefault("QUANTLAB_RUN_WORKER", "off")
 
 
 @pytest.fixture(autouse=True)

@@ -181,9 +181,28 @@ class Run(BaseModel):
     symbols: list[str]
     start_date: str
     end_date: str
-    status: Literal["completed", "failed"]
+    #: queued -> running -> completed | failed | cancelled. Results (signals,
+    #: coverage, performance) exist only on a completed run.
+    status: Literal["queued", "running", "completed", "failed", "cancelled"]
     error: str | None = None
+    #: What kind of fix a failed run needs: data (the selection or the store),
+    #: validation (the strategy or window), limit (too large), worker (the
+    #: process running it stopped; try again).
+    error_category: Literal["data", "validation", "limit", "worker"] | None = None
+    #: When it was submitted. Kept as created_at for clients that predate the queue.
     created_at: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    #: Position among every queued run, 1 = next to start. Null unless queued.
+    queue_position: int | None = None
+    #: Bars the run reads, estimated from weekdays at submission.
+    estimated_bars: int | None = None
+    attempts: int = 0
+    #: A running run asked to stop; it stops at the worker's next checkpoint.
+    cancel_requested: bool = False
+    #: The run's headline performance (performance.metrics), stored when it
+    #: completed. Null until then, and on older runs until first opened.
+    metrics: PerformanceMetrics | None = None
     signal_count: int
     coverage: RunCoverage
     dataset: Dataset
