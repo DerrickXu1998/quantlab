@@ -254,6 +254,8 @@ services:
       # errors. That failure is invisible from the server side, so it is worth
       # refusing to start over.
       QUANTLAB_CORS_ORIGINS: ${QUANTLAB_CORS_ORIGINS:?}
+      # Backtests are queued here and executed by the `worker` service.
+      QUANTLAB_RUN_WORKER: external
     volumes:
       - quantlab-data:/data
     expose:
@@ -286,12 +288,52 @@ services:
     deploy:
       resources:
         limits:
-          # Backtests run in-request: one large run at a time server-wide
-          # (research/runner.py, sized from measurements there) plus small
-          # runs and two ~60 MB workers. Was 1024M. Always-on limits now total
-          # 5.8 GB of the VM's 7.9 GB (clickhouse 2.5 + postgres 1 + backend 2
-          # + caddy 0.1); the one-off ingest job adds 2 if run at the same time.
-          memory: 2048M
+          # Backtests no longer run here (see `worker`); the API serves reads,
+          # stored results and, once per pre-queue run, a performance
+          # computation. Was 2048M when runs executed in-request.
+          memory: 1024M
+    logging: *logging
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # Backtest worker. POST /runs only checks and queues a run; this executes
+  # it (research/jobs.py), stores its results and performance, and the UI
+  # picks them up. Its own container so a run that exhausts memory is killed
+  # here and never takes the API down with it. A run interrupted by a deploy
+  # or a kill is queued again once, then failed with a readable reason.
+  # --------------------------------------------------------------------------
+  worker:
+    image: ${QUANTLAB_BACKEND_IMAGE:?set QUANTLAB_BACKEND_IMAGE in .env}
+    command: python -m quantlab.worker
+    environment:
+      QUANTLAB_DB_URL: ${QUANTLAB_DB_URL}
+      QUANTLAB_CH_URL: ${QUANTLAB_CH_URL}
+      PGPASSWORD: ${QUANTLAB_PG_PASSWORD}
+      QUANTLAB_CH_PASSWORD: ${QUANTLAB_CH_PASSWORD}
+      QUANTLAB_DB: /data/quantlab.db
+      QUANTLAB_DB_PATH: /data/quantlab.db
+    volumes:
+      - quantlab-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      data-perms:
+        condition: service_completed_successfully
+    # SIGTERM stops claiming; the run in hand is re-queued by its lapsed lease.
+    stop_grace_period: 10s
+    deploy:
+      resources:
+        limits:
+          # One large run at a time (~650 MB at the 6M-bar intraday ceiling,
+          # research/runner.py) beside one quick-lane run, plus performance.
+          # Always-on limits total 6.1 GB of the VM's 7.9 GB (clickhouse 2.5 +
+          # postgres 1 + backend 1 + worker 1.5 + caddy 0.1); the one-off ingest
+          # job adds 2 if run at the same time.
+          memory: 1536M
     logging: *logging
     restart: unless-stopped
 

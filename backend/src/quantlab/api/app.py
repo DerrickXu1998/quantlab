@@ -20,6 +20,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from quantlab import auth
 from quantlab.api import routes
 from quantlab.logging import get_logger
+from quantlab.research import jobs
 from quantlab.storage import backends, custom_rules, experiments, strategies
 
 DEFAULT_DB_PATH = "/data/quantlab.db"
@@ -68,6 +69,26 @@ def resolve_api_docs_enabled() -> bool:
     return not auth.auth_required()
 
 
+#: ``queue`` (default) or ``inline``; see routes.run_mode.
+RUN_MODE_ENV = "QUANTLAB_RUN_MODE"
+#: ``inprocess`` (default), ``external`` or ``off``; see create_app.
+RUN_WORKER_ENV = "QUANTLAB_RUN_WORKER"
+
+
+def resolve_run_mode() -> str:
+    raw = os.environ.get(RUN_MODE_ENV, "queue").strip().lower()
+    if raw not in ("queue", "inline"):
+        raise ValueError(f"{RUN_MODE_ENV} must be queue or inline, not {raw!r}")
+    return raw
+
+
+def resolve_run_worker() -> str:
+    raw = os.environ.get(RUN_WORKER_ENV, "inprocess").strip().lower()
+    if raw not in ("inprocess", "external", "off"):
+        raise ValueError(f"{RUN_WORKER_ENV} must be inprocess, external or off, not {raw!r}")
+    return raw
+
+
 def create_app(db_path: str | Path | None = None, backend=None) -> FastAPI:
     """Build the API app.
 
@@ -104,6 +125,27 @@ def create_app(db_path: str | Path | None = None, backend=None) -> FastAPI:
     # Template-based custom rules (feature 008): the same seam as experiments.
     app.state.custom_rules = custom_rules.select_custom_rule_store(app.state.db_path, wh=wh)
     app.include_router(routes.router, prefix="/api/v1")
+
+    # Backtests run in the background (research.jobs). Who runs them:
+    # `external` -- the worker container (production), so a run that exhausts
+    # memory takes down the worker, never the API; `inprocess` -- a worker
+    # thread pair inside this process (development, the demo); `off` -- nobody,
+    # for tests that drive the queue themselves.
+    app.state.run_mode = resolve_run_mode()
+    worker_mode = resolve_run_worker()
+    app.state.run_worker = None
+    if app.state.run_mode == "queue" and worker_mode == "inprocess":
+
+        def start_worker() -> None:
+            app.state.run_worker = jobs.Worker(app.state.backend, app.state.experiments)
+            app.state.run_worker.start()
+
+        def stop_worker() -> None:
+            if app.state.run_worker is not None:
+                app.state.run_worker.stop()
+
+        app.add_event_handler("startup", start_worker)
+        app.add_event_handler("shutdown", stop_worker)
 
     @app.middleware("http")
     async def unhandled_errors_as_json(request: Request, call_next):
