@@ -718,6 +718,7 @@ def create_run(
         # than recorded as a run that found nothing.
         research_errors.DatasetUnsupportedError,
         research_errors.NoFactCoverageError,
+        research_errors.MissingSeriesError,
     ) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

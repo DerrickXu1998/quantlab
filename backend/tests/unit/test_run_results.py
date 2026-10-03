@@ -174,3 +174,33 @@ def test_run_summary_compares_the_strategy_with_buy_and_hold():
     assert len(summary["equity_spark"]) == 48
     assert summary["equity_spark"][-1] == pytest.approx(2.99)
     assert run_summary(None) is None
+
+
+def test_a_strategy_reading_unloaded_macro_series_is_refused_at_submit(client, symbols):
+    """S6's regime gate reads VIX.FRED and HYSPREAD.FRED. Where they are not
+    loaded, Submit says so at once, with the fix, and queues nothing."""
+    before = client.get("/api/v1/runs").json()["total"]
+    body = {
+        "strategy": {
+            "name": "S6 regime gate",
+            "components": [
+                {"rule_name": "sma-crossover", "role": "entry", "parameters": {}},
+                {
+                    "rule_name": "macro-risk-off",
+                    "role": "filter",
+                    "parameters": {"use_hy_spread": True},
+                },
+            ],
+        },
+        "symbols": symbols,
+        "start_date": "2024-01-01",
+        "end_date": "2024-12-31",
+    }
+
+    response = client.post("/api/v1/runs", json=body)
+
+    assert response.status_code == 422, response.json()
+    detail = response.json()["detail"]
+    assert "VIX.FRED" in detail
+    assert "ingest-macro --provider fred" in detail
+    assert client.get("/api/v1/runs").json()["total"] == before
