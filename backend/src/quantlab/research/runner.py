@@ -307,6 +307,17 @@ class PreparedRun:
         }
 
 
+def required_series(spec: StrategySpec) -> list[str]:
+    """Other instruments' series the strategy's rules read, e.g. VIX.FRED."""
+    return sorted(
+        {
+            name
+            for index, component in enumerate(spec.components)
+            for name in component.resolve(index).requires_series
+        }
+    )
+
+
 def run_experiment(
     backend,
     *,
@@ -396,6 +407,15 @@ def prepare_run(
     # directly -- which this did until the units were noticed -- accepts a
     # 60-day window against a 50-bar lookback, when 60 calendar days hold only
     # about 43 sessions.
+    # Macro series the rules read (the regime gate's VIX and HY spread).
+    # Checked here, before queueing, so a missing one is an answer at submit
+    # rather than a run that is queued, started and then failed.
+    wanted_series = required_series(spec)
+    if wanted_series:
+        missing = backend.validate_symbols(wanted_series)
+        if missing:
+            raise errors.MissingSeriesError(missing)
+
     lookback_days = spec.lookback_days  # in bars, whatever the frequency
     window_bars = int(window_days * _BARS_PER_CALENDAR_DAY) * BARS_PER_SESSION[frequency]
     if window_bars < lookback_days:
@@ -505,18 +525,14 @@ def _execute(
     # the same warm-up window. Refused up front if the store does not have
     # them: a gate reading an empty series stays shut, and a run that never
     # trades for want of data is indistinguishable from one with no signals.
-    wanted_series = sorted(
-        {
-            name
-            for index, component in enumerate(spec.components)
-            for name in component.resolve(index).requires_series
-        }
-    )
+    wanted_series = required_series(spec)
     series: dict[str, list] = {}
     if wanted_series:
+        # Checked at submission (prepare_run); checked again here because a
+        # queued run can wait while the catalog changes.
         missing = backend.validate_symbols(wanted_series)
         if missing:
-            raise errors.UnknownSymbolError(missing)
+            raise errors.MissingSeriesError(missing)
         series = backend.load_bars_for(wanted_series, warmup_start, end_date)
 
     # Splits and dividends from the warm-up start: an action in the warm-up
