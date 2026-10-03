@@ -354,7 +354,15 @@ export function RunResultsView({ run }: { run: RunDetailV2 }) {
         />
       ) : (
         <>
-          {performance.status === 'error' ? (
+          {performance.status === 'pending' ? (
+            <EmptyState
+              testId="run-performance-pending"
+              icon={Hourglass}
+              role="status"
+              title="Preparing this run's results"
+              detail="This run was recorded before results were stored with each run. The worker is computing them once now, in the background; they appear here when ready and are stored for every later visit."
+            />
+          ) : performance.status === 'error' ? (
             <EmptyState
               testId="run-performance-error"
               icon={AlertTriangle}

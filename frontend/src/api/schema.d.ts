@@ -920,8 +920,12 @@ export interface components {
             attempts?: number;
             /** @description A running run was asked to stop; it stops at the worker's next checkpoint. */
             cancel_requested?: boolean;
-            /** @description The run's headline performance, stored when it completed (the same object GET /runs/{run_id}/performance returns as metrics). Null until then, and on runs recorded before the queue until their performance is first read. */
+            /** @description The run's headline performance, stored when it completed (the same object GET /runs/{run_id}/performance returns as metrics). Null until then, and on runs recorded before the queue until the worker has computed their results once (they are never recomputed on view). */
             metrics?: components["schemas"]["PerformanceMetrics"] | null;
+            /** @description The run against equal-weight buy-and-hold of its own selection, stored with its results. Null exactly when metrics is. */
+            summary?: components["schemas"]["RunSummary"] | null;
+            /** @description Why an older run's results could not be computed, when they could not. */
+            results_error?: string | null;
             /** @description Zero is a valid result, not a failure. */
             signal_count: number;
             coverage: components["schemas"]["RunCoverage"];
@@ -941,6 +945,19 @@ export interface components {
             execution_summary?: components["schemas"]["ExecutionSummary"] | null;
             /** @description False when the recorded model/version is no longer registered; the run stays readable but is not re-runnable. */
             model_available?: boolean;
+        };
+        /** @description A run against its benchmark (equal-weight buy-and-hold of the same selection over the same window), as its history row shows it. */
+        RunSummary: {
+            benchmark_return?: number | null;
+            /** @description The strategy's total return minus the benchmark's. */
+            excess_return?: number | null;
+            alpha?: number | null;
+            beta?: number | null;
+            information_ratio?: number | null;
+            /** @description The strategy as growth of 1, sampled to a few dozen points. */
+            equity_spark?: number[];
+            /** @description The benchmark on the same scale. */
+            benchmark_spark?: number[];
         };
         RunList: {
             total: number;

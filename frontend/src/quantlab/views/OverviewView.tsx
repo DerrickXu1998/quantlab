@@ -147,6 +147,14 @@ export function OverviewView() {
             title="This run failed"
             detail={run.error ?? 'The run did not complete.'}
           />
+        ) : performance.status === 'pending' ? (
+          <EmptyState
+            testId="overview-performance-pending"
+            icon={Hourglass}
+            role="status"
+            title="Preparing this run's results"
+            detail="An older run: its results are being computed once, in the background, and stored. This updates when they are ready."
+          />
         ) : performance.status === 'error' ? (
           <EmptyState
             testId="overview-performance-error"

@@ -10,7 +10,8 @@ import { RunNotices } from '../../src/runs/RunNotices';
 import { ACTIVE_POLL_MS, RunsProvider, useRuns } from '../../src/runs/RunsContext';
 import { RunsView } from '../../src/runs/RunsView';
 import { executionSummary } from '../../src/strategies/executionSummary';
-import { makeRun } from '../quantlab/fixtures';
+import { makePerformance, makeRun } from '../quantlab/fixtures';
+import { PENDING_RETRY_MS } from '../../src/quantlab/data/useRunPerformance';
 
 vi.mock('../../src/api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof apiClient>();
@@ -68,7 +69,18 @@ const done = run({
     winning_trades: 600,
     losing_trades: 604,
   },
+  summary: {
+    benchmark_return: 0.51,
+    excess_return: 0.331,
+    alpha: 0.02,
+    beta: 0.9,
+    information_ratio: 0.4,
+    equity_spark: [1, 1.2, 1.5, 1.84],
+    benchmark_spark: [1, 1.1, 1.3, 1.51],
+  },
 } as never);
+// Recorded before results were stored: the worker is still computing them.
+const older = run({ id: 'o1', status: 'completed', metrics: null, summary: null } as never);
 
 function renderRuns(runId: string | null = null) {
   const onOpen = vi.fn();
@@ -156,6 +168,54 @@ describe('Runs table', () => {
     vi.mocked(apiClient.listRuns).mockResolvedValue({ total: 0, items: [] });
     renderRuns();
     expect(await screen.findByTestId('runs-empty')).toHaveTextContent(/submit/i);
+  });
+});
+
+describe('Run history against the benchmark', () => {
+  it('shows each run against buy-and-hold, with a small chart of both', async () => {
+    renderRuns();
+    const row = await screen.findByTestId('run-row-c1');
+
+    expect(row).toHaveTextContent('+51.00%'); // buy-and-hold of the same tickers
+    expect(row).toHaveTextContent('+33.10%'); // the strategy's excess over it
+    expect(within(row).getByTestId('run-sparkline')).toHaveAccessibleName(
+      /strategy ends at 1\.84x, buy-and-hold at 1\.51x/,
+    );
+  });
+
+  it('summarises the runs shown from their stored figures', async () => {
+    renderRuns();
+    const aggregate = await screen.findByTestId('runs-aggregate');
+
+    expect(aggregate).toHaveTextContent(/With results\s*1/);
+    expect(aggregate).toHaveTextContent(/Beat buy & hold\s*1 of 1/);
+    expect(aggregate).toHaveTextContent('+84.10%');
+  });
+
+  it('says an older run is preparing its results rather than showing blanks', async () => {
+    vi.mocked(apiClient.listRuns).mockResolvedValue({ total: 2, items: [older, done] } as never);
+    renderRuns();
+    const row = await screen.findByTestId('run-row-o1');
+
+    expect(within(row).getByTestId('run-preparing')).toHaveTextContent(/preparing results/);
+    expect(screen.getByTestId('runs-aggregate')).toHaveTextContent('+1 preparing');
+  });
+
+  it('waits for an older run\'s results instead of reporting an error', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(apiClient.listRuns).mockResolvedValue({ total: 1, items: [older] } as never);
+    vi.mocked(apiClient.getRun).mockResolvedValue(older as never);
+    vi.mocked(apiClient.getRunPerformance)
+      .mockRejectedValueOnce(new apiClient.ApiError(409, 'being prepared'))
+      .mockResolvedValue(makePerformance({ run_id: 'o1' }) as never);
+    renderRuns('o1');
+
+    expect(await screen.findByTestId('run-performance-pending')).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(PENDING_RETRY_MS + 10);
+    });
+    await waitFor(() => expect(screen.getByTestId('stat-row')).toBeInTheDocument());
+    expect(screen.queryByTestId('run-performance-error')).not.toBeInTheDocument();
   });
 });
 
