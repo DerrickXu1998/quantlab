@@ -172,6 +172,26 @@ class RunCoverage(BaseModel):
     facts: FactCoverage | None = None
 
 
+class RunSummary(BaseModel):
+    """A run against its benchmark, as its history row shows it.
+
+    Stored when the run's results are, so the run list reads it rather than
+    recomputing anything. The benchmark is equal-weight buy-and-hold of the
+    run's own selection over its own window.
+    """
+
+    benchmark_return: float | None = None
+    #: The strategy's total return minus the benchmark's.
+    excess_return: float | None = None
+    alpha: float | None = None
+    beta: float | None = None
+    information_ratio: float | None = None
+    #: Both curves as growth of 1 from the strategy's starting value, sampled
+    #: to a few dozen points: enough for a row's chart, nothing more.
+    equity_spark: list[float] = []
+    benchmark_spark: list[float] = []
+
+
 class Run(BaseModel):
     id: str
     name: str | None = None
@@ -201,8 +221,14 @@ class Run(BaseModel):
     #: A running run asked to stop; it stops at the worker's next checkpoint.
     cancel_requested: bool = False
     #: The run's headline performance (performance.metrics), stored when it
-    #: completed. Null until then, and on older runs until first opened.
+    #: completed. Null until then; on older runs, until the worker has
+    #: computed their results once.
     metrics: PerformanceMetrics | None = None
+    #: The rest of the history row: the strategy against buy-and-hold of the
+    #: same selection, stored with the metrics. Null exactly when they are.
+    summary: RunSummary | None = None
+    #: Why an older run's results could not be computed, when they could not.
+    results_error: str | None = None
     signal_count: int
     coverage: RunCoverage
     dataset: Dataset

@@ -108,7 +108,13 @@ done
 
 # --- 2. record the new image tags --------------------------------------------
 log "pinning image tags"
-[ -f "$APP_DIR/.env.images" ] && cp "$APP_DIR/.env.images" "$APP_DIR/.env.images.prev"
+# Rotate the rollback pointer only when the tags really change. A retried
+# deploy of the same commit would otherwise copy its own, never-started tags
+# into .env.images.prev and lose the version that is actually running.
+if [ -f "$APP_DIR/.env.images" ] &&
+	! grep -qxF "QUANTLAB_BACKEND_IMAGE=${BACKEND_IMAGE}" "$APP_DIR/.env.images"; then
+	cp "$APP_DIR/.env.images" "$APP_DIR/.env.images.prev"
+fi
 cat >"$APP_DIR/.env.images" <<IMAGES
 # Written by deploy/remote-deploy.sh at $(date -u +%Y-%m-%dT%H:%M:%SZ). Do not edit by hand.
 # Rollback: cp .env.images.prev .env.images && systemctl restart quantlab
@@ -120,6 +126,51 @@ chmod 0644 "$APP_DIR/.env.images"
 # Digest-pinned or tag-pinned, the compose file must at least parse with the
 # real environment before anything is pulled or stopped.
 compose config >/dev/null || fail "the compose file does not resolve with this environment"
+
+# --- 2b. make room for the pull ----------------------------------------------
+# Every deploy pulls a new backend and ingest image (~0.4 GB each) and nothing
+# used to remove the old ones: ~35 deploys filled the 29 GB boot disk, and a
+# pull failed with "no space left on device". Keep exactly the images
+# .env.images (this deploy) and .env.images.prev (the rollback above) name;
+# every other tag of the two quantlab repositories is removed. Each one is still
+# in Artifact Registry, so it can be pulled again. Data volumes and third-party
+# images (postgres, clickhouse, caddy) are never touched, and `docker image rm`
+# without -f refuses an image a container still uses.
+MIN_FREE_GB="${MIN_FREE_GB:-3}"
+
+image_setting() { sed -n "s/^$1=//p" "$2" 2>/dev/null | head -1; }
+contains() {
+	local item
+	for item in "${@:2}"; do [ "$item" = "$1" ] && return 0; done
+	return 1
+}
+
+log "making room for the pull"
+keep=()
+for file in "$APP_DIR/.env.images" "$APP_DIR/.env.images.prev"; do
+	for var in QUANTLAB_BACKEND_IMAGE QUANTLAB_INGEST_IMAGE; do
+		ref="$(image_setting "$var" "$file")"
+		[ -n "$ref" ] && keep+=("$ref")
+	done
+done
+# And whatever a container -- running or stopped -- was created from.
+while read -r ref; do keep+=("$ref"); done < <(docker ps -a --format '{{.Image}}')
+removed=0
+for repo in "${BACKEND_IMAGE%[:@]*}" "${INGEST_IMAGE%[:@]*}"; do
+	while read -r ref; do
+		contains "$ref" "${keep[@]}" && continue
+		docker image rm "$ref" >/dev/null 2>&1 && removed=$((removed + 1))
+	done < <(docker images --format '{{.Repository}}:{{.Tag}}' "$repo")
+done
+# Layers no tag points at any more, left by the removals and by earlier pulls.
+docker image prune -f >/dev/null || true
+
+free_kb="$(df -Pk "$(docker info --format '{{.DockerRootDir}}')" | awk 'NR == 2 {print $4}')"
+printf 'removed %s old quantlab image(s); %s GB free\n' "$removed" "$((free_kb / 1024 / 1024))"
+if [ "$free_kb" -lt $((MIN_FREE_GB * 1024 * 1024)) ]; then
+	docker system df >&2 || true
+	fail "only $((free_kb / 1024)) MB free after removing old images; the pull needs about ${MIN_FREE_GB} GB. Something other than old quantlab images is filling the disk (see above)."
+fi
 
 # --- 3. pull ------------------------------------------------------------------
 # Pull before touching the running stack: a registry or permission failure then

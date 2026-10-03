@@ -74,17 +74,27 @@ def _fact_coverage(result: Any) -> dict | None:
 #: The queue's columns, read with every run after the original 24.
 _QUEUE_COLUMNS = (
     "estimated_bars, started_at, finished_at, error_category, attempts, cancel_requested, "
-    "headline"
+    "headline, performance_error"
 )
 
 
 def _queue_fields(values: tuple, iso, parse=lambda value: value) -> dict:
-    estimated_bars, started_at, finished_at, error_category, attempts, cancel, headline = values
+    (
+        estimated_bars, started_at, finished_at, error_category, attempts, cancel, headline,
+        performance_error,
+    ) = values
+    summary = parse(headline) if headline else None
+    # Headlines written before the summary existed held the metrics alone.
+    if summary is not None and "metrics" not in summary:
+        summary = {"metrics": summary}
     return {
-        # performance.metrics, stored with the performance: the run list's
-        # figures. Null until the run completes (or, for a run from before the
-        # queue, until its performance is first read).
-        "metrics": parse(headline) if headline else None,
+        # Stored with the run's performance (run_summary): what the run list
+        # shows, read rather than recomputed. Null until the run completes, or
+        # -- for a run from before results were stored -- until the worker has
+        # computed them once.
+        "metrics": summary["metrics"] if summary else None,
+        "summary": {k: v for k, v in summary.items() if k != "metrics"} if summary else None,
+        "results_error": performance_error,
         "estimated_bars": estimated_bars,
         "started_at": iso(started_at),
         "finished_at": iso(finished_at),
@@ -94,8 +104,59 @@ def _queue_fields(values: tuple, iso, parse=lambda value: value) -> dict:
     }
 
 
+#: Points kept in each of a run's stored spark curves.
+SPARK_POINTS = 48
+
+
+def _spark(points: list[dict], base: float | None) -> list[float]:
+    """A curve as growth of 1, sampled down to SPARK_POINTS, last point kept."""
+    values = [p["value"] for p in points if isinstance(p.get("value"), (int, float))]
+    if not values or not base:
+        return []
+    if len(values) > SPARK_POINTS:
+        step = (len(values) - 1) / (SPARK_POINTS - 1)
+        values = [values[round(i * step)] for i in range(SPARK_POINTS)]
+    return [round(v / base, 5) for v in values]
+
+
+def run_summary(performance: dict | None) -> dict | None:
+    """What a run's history row shows, from its stored performance.
+
+    The strategy's headline metrics, how buy-and-hold of the same selection
+    did over the same window, the difference, the regression against it, and
+    both curves as small growth-of-1 series for the row's chart. Stored next to
+    the performance, so the run list is one read with no curves to load.
+    """
+    if not performance or not performance.get("metrics"):
+        return None
+    metrics = performance["metrics"]
+    equity = performance.get("equity") or []
+    benchmark = performance.get("benchmark") or []
+    start = equity[0]["value"] if equity else None
+    bench_start = benchmark[0]["value"] if benchmark else None
+    bench_end = benchmark[-1]["value"] if benchmark else None
+    benchmark_return = (
+        bench_end / bench_start - 1 if bench_start and bench_end is not None else None
+    )
+    total = metrics.get("total_return")
+    regression = performance.get("regression") or {}
+    return {
+        "metrics": metrics,
+        "benchmark_return": benchmark_return,
+        "excess_return": (
+            total - benchmark_return if total is not None and benchmark_return is not None else None
+        ),
+        "alpha": regression.get("alpha"),
+        "beta": regression.get("beta"),
+        "information_ratio": regression.get("information_ratio"),
+        # Both scaled by the strategy's starting value: they start together.
+        "equity_spark": _spark(equity, start),
+        "benchmark_spark": _spark(benchmark, bench_start),
+    }
+
+
 def _headline(performance: dict | None) -> dict | None:
-    return (performance or {}).get("metrics") or None
+    return run_summary(performance)
 
 
 def _now(offset_seconds: float = 0) -> datetime:
@@ -562,6 +623,27 @@ class SqliteExperimentStore:
                 (canonical_json(performance), _json_or_none(_headline(performance)), run_id),
             )
             conn.commit()
+
+    def set_performance_error(self, run_id: str, error: str) -> None:
+        with db.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE experiment_runs SET performance_error = ? WHERE id = ?", (error, run_id)
+            )
+            conn.commit()
+
+    def next_run_without_results(self, exclude: list[str] | None = None) -> dict | None:
+        """The newest completed run with no stored results and no recorded
+        reason why: what the worker computes next when it is idle."""
+        skip = list(exclude or [])
+        not_in = f"AND id NOT IN ({', '.join(['?'] * len(skip))})" if skip else ""
+        with db.connect(self.db_path) as conn:
+            row = conn.execute(
+                f"SELECT {self._READ} FROM experiment_runs WHERE status = 'completed' "
+                f"AND performance IS NULL AND performance_error IS NULL {not_in} "
+                f"ORDER BY created_at DESC, id DESC LIMIT 1",
+                tuple(skip),
+            ).fetchone()
+        return self._row_to_run(row) if row else None
 
 
 # ---------------------------------------------------------------------------
@@ -1045,6 +1127,27 @@ class PostgresExperimentStore:
                 (json.dumps(performance), _pg_json(_headline(performance)), run_id),
             )
             conn.commit()
+
+    def set_performance_error(self, run_id: str, error: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE experiment_runs SET performance_error = %s WHERE run_id = %s",
+                (error, run_id),
+            )
+            conn.commit()
+
+    def next_run_without_results(self, exclude: list[str] | None = None) -> dict | None:
+        """The newest completed run with no stored results and no recorded
+        reason why: what the worker computes next when it is idle."""
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT {self._READ} FROM experiment_runs WHERE status = 'completed' "
+                "AND performance IS NULL AND performance_error IS NULL "
+                "AND NOT (run_id = ANY(%s)) "
+                "ORDER BY created_at DESC, run_id DESC LIMIT 1",
+                (list(exclude or []),),
+            ).fetchone()
+        return self._row_to_run(row) if row else None
 
 
 def select_experiment_store(

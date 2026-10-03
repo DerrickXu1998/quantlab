@@ -187,7 +187,12 @@ export function RunsProvider({ children }: { children: ReactNode }) {
   const activeIds = useMemo(
     () =>
       [...allRuns, ...(activeRun ? [activeRun] : [])]
-        .filter(isActiveRun)
+        // Queued and running runs, and older completed runs whose results the
+        // worker is still computing: either way the list has news coming.
+        .filter(
+          (run) =>
+            isActiveRun(run) || (run.status === 'completed' && !run.metrics && !run.results_error),
+        )
         .map((run) => run.id)
         .sort()
         .join(','),

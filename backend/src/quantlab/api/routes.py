@@ -828,12 +828,25 @@ def get_run_performance(request: Request, run_id: str, user: CurrentUser) -> dic
     stored = store.get_performance(run_id)
     if stored is not None:
         return stored
-    # A run recorded before performance was stored: computed once, from the
-    # warm-up start (an ATR stop on the window's first session needs the
-    # sessions behind it), and kept so the next open is a read too.
-    computed = jobs.compute_run_performance(backend(request), store, run)
-    store.set_performance(run_id, computed)
-    return computed
+    # A run recorded before results were stored. Never recomputed here: that
+    # re-ran the whole simulation inside the request. The worker computes it
+    # once in the background (jobs.backfill_next) and stores it like any other
+    # run's; until then the answer is "being prepared", or why it cannot be.
+    if run.get("results_error"):
+        raise HTTPException(
+            status_code=422,
+            detail=f"results for run {run_id} could not be computed: {run['results_error']}",
+        )
+    if run_mode(request) == "inline":
+        # No worker in this mode to do it: computed once, stored, then read.
+        computed = jobs.compute_run_performance(backend(request), store, run)
+        store.set_performance(run_id, computed)
+        return computed
+    raise HTTPException(
+        status_code=409,
+        detail=f"results for run {run_id} are being prepared; try again shortly",
+        headers={"Retry-After": "5"},
+    )
 
 
 @router.get(

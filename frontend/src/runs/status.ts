@@ -1,6 +1,6 @@
 import type { Run } from '../api/client';
 import type { StatusTone } from '../components/ui/status-badge';
-import { SECONDS_PER_MILLION_BARS } from '../strategies/barFrequency';
+import { formatDuration, runTime } from '../strategies/barFrequency';
 
 export type RunStatus = Run['status'];
 export type FailureCategory = NonNullable<Run['error_category']>;
@@ -38,10 +38,17 @@ export function statusLabel(run: Pick<Run, 'status' | 'queue_position' | 'cancel
 }
 
 
-/** "~40 s" for a run of this size, or null when there is no estimate. */
-export function expectedDuration(bars: number | null | undefined): string | null {
+/**
+ * "58 s" for a run of this size, or null when there is no estimate. The same
+ * phase model Configure shows before submitting (barFrequency.runTime):
+ * signals dominate, one pass per component.
+ */
+export function expectedDuration(
+  bars: number | null | undefined,
+  components = 1,
+): string | null {
   if (!bars) return null;
-  return formatSeconds(Math.max(1, Math.round((bars / 1_000_000) * SECONDS_PER_MILLION_BARS)));
+  return formatDuration(runTime(bars, components).total);
 }
 
 export function formatSeconds(seconds: number): string {
@@ -59,11 +66,19 @@ export function durationBetween(start?: string | null, end?: string | null): str
   return formatSeconds(Math.max(0, Math.round(ms / 1000)));
 }
 
+/** Components in a run's recorded strategy; 1 when it has none recorded. */
+export function componentCount(run: { strategy?: { components?: unknown[] } | null }): number {
+  return Math.max(1, run.strategy?.components?.length ?? 1);
+}
+
 /** One sentence on where a pending run is, for its results panel. */
 export function pendingDetail(
-  run: Pick<Run, 'status' | 'queue_position' | 'estimated_bars' | 'started_at' | 'cancel_requested'>,
+  run: Pick<
+    Run,
+    'status' | 'queue_position' | 'estimated_bars' | 'started_at' | 'cancel_requested' | 'strategy'
+  >,
 ): string {
-  const expected = expectedDuration(run.estimated_bars);
+  const expected = expectedDuration(run.estimated_bars, componentCount(run));
   if (run.status === 'queued') {
     const ahead =
       run.queue_position && run.queue_position > 1

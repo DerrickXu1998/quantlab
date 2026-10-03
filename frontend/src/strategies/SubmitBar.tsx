@@ -3,8 +3,7 @@ import type { RunV2 } from '../api/types';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/field';
 import { StatusBadge } from '../components/ui/status-badge';
-import { expectedDuration } from '../runs/status';
-import { isIntraday, type BarFrequency, type RunSize } from './barFrequency';
+import { formatDuration, type RunSize } from './barFrequency';
 import type { SECTION_IDS } from './StrategyBuilder';
 
 const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
@@ -27,8 +26,8 @@ export function SubmitBar({
   saving,
   onSave,
   onSaveAsCopy,
-  frequency,
   size,
+  components,
   symbolsCount,
   blockers,
   hasErrors,
@@ -49,8 +48,9 @@ export function SubmitBar({
   saving: boolean;
   onSave: () => void;
   onSaveAsCopy: () => void;
-  frequency: BarFrequency;
   size: RunSize;
+  /** Signals are most of an intraday run's time, one pass per component. */
+  components: number;
   symbolsCount: number;
   blockers: string[];
   hasErrors: boolean;
@@ -75,7 +75,6 @@ export function SubmitBar({
       </button>
     </li>
   );
-  const duration = expectedDuration(size.bars);
 
   return (
     <form
@@ -127,7 +126,9 @@ export function SubmitBar({
           {symbolsCount > 0 ? (
             <p data-testid="strategy-run-size" className="font-mono text-xs text-muted-foreground">
               ≈ {size.bars.toLocaleString()} bars
-              {isIntraday(frequency) && duration ? ` · about ${duration}` : ''}
+              {size.time !== null
+                ? ` · about ${formatDuration(size.time.total)} (read ${formatDuration(size.time.read)} · signals ${formatDuration(size.time.signals)} for ${Math.max(1, components)} component${components === 1 ? '' : 's'} · backtest ${formatDuration(size.time.backtest)})`
+                : ''}
             </p>
           ) : null}
           {warningCount > 0 ? (

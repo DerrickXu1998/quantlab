@@ -247,9 +247,19 @@ wait. The lock is released when the run ends, or by Postgres if the worker
 dies. So at most one large run is in memory at once: ~650 MB at the 6M-bar
 limit, a third of the container.
 
-**Time.** Runs are synchronous. The 6M-bar limit (~2 minutes) is set by how
-long a request should stay open, not by memory; going further means running
-backtests as background jobs.
+**Time.** Runs are synchronous, and the time is mostly the strategy, not the
+data: each component computes its signals over every bar. Measured on the
+production VM (5m bars, 29 symbols × 2024 = 569k bars):
+
+| Strategy | Read | Signals | Backtest | Total |
+|---|---|---|---|---|
+| RSI mean reversion (2 components) | 2.5 s | 16 s | 3 s | 21 s |
+| S2 regime reversion (4 components) | 3 s | 46 s | 3.5 s | 53 s |
+
+Roughly 5 s (read) + 6 s (backtest) + 18 s per component, per million bars.
+The Strategy tab shows this estimate before a run. At the 6M-bar limit that is
+~5 minutes for 2 components and ~8 for 4 -- long for one request; memory
+allows it, time is what argues for smaller runs or background jobs.
 
 **Minute data.** Intraday bars are built from the IEX minute feed, which starts
 on 2016-12-12. Market holidays are excluded (the feed carries flat placeholder

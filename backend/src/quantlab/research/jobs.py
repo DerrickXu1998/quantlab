@@ -143,6 +143,34 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
+#: Points kept per stored curve. An intraday run marks equity on every bar
+#: (570k points for a 5-minute universe-year); the stored curve keeps the last
+#: point of each session past this, which is more than a chart can draw. The
+#: metrics are computed from the full series before this ever runs.
+MAX_STORED_POINTS = 2500
+
+
+def _compact_curve(points: list[dict]) -> list[dict]:
+    if len(points) <= MAX_STORED_POINTS:
+        return points
+    by_day: dict[str, dict] = {}
+    for point in points:
+        by_day[str(point.get("date", ""))[:10]] = point
+    daily = list(by_day.values())
+    if len(daily) <= MAX_STORED_POINTS:
+        return daily
+    step = (len(daily) - 1) / (MAX_STORED_POINTS - 1)
+    return [daily[round(i * step)] for i in range(MAX_STORED_POINTS)]
+
+
+def _compact(performance: dict) -> dict:
+    """Performance as stored: curves at most MAX_STORED_POINTS long."""
+    for key in ("equity", "benchmark"):
+        if isinstance(performance.get(key), list):
+            performance[key] = _compact_curve(performance[key])
+    return performance
+
+
 def compute_run_performance(backend, store, run: dict, bars: dict | None = None) -> dict:
     """research.performance for a stored run, as the API returns it.
 
@@ -167,7 +195,7 @@ def compute_run_performance(backend, store, run: dict, bars: dict | None = None)
         corporate_actions=replay_engine.load_corporate_actions(backend, run, config),
         minute_source=minutes.source_for(backend, config),
     )
-    return _jsonable(asdict(result))
+    return _compact(_jsonable(asdict(result)))
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +346,47 @@ class _SignalsOf:
 
 
 # ---------------------------------------------------------------------------
+# Results for runs recorded before they were stored
+# ---------------------------------------------------------------------------
+
+
+def backfill_next(backend, store, *, skip: set[str] | None = None) -> str | None:
+    """Compute and store one older run's results. Returns its id, or None.
+
+    Runs recorded before the queue have no stored performance; the API no
+    longer recomputes on view, so the worker does it once, newest first, when
+    it has nothing queued. A run whose results cannot be computed records why
+    (performance_error) and is not tried again.
+    """
+    run = store.next_run_without_results(exclude=sorted(skip or ()))
+    if run is None:
+        return None
+    run_id = run["id"]
+    try:
+        config = runner.execution_config_for(run)
+        estimate = runner.estimate_bars(
+            len(run["symbols"]), run["start_date"], run["end_date"], config.bar_frequency
+        )
+        if estimate > runner.LARGE_RUN_BARS:
+            with backend.large_run_slot(LARGE_SLOT_WAIT_SECONDS) as acquired:
+                if not acquired:
+                    raise errors.LargeRunBusyError()
+                performance = compute_run_performance(backend, store, run)
+        else:
+            performance = compute_run_performance(backend, store, run)
+        store.set_performance(run_id, performance)
+        logger.info("run_results_backfilled", extra={"run_id": run_id})
+    except errors.LargeRunBusyError:
+        # Not this run's fault: leave it for the next idle moment.
+        if skip is not None:
+            skip.add(run_id)
+    except Exception as exc:  # noqa: BLE001 -- recorded on the run, never retried in a loop
+        store.set_performance_error(run_id, describe(exc))
+        logger.exception("run_results_backfill_failed", extra={"run_id": run_id})
+    return run_id
+
+
+# ---------------------------------------------------------------------------
 # The worker loop
 # ---------------------------------------------------------------------------
 
@@ -374,11 +443,17 @@ class Worker:
             logger.warning("run_recovered", extra={"worker": self.name, **outcome})
 
     def _loop(self, name: str, max_bars: int | None, large_slot: bool) -> None:
+        # Only the main lane backfills older runs, and only when nothing is
+        # queued: a submitted run is never kept waiting behind history.
+        backfills = large_slot
+        skip: set[str] = set()
         while not self._stop.is_set():
             try:
                 ran = process_next(
                     self.backend, self.store, worker=name, max_bars=max_bars, large_slot=large_slot
                 )
+                if ran is None and backfills:
+                    ran = backfill_next(self.backend, self.store, skip=skip)
             except Exception:  # noqa: BLE001 -- a broken claim must not kill the lane
                 logger.exception("run_worker_error", extra={"worker": name})
                 ran = None

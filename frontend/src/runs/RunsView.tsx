@@ -20,8 +20,10 @@ import {
 import { Panel } from '../quantlab/chrome/Panel';
 import { BAR_FREQUENCY_LABELS, type BarFrequency } from '../strategies/barFrequency';
 import { runDisplayName } from './labels';
+import { Sparkline } from './Sparkline';
 import { useRuns } from './RunsContext';
 import {
+  componentCount,
   durationBetween,
   expectedDuration,
   FAILURE_LABELS,
@@ -56,12 +58,13 @@ function submittedAt(iso: string): string {
 }
 
 function durationCell(run: RunV2): string {
+  const components = componentCount(run);
   if (run.status === 'queued') {
-    const expected = expectedDuration(run.estimated_bars);
+    const expected = expectedDuration(run.estimated_bars, components);
     return expected ? `~${expected}` : '—';
   }
   if (run.status === 'running') {
-    const expected = expectedDuration(run.estimated_bars);
+    const expected = expectedDuration(run.estimated_bars, components);
     return expected ? `running · ~${expected}` : 'running';
   }
   return durationBetween(run.started_at, run.finished_at) ?? '—';
@@ -89,6 +92,86 @@ export function RunsView({
     <RunDetail runId={runId} onBack={onBack} onClone={onClone} onOpen={onOpen} />
   ) : (
     <RunsTable onOpen={onOpen} onClone={onClone} />
+  );
+}
+
+/** A run whose results the worker has not stored yet (an older run). */
+function awaitingResults(run: RunV2): boolean {
+  return run.status === 'completed' && !run.metrics && !run.results_error;
+}
+
+function median(values: number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+/**
+ * Across the runs shown: how many have results, how many beat buy-and-hold of
+ * their own selection, the best of them, and the typical Sharpe and excess
+ * return. Read from each run's stored summary; nothing here touches a bar.
+ */
+function RunsAggregate({ rows }: { rows: RunV2[] }) {
+  const scored = rows.filter((run) => run.status === 'completed' && run.metrics);
+  const pending = rows.filter(awaitingResults).length;
+  if (scored.length === 0 && pending === 0) return null;
+  const excess = scored
+    .map((run) => run.summary?.excess_return)
+    .filter((value): value is number => typeof value === 'number');
+  const beat = excess.filter((value) => value > 0).length;
+  const best = scored.reduce<RunV2 | null>(
+    (top, run) =>
+      !top || (run.metrics?.total_return ?? -Infinity) > (top.metrics?.total_return ?? -Infinity)
+        ? run
+        : top,
+    null,
+  );
+  const sharpe = median(
+    scored
+      .map((run) => run.metrics?.sharpe_ratio)
+      .filter((value): value is number => typeof value === 'number'),
+  );
+  const cell = 'space-y-1 border-l border-border px-3 first:border-l-0 first:pl-0';
+  return (
+    <dl data-testid="runs-aggregate" className="flex flex-wrap gap-y-2 border border-border bg-card px-3 py-2">
+      <div className={cell}>
+        <dt className={MICRO}>With results</dt>
+        <dd className="font-mono text-sm tabular-nums">
+          {scored.length}
+          {pending > 0 ? (
+            <span className="ml-2 text-xs text-muted-foreground">+{pending} preparing</span>
+          ) : null}
+        </dd>
+      </div>
+      <div className={cell}>
+        <dt className={MICRO}>Beat buy &amp; hold</dt>
+        <dd className="font-mono text-sm tabular-nums">
+          {excess.length > 0 ? `${beat} of ${excess.length}` : '—'}
+        </dd>
+      </div>
+      <div className={cell}>
+        <dt className={MICRO}>Median excess vs B&amp;H</dt>
+        <dd className="text-sm">
+          <Numeric value={median(excess)} format="signedPercent" tone="signed" />
+        </dd>
+      </div>
+      <div className={cell}>
+        <dt className={MICRO}>Median Sharpe</dt>
+        <dd className="text-sm">
+          <Numeric value={sharpe} format="ratio" />
+        </dd>
+      </div>
+      <div className={cell}>
+        <dt className={MICRO}>Best return</dt>
+        <dd className="flex items-baseline gap-2 text-sm">
+          <Numeric value={best?.metrics?.total_return ?? null} format="signedPercent" tone="signed" />
+          {best ? (
+            <span className="max-w-[12rem] truncate text-xs text-muted-foreground">{runDisplayName(best)}</span>
+          ) : null}
+        </dd>
+      </div>
+    </dl>
   );
 }
 
@@ -277,6 +360,8 @@ function RunsTable({ onOpen, onClone }: { onOpen: (runId: string) => void; onClo
         </p>
       ) : null}
 
+      {rows.length > 0 ? <RunsAggregate rows={rows} /> : null}
+
       {rows.length === 0 ? (
         <EmptyState
           testId="runs-filtered-empty"
@@ -322,6 +407,13 @@ function RunsTable({ onOpen, onClone }: { onOpen: (runId: string) => void; onClo
                   <TableHead>Submitted</TableHead>
                   <TableHead>Duration</TableHead>
                   <TableHead className="text-right">Return</TableHead>
+                  <TableHead className="text-right" title="Equal-weight buy-and-hold of the same tickers over the same window">
+                    Benchmark
+                  </TableHead>
+                  <TableHead className="text-right" title="The strategy's return minus buy-and-hold's">
+                    vs B&amp;H
+                  </TableHead>
+                  <TableHead>Strategy vs B&amp;H</TableHead>
                   <TableHead className="text-right">Sharpe</TableHead>
                   <TableHead className="text-right">Max DD</TableHead>
                   <TableHead className="text-right">Trades</TableHead>
@@ -371,7 +463,9 @@ function RunRow({
 }) {
   const name = runDisplayName(run);
   const metrics = run.metrics ?? null;
+  const summary = run.summary ?? null;
   const active = isActiveRun(run);
+  const preparing = awaitingResults(run);
   return (
     <TableRow data-testid={`run-row-${run.id}`} aria-selected={selected}>
       <TableCell>
@@ -386,6 +480,19 @@ function RunRow({
         <button type="button" className="block max-w-full truncate text-left hover:text-primary" onClick={onOpen}>
           {name}
         </button>
+        {preparing ? (
+          <span
+            className="block text-xs text-muted-foreground"
+            data-testid="run-preparing"
+            title="Recorded before results were stored with each run; the worker is computing them once."
+          >
+            preparing results…
+          </span>
+        ) : run.results_error ? (
+          <span className="block truncate text-xs text-destructive" title={run.results_error}>
+            Results unavailable · {run.results_error}
+          </span>
+        ) : null}
         {run.status === 'failed' ? (
           <span className="block truncate text-xs text-destructive" title={run.error ?? undefined}>
             {run.error_category ? `${FAILURE_LABELS[run.error_category]} · ` : ''}
@@ -405,6 +512,23 @@ function RunRow({
       <TableCell className="whitespace-nowrap font-mono text-[11px] tabular-nums">{durationCell(run)}</TableCell>
       <TableCell className="text-right">
         <Numeric value={metrics?.total_return ?? null} format="signedPercent" tone="signed" />
+      </TableCell>
+      <TableCell className="text-right">
+        <Numeric value={summary?.benchmark_return ?? null} format="signedPercent" tone="muted" />
+      </TableCell>
+      <TableCell className="text-right">
+        <Numeric value={summary?.excess_return ?? null} format="signedPercent" tone="signed" />
+      </TableCell>
+      <TableCell>
+        {summary && summary.equity_spark && summary.equity_spark.length > 1 ? (
+          <Sparkline
+            strategy={summary.equity_spark}
+            benchmark={summary.benchmark_spark ?? []}
+            label={`${name}: strategy ends at ${summary.equity_spark[summary.equity_spark.length - 1].toFixed(2)}x, buy-and-hold at ${(summary.benchmark_spark?.[summary.benchmark_spark.length - 1] ?? 1).toFixed(2)}x`}
+          />
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        )}
       </TableCell>
       <TableCell className="text-right">
         <Numeric value={metrics?.sharpe_ratio ?? null} format="ratio" />

@@ -1966,8 +1966,19 @@ components:
           description: >
             The run's headline performance, stored when it completed (the same
             object GET /runs/{run_id}/performance returns as metrics). Null
-            until then, and on runs recorded before the queue until their
-            performance is first read.
+            until then, and on runs recorded before the queue until the worker
+            has computed their results once (they are never recomputed on view).
+        summary:
+          oneOf:
+            - $ref: "#/components/schemas/RunSummary"
+            - type: "null"
+          description: >
+            The run against equal-weight buy-and-hold of its own selection,
+            stored with its results. Null exactly when metrics is.
+        results_error:
+          type: string
+          nullable: true
+          description: Why an older run's results could not be computed, when they could not.
         signal_count:
           type: integer
           minimum: 0
@@ -2029,6 +2040,40 @@ components:
           description: >
             False when the recorded model/version is no longer registered; the
             run stays readable but is not re-runnable.
+
+    RunSummary:
+      type: object
+      additionalProperties: false
+      description: >
+        A run against its benchmark (equal-weight buy-and-hold of the same
+        selection over the same window), as its history row shows it.
+      properties:
+        benchmark_return:
+          type: number
+          nullable: true
+        excess_return:
+          type: number
+          nullable: true
+          description: The strategy's total return minus the benchmark's.
+        alpha:
+          type: number
+          nullable: true
+        beta:
+          type: number
+          nullable: true
+        information_ratio:
+          type: number
+          nullable: true
+        equity_spark:
+          type: array
+          items:
+            type: number
+          description: The strategy as growth of 1, sampled to a few dozen points.
+        benchmark_spark:
+          type: array
+          items:
+            type: number
+          description: The benchmark on the same scale.
 
     RunList:
       type: object

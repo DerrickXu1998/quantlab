@@ -218,6 +218,7 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("experiment_runs", "cancel_requested", "INTEGER NOT NULL DEFAULT 0"),
     ("experiment_runs", "performance", "TEXT"),
     ("experiment_runs", "headline", "TEXT"),
+    ("experiment_runs", "performance_error", "TEXT"),
 )
 
 #: Every status a run can have. Older files constrain ``status`` to the two

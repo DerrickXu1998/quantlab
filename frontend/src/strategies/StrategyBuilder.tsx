@@ -153,8 +153,8 @@ export function StrategyBuilder({
   // The backend's own size check, run here first so an oversized run is
   // refused on screen rather than after a round trip.
   const size = useMemo(
-    () => runSize(symbols.length, startDate, endDate, frequency),
-    [symbols.length, startDate, endDate, frequency],
+    () => runSize(symbols.length, startDate, endDate, frequency, draft.components.length),
+    [symbols.length, startDate, endDate, frequency, draft.components.length],
   );
   const summary = useMemo(() => executionSummary(draft.execution, unit), [draft.execution, unit]);
   const changedCount = summary.filter((item) => item.changed).length;
@@ -766,8 +766,8 @@ export function StrategyBuilder({
         saving={saving}
         onSave={() => void save(false)}
         onSaveAsCopy={() => void save(true)}
-        frequency={frequency}
         size={size}
+        components={draft.components.length}
         symbolsCount={symbols.length}
         blockers={blockers}
         hasErrors={hasErrors}

@@ -16,7 +16,8 @@ describe('bar frequency arithmetic', () => {
   it('sizes an intraday run as symbols x sessions x bars per session', () => {
     const size = runSize(2, '2024-01-01', '2024-01-07', '5m');
     expect(size.bars).toBe(2 * 5 * 78);
-    expect(size.seconds).toBe(1);
+    // 780 bars: well under a second, whatever the strategy.
+    expect(size.time?.total).toBeLessThan(1);
     expect(size.blocker).toBeNull();
   });
 
@@ -27,6 +28,17 @@ describe('bar frequency arithmetic', () => {
     expect(size.blocker).toMatch(/exceeds the limit of 6,000,000/);
   });
 
+  it('estimates time from the strategy, not just the data', () => {
+    // The production measurement: 569k 5m bars, 2 components ran in 21 s, 4 in 53 s.
+    const two = runSize(29, '2024-01-01', '2024-12-31', '5m', 2).time!;
+    const four = runSize(29, '2024-01-01', '2024-12-31', '5m', 4).time!;
+    expect(two.total).toBeGreaterThan(18);
+    expect(two.total).toBeLessThan(32);
+    expect(four.total).toBeGreaterThan(40);
+    expect(four.total).toBeLessThan(65);
+    expect(four.signals).toBeGreaterThan(four.read + four.backtest);
+  });
+
   it('refuses intraday bars before the minute data starts', () => {
     expect(runSize(1, '2016-06-01', '2017-06-01', '1h').blocker).toMatch(MINUTE_DATA_START);
   });
@@ -34,6 +46,6 @@ describe('bar frequency arithmetic', () => {
   it('leaves a full-universe daily run alone, with no time estimate', () => {
     const size = runSize(503, '2016-10-03', '2026-09-25', '1d');
     expect(size.blocker).toBeNull();
-    expect(size.seconds).toBeNull();
+    expect(size.time).toBeNull();
   });
 });

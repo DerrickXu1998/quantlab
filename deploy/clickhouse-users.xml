@@ -22,6 +22,26 @@
   of daily bars: 380 MiB and 1.4 s with it, 17 MiB and 0.36 s without. A few
   such reads at once (a replay plus a dashboard) exceeded the 2 GiB server cap
   and failed the replay. Sorting the small result after the read is cheaper.
+
+  Spill to disk rather than fail: a GROUP BY or ORDER BY whose in-memory state
+  passes 256 MiB writes it to /var/lib/clickhouse/tmp (the data disk) and
+  carries on, slower. Far below the half of max_memory_usage ClickHouse
+  suggests, on measurement (24.8, these limits, a 60M-key GROUP BY):
+    - 768 MiB: a hash table grows by doubling in one allocation, so it jumped
+      from 512 MiB to 1.5 GiB before it could spill, and failed;
+    - 512 MiB: peaks ~640 MiB and finishes alone, but beside a concurrent
+      sort the pair, plus the ~300 MiB the idle server holds, overran the
+      2 GiB server ceiling and the GROUP BY was cancelled;
+    - 256 MiB: peaks ~290 MiB, about 1.4x slower than 512 MiB alone.
+  No threshold makes overlapping heavy queries safe on a shared 2 GiB: two of
+  these at once were still cancelled on the server ceiling, through allocator
+  churn the per-query figures do not show. The backend retries exactly that
+  error (warehouse.MEMORY_LIMIT_EXCEEDED), so it costs time, not the request.
+  Joins need no equivalent: every JOIN quantlab runs is in Postgres.
+
+  max_temporary_data_on_disk_size_for_query bounds that spill so one runaway
+  sort cannot fill the disk Postgres shares; at 20 GiB it is far above anything
+  the workbench's aggregations produce.
 -->
 <clickhouse>
     <profiles>
@@ -30,6 +50,10 @@
             <max_threads>2</max_threads>
             <do_not_merge_across_partitions_select_final>1</do_not_merge_across_partitions_select_final>
             <optimize_read_in_order>0</optimize_read_in_order>
+
+            <max_bytes_before_external_group_by>268435456</max_bytes_before_external_group_by>  <!-- 256 MiB -->
+            <max_bytes_before_external_sort>268435456</max_bytes_before_external_sort>          <!-- 256 MiB -->
+            <max_temporary_data_on_disk_size_for_query>21474836480</max_temporary_data_on_disk_size_for_query>  <!-- 20 GiB -->
         </default>
     </profiles>
 </clickhouse>
