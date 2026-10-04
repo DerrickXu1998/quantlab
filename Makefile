@@ -124,13 +124,14 @@ gen-api: ## Regenerate frontend/src/api/schema.d.ts from the OpenAPI contract (n
 # they belong to .github/workflows/deploy.yml, and a Makefile target that also
 # deployed would be a second, divergent way to change production.
 #
-# Set these once in your shell (they match the GitHub repository variables):
-#   export GCP_INSTANCE=quantlab GCP_ZONE=europe-west2-c
+# Defaults are the production VM (the same as quantlab-data-pipeline's
+# Makefile and the GitHub repository variables); override per call or in
+# your shell if it moves: make prod-ps GCP_ZONE=... GCP_INSTANCE=...
 #
 # See docs/DEPLOY.md.
 
-GCP_INSTANCE ?= quantlab
-GCP_ZONE     ?=
+GCP_INSTANCE ?= instance-20260920-123627
+GCP_ZONE     ?= us-central1-a
 PROD_DIR     := /opt/quantlab
 PROD_COMPOSE := sudo docker compose --env-file $(PROD_DIR)/.env --env-file $(PROD_DIR)/.env.images -f $(PROD_DIR)/docker-compose.prod.yml
 
@@ -138,7 +139,7 @@ PROD_COMPOSE := sudo docker compose --env-file $(PROD_DIR)/.env --env-file $(PRO
 # beats a gcloud error three layers down.
 require-zone:
 	@[ -n "$(GCP_ZONE)" ] || { \
-		echo "ERROR: set GCP_ZONE (e.g. export GCP_ZONE=europe-west2-c)." >&2; exit 1; }
+		echo "ERROR: set GCP_ZONE (e.g. export GCP_ZONE=us-central1-a)." >&2; exit 1; }
 
 # $(1) is run on the VM, through the IAP tunnel -- port 22 is closed to the internet.
 define prod_ssh
@@ -165,9 +166,11 @@ prod-ip: require-zone ## Print the VM's external IP
 # the IP fallback is only right for the pre-DNS, plain-HTTP state.
 PROD_URL ?=
 
-prod-url: require-zone ## Print the API base URL (PROD_URL if set, else the VM's IP)
+# Caddy serves the API on <vm-ip>.sslip.io over HTTPS and answers the bare IP
+# with a redirect, so the bare http://<ip> gave curl an empty body.
+prod-url: require-zone ## Print the API base URL (PROD_URL if set, else https://<vm-ip>.sslip.io)
 	@if [ -n "$(PROD_URL)" ]; then echo "$(PROD_URL)"; \
-	else echo "http://$$($(MAKE) -s prod-ip)"; fi
+	else echo "https://$$($(MAKE) -s prod-ip).sslip.io"; fi
 
 prod-health: require-zone ## Hit the public health endpoint
 	@curl -fsS "$$($(MAKE) -s prod-url)/api/v1/health"; echo
