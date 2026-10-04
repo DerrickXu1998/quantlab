@@ -2,7 +2,7 @@
 
 Drafted 2026-09-30. Candidate strategies for the Strategy tab, derived from what
 the signal-rule registry (`backend/src/quantlab/signals/`) and the research
-feature catalog (`src/quantlab/indicators/`, `src/quantlab/derived/`) already
+feature catalog (`quantlab_data/indicators/`, `quantlab_data/derived/` in quantlab-data-pipeline) already
 provide. Each entry says whether it is buildable in StrategyBuilder today, and
 if not, exactly which gap blocks it. Gap IDs continue the register in
 `docs/AI_QUANT_BOOK_STRATEGY_PLAN.md` §3 (F1–F9, D1–D5, U1–U5 already taken).
@@ -124,7 +124,7 @@ signal rules and paired-leg execution. Listed here only for completeness.
 Squeeze-release ("enter when `squeeze` turns off with momentum sign") and
 choppiness-gating ("ignore trend entries when `choppiness` > 61.8") are the
 natural next regime filters after ADX — the indicators exist and are tested in
-`src/quantlab/indicators/volatility.py`, but no backend signal rule wraps them.
+`quantlab_data/indicators/volatility.py` (quantlab-data-pipeline), but no backend signal rule wraps them.
 
 - **F11**: port `squeeze` and `choppiness` as backend signal rules (filter
   role). Small, mechanical, follows the `adx-trend-filter` pattern.

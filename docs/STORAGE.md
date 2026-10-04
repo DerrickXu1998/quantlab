@@ -49,7 +49,7 @@ what makes a 100× pence/pound error detectable after the fact.
 **Universe membership is append-only,** enforced by a trigger. A snapshot you
 can edit after the fact is not a snapshot, and reconstructing the historical
 universe is the only free defence against survivorship bias.
-`make universe-snapshot` archives the currently ingested universe (real
+`quantlab-data universe-snapshot` (in the pipeline) archives the currently ingested universe (real
 instruments with bars; synthetic and macro pseudo-instruments excluded).
 
 **Fundamentals are point-in-time by `filed_at`.** The `fundamentals` table
@@ -96,7 +96,7 @@ re-ingest the raw table genuinely holds both copies. Therefore:
 > Always read through the `price_bars_current` view, never the `price_bars`
 > table. The view applies `FINAL`, which forces the dedup.
 
-After a large backfill, `quantlab ingest --optimize` (or `OPTIMIZE TABLE
+After a large backfill, `quantlab-data ingest --optimize` (pipeline) (or `OPTIMIZE TABLE
 price_bars FINAL`) pays the merge cost once rather than on every read.
 
 ## Consistency across the two stores
@@ -109,7 +109,7 @@ the consistency mechanism:
 3. Catalog: record rejects, close the run with real counts. **Commit.**
 
 A crash between 2 and 3 leaves the run `running` — the honest state: bars may
-be present but nothing has vouched for them. `quantlab coverage` surfaces
+be present but nothing has vouched for them. `quantlab-data coverage` (pipeline) surfaces
 those. Re-running the same range is always safe. What cannot happen is bars
 that no run vouches for.
 
@@ -129,11 +129,11 @@ stack — `make signals`, the API's warehouse mode, modelling notebooks — work
 with no network and no vendor keys:
 
 ```bash
-make seed-warehouse          # inside the ingest container: quantlab seed-synthetic
+make quantlab-data ARGS="seed-synthetic"   # in quantlab-data-pipeline
 make signals
 ```
 
-`quantlab.synthetic.generate_bars(symbol, start, end, seed=...)` produces
+`quantlab_data.synthetic.generate_bars(symbol, start, end, seed=...)` produces
 daily OHLCV bars on a weekday calendar using a regime-switching model
 (trend / mean-reversion / high-volatility segments, mixed per instrument
 profile). All randomness derives from `sha256(seed + symbol)` fed to a PCG64
@@ -146,7 +146,7 @@ somewhere in the data.
 Seeding goes through the same write path as a real ingest: instruments are
 upserted into the Postgres catalog (with `meta.synthetic = true`), an
 `ingest_runs` row with `source = 'synthetic'` records the run, and bars land
-in ClickHouse tagged with that `run_id`. Re-running `make seed-warehouse` is
+in ClickHouse tagged with that `run_id`. Re-running `seed-synthetic` is
 safe — ReplacingMergeTree supersedes the earlier copy of every bar, and the
 values written are identical anyway. Synthetic and real symbols coexist; the
 `synthetic` flag and the run's provenance keep them distinguishable.
@@ -155,13 +155,10 @@ values written are identical anyway. Synthetic and real symbols coexist; the
 
 ```bash
 make migrate     # apply pending migrations to both stores
-make ingest      # SYMBOLS="AAPL.US HSBA.LON" START=2015-01-01
-make seed-warehouse  # deterministic synthetic bars, no network
-make map-identifiers  # OpenFIGI FIGIs for every real instrument (keyless, resumable)
-make universe-snapshot  # archive the current ingested universe (append-only)
-make coverage    # what is held, where it came from, compression ratios
+# Loading data runs from quantlab-data-pipeline (make quantlab-data ARGS="..."):
+#   ingest, seed-synthetic, map-identifiers, universe-snapshot, coverage
 make signals     # recompute signals from bars into the catalog
-make store-test  # store test suite against the live stack
+make store-test  # the schema against the live stack
 make db-shell    # psql into the catalog
 make ch-shell    # clickhouse-client into the bars
 ```

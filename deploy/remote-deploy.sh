@@ -4,10 +4,10 @@
 # GitHub Actions copies this file, docker-compose.prod.yml, the Caddyfile and
 # clickhouse-limits.xml into a staging directory, then runs:
 #
-#     sudo bash remote-deploy.sh <backend-image> <ingest-image>
+#     sudo bash remote-deploy.sh <backend-image> <migrate-image>
 #
 # Two images, not three: the SPA is served by Vercel, so this VM runs the API
-# only. The ingest image is not optional -- the `migrate` service runs from it,
+# only. The migrate image is not optional -- the `migrate` service runs from it,
 # and the backend will not start until that container has exited successfully.
 #
 # It lives here rather than inline in the workflow YAML so it can be read,
@@ -26,7 +26,7 @@ HEALTH_TRIES="${HEALTH_TRIES:-60}"
 HEALTH_INTERVAL="${HEALTH_INTERVAL:-5}"
 
 BACKEND_IMAGE="${1:?usage: remote-deploy.sh <backend-image> <ingest-image>}"
-INGEST_IMAGE="${2:?missing ingest image}"
+MIGRATE_IMAGE="${2:?missing migrate image}"
 
 log() { printf '\n=== %s\n' "$*"; }
 fail() { printf 'DEPLOY FAIL: %s\n' "$*" >&2; exit 1; }
@@ -119,7 +119,10 @@ cat >"$APP_DIR/.env.images" <<IMAGES
 # Written by deploy/remote-deploy.sh at $(date -u +%Y-%m-%dT%H:%M:%SZ). Do not edit by hand.
 # Rollback: cp .env.images.prev .env.images && systemctl restart quantlab
 QUANTLAB_BACKEND_IMAGE=${BACKEND_IMAGE}
-QUANTLAB_INGEST_IMAGE=${INGEST_IMAGE}
+QUANTLAB_MIGRATE_IMAGE=${MIGRATE_IMAGE}
+# The image's name before ingestion moved to quantlab-data-pipeline: kept so
+# compose resolves either name (a rollback to an older .env.images.prev).
+QUANTLAB_INGEST_IMAGE=${MIGRATE_IMAGE}
 IMAGES
 chmod 0644 "$APP_DIR/.env.images"
 
@@ -128,7 +131,7 @@ chmod 0644 "$APP_DIR/.env.images"
 compose config >/dev/null || fail "the compose file does not resolve with this environment"
 
 # --- 2b. make room for the pull ----------------------------------------------
-# Every deploy pulls a new backend and ingest image (~0.4 GB each) and nothing
+# Every deploy pulls a new backend and migrate image (~0.4 GB each) and nothing
 # used to remove the old ones: ~35 deploys filled the 29 GB boot disk, and a
 # pull failed with "no space left on device". Keep exactly the images
 # .env.images (this deploy) and .env.images.prev (the rollback above) name;
@@ -148,7 +151,7 @@ contains() {
 log "making room for the pull"
 keep=()
 for file in "$APP_DIR/.env.images" "$APP_DIR/.env.images.prev"; do
-	for var in QUANTLAB_BACKEND_IMAGE QUANTLAB_INGEST_IMAGE; do
+	for var in QUANTLAB_BACKEND_IMAGE QUANTLAB_MIGRATE_IMAGE QUANTLAB_INGEST_IMAGE; do
 		ref="$(image_setting "$var" "$file")"
 		[ -n "$ref" ] && keep+=("$ref")
 	done
@@ -156,7 +159,7 @@ done
 # And whatever a container -- running or stopped -- was created from.
 while read -r ref; do keep+=("$ref"); done < <(docker ps -a --format '{{.Image}}')
 removed=0
-for repo in "${BACKEND_IMAGE%[:@]*}" "${INGEST_IMAGE%[:@]*}"; do
+for repo in "${BACKEND_IMAGE%[:@]*}" "${MIGRATE_IMAGE%[:@]*}" "${MIGRATE_IMAGE%/*}/quantlab-ingest"; do
 	while read -r ref; do
 		contains "$ref" "${keep[@]}" && continue
 		docker image rm "$ref" >/dev/null 2>&1 && removed=$((removed + 1))
@@ -177,7 +180,7 @@ fi
 # leaves the current version serving, rather than a half-stopped one.
 log "pulling images"
 compose pull --quiet backend || fail "could not pull $BACKEND_IMAGE"
-docker pull --quiet "$INGEST_IMAGE" >/dev/null || fail "could not pull $INGEST_IMAGE"
+docker pull --quiet "$MIGRATE_IMAGE" >/dev/null || fail "could not pull $MIGRATE_IMAGE"
 
 # --- 4. start -----------------------------------------------------------------
 # `migrate` is a dependency of `backend` with condition service_completed_successfully,
