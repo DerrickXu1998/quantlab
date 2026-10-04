@@ -209,17 +209,19 @@ Ingest reaches the network and is never part of a deploy. From the VM:
 
 ```bash
 cd /opt/quantlab
-sudo docker compose --env-file .env --env-file .env.images -f docker-compose.prod.yml \
-  --profile ingest run --rm ingest ingest AAPL.US MSFT.US HSBA.LON --start 2015-01-01
+# Data loading is not part of this repo any more: it runs from
+# quantlab-data-pipeline, on your machine, over an IAP tunnel to these databases.
 ```
 
-Or, from your laptop, the wrappers in the Makefile:
+From a [quantlab-data-pipeline](https://github.com/DerrickXu1998/quantlab-data-pipeline) checkout:
 
 ```bash
-make prod-ingest SYMBOLS="AAPL.US MSFT.US" START=2015-01-01
-make prod-signals
-make prod-coverage
+make tunnel                                                     # keep open
+make quantlab-data TARGET=prod ARGS="ingest AAPL.US MSFT.US --start 2015-01-01"
+make ingest-fred TARGET=prod                                    # VIX, HY spread, yields
 ```
+
+Then, from this repo, recompute signals: `make prod-signals`.
 
 ## Day-to-day
 

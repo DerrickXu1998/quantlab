@@ -103,8 +103,7 @@ is opt-in, which is what keeps the zero-setup demo honest.
 | `clickhouse` | base | `clickhouse-server:24.8-alpine` | 8123, 9000 | `price_bars` — the bar store |
 | `backend` | base | `./backend` | 8000 | FastAPI |
 | `frontend` | base | `./frontend` | 8080 | nginx over the built bundle |
-| `migrate` | base | `quantlab-ingest` | — | applies migrations, then exits |
-| `ingest` | `ingest` | `quantlab-ingest` | — | the library + provider stack |
+| `migrate` | base | `quantlab-migrate` | — | applies the schema (src/quantlab/store), then exits |
 | `seed` | `demo` | `./backend` | — | writes the synthetic SQLite demo |
 | `redpanda` | `streaming` | `redpanda:v24.3.18` | 19092 | Kafka API for streamed replay |
 
@@ -199,7 +198,7 @@ BATCH     POST /runs ──▶ runner (loads start−lookback for warm-up) ─�
                      ──▶ GET /runs/{id}/performance ──▶ trades, equity, metrics
                      ──▶ GET /runs/{id}/replay/stream ──▶ SSE re-read of a stored run
 
-STREAMED  clickhouse ──▶ quantlab replay-publish ──▶ redpanda ──▶ GET /replay/live/stream
+STREAMED  clickhouse ──▶ quantlab-data replay-publish (pipeline) ──▶ redpanda ──▶ GET /replay/live/stream
            (warehouse)    (ingest image)          (quantlab.bars)  (SSE)
 ```
 
@@ -313,7 +312,7 @@ never fired against real data. Splits in this history are currently invisible.
 ### 7b. Adapters that exist and are wired
 
 Eight providers and three universe sources are registered and discoverable via
-`quantlab sources`. Rate limits are enforced by a per-source token bucket whose daily caps
+`quantlab-data sources` (in quantlab-data-pipeline). Rate limits are enforced by a per-source token bucket whose daily caps
 persist to disk across restarts.
 
 The **Used?** column is the difference between "an adapter exists" and "rows are in the

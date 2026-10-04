@@ -79,24 +79,21 @@ done
 
 echo "Stack is up. UI: http://localhost:8080  API: http://localhost:8000"
 
-# The warehouse starts empty: ingest reaches the network, so it is never part
-# of `up`. Until it runs, the API reports seeded=false and the UI has nothing
-# to draw.
-# Captured first rather than piped: `grep -q` exits at the first match, the
-# writer then dies of SIGPIPE, and under `pipefail` that failure made a full
-# warehouse report as empty.
-coverage="$("${COMPOSE[@]}" run --rm -T ingest coverage 2>/dev/null || true)"
-if ! grep -q "total bars" <<<"$coverage"; then
+# The warehouse starts empty: loading data is quantlab-data-pipeline's job and
+# reaches the network, so it is never part of `up`. Until it runs, the API
+# reports seeded=false and the UI has nothing to draw.
+bars="$("${COMPOSE[@]}" exec -T clickhouse clickhouse-client \
+	--query "SELECT count() FROM quantlab.price_bars" 2>/dev/null || echo 0)"
+if [[ "${bars//[[:space:]]/}" == "0" || -z "${bars//[[:space:]]/}" ]]; then
 	cat <<'NOTE'
 
-The data warehouse is empty. Load some history:
+The data warehouse is empty. Load some history from quantlab-data-pipeline:
 
-    make ingest SYMBOLS="AAPL.US MSFT.US HSBA.LON" START=2020-01-01
-    make signals
+    make quantlab-data ARGS="ingest AAPL.US MSFT.US HSBA.LON --start 2020-01-01"
+    # or, no network: make quantlab-data ARGS="seed-synthetic"
 
-Or seed it with deterministic synthetic bars, which needs no network:
+then, here:
 
-    make seed-warehouse
     make signals
 
 Or run the synthetic demo dataset instead:

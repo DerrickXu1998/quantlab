@@ -62,16 +62,14 @@ services:
 
   # ---------------------------------------------------------------------------
   # Schema owner. Runs on every `up`, exits when the database matches the
-  # migrations on disk. Ingest and backend both wait for it.
+  # migrations on disk; the backend waits for it. Data loading is not here:
+  # it lives in quantlab-data-pipeline, which loads into this same stack.
   # ---------------------------------------------------------------------------
   migrate:
     build:
       context: .
-      dockerfile: Dockerfile.ingest
-    # Shared tag with `ingest`: same Dockerfile, so pin the same image name or
-    # Compose builds two independent copies and `build ingest` silently leaves
-    # this one stale -- which will then apply an out-of-date schema.
-    image: quantlab-ingest:latest
+      dockerfile: Dockerfile.migrate
+    image: quantlab-migrate:latest
     command: ["migrate"]
     environment:
       QUANTLAB_DB_URL: ${QUANTLAB_DB_URL:-postgresql://quantlab:quantlab@postgres:5432/quantlab}
@@ -88,45 +86,9 @@ services:
     restart: "no"
 
   # ---------------------------------------------------------------------------
-  # Historical data ingest. Not part of `up` -- it reaches out to Stooq/Yahoo,
-  # so it runs on demand (`make ingest SYMBOLS="AAPL.US MSFT.US"`).
-  # ---------------------------------------------------------------------------
-  ingest:
-    build:
-      context: .
-      dockerfile: Dockerfile.ingest
-    image: quantlab-ingest:latest   # see the note on `migrate`
-    profiles: ["ingest"]
-    environment:
-      QUANTLAB_DB_URL: ${QUANTLAB_DB_URL:-postgresql://quantlab:quantlab@postgres:5432/quantlab}
-      QUANTLAB_CH_URL: ${QUANTLAB_CH_URL:-clickhouse://quantlab:quantlab@clickhouse:8123/quantlab}
-      # Empty by default: the local URLs above carry their own passwords. Set
-      # them (with the two URLs) to point this stack at the managed services.
-      PGPASSWORD: ${PGPASSWORD:-}
-      QUANTLAB_CH_PASSWORD: ${QUANTLAB_CH_PASSWORD:-}
-      QUANTLAB_HOME: /var/lib/quantlab
-      # SEC and other sources want a real contact address; override in .env.
-      QUANTLAB_USER_AGENT: ${QUANTLAB_USER_AGENT:-quantlab/0.1 (research)}
-      # Credentialed ingest jobs read these from the environment; set them in
-      # .env (all free to obtain -- see docs/DATA_SOURCES.md). Empty means the
-      # job fails fast with a clear "set ..." message.
-      SEC_USER_AGENT: ${SEC_USER_AGENT:-}
-      FRED_API_KEY: ${FRED_API_KEY:-}
-      COMPANIES_HOUSE_API_KEY: ${COMPANIES_HOUSE_API_KEY:-}
-    volumes:
-      - quantlab-cache:/var/lib/quantlab
-    depends_on:
-      postgres:
-        condition: service_healthy
-      clickhouse:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-    restart: "no"
-
-  # ---------------------------------------------------------------------------
   # Synthetic demo seed (SQLite). Kept so `make up` still produces a working
-  # UI with no network access; the real data path is postgres + ingest.
+  # UI with no network access; the real data path is postgres + clickhouse,
+  # loaded by quantlab-data-pipeline.
   # ---------------------------------------------------------------------------
   seed:
     build:
@@ -144,7 +106,8 @@ services:
   # ---------------------------------------------------------------------------
   # Event bus. Kafka API, single binary, no JVM. Only runs under the
   # `streaming` profile (`docker compose --profile streaming up`), so the base
-  # stack is unchanged. The publisher (ingest image, `make replay-publish`)
+  # stack is unchanged. The publisher (quantlab-data-pipeline:
+  # `make quantlab-data ARGS="replay-publish ..."`)
   # turns warehouse history into a chronological bar stream on the topic; the
   # backend consumes it for GET /api/v1/replay/live/stream.
   # ---------------------------------------------------------------------------
@@ -252,6 +215,5 @@ services:
 volumes:
   quantlab-chdata:   # ClickHouse bars
   quantlab-pgdata:   # Postgres catalog
-  quantlab-cache:    # provider HTTP cache + Parquet exports
   quantlab-data:     # synthetic demo SQLite
   quantlab-kafka:    # redpanda log segments (streaming profile)
