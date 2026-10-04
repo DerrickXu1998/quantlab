@@ -1,7 +1,7 @@
 # Production operations cheatsheet
 
 Everything you need to operate the prod VM and keep its warehouse fresh.
-Local dev commands (`make up`, `make ingest`, ...) are in the README — this file
+Local dev commands (`make up`, `make migrate`, ...) are in the README — this file
 is **prod only**.
 
 - VM: `instance-20260920-123627` · zone `us-central1-a` · project `avid-glazing-444109-h6`
@@ -64,88 +64,31 @@ make prod-health      # public health endpoint
 make prod-check       # assert the API serves the warehouse, not the demo fallback
 make prod-ps          # what is running
 make prod-logs        # follow logs (SERVICE=backend to narrow)
-make prod-coverage    # what's in the warehouse
 make prod-restart     # restart the whole stack (systemd unit)
 make prod-ssh         # interactive shell on the VM
 ```
 
-## 3. Ingestion commands (prod)
+## 3. Loading data (prod)
 
-All jobs are **idempotent and additive** — safe to re-run any time. Each runs as a
-one-shot container and exits. Long jobs can be detached with `nohup` (see §5).
+Data loading moved to [quantlab-data-pipeline](https://github.com/DerrickXu1998/quantlab-data-pipeline). This repo owns the warehouse schema only; the
+VM runs no ingest container. From a pipeline checkout, with `make tunnel` open in
+another terminal (it reaches the VM's databases over IAP):
 
-### 3.1 Prices (Yahoo; Stooq is bot-walled and just falls back)
+| What | Command (in quantlab-data-pipeline) |
+|---|---|
+| Daily prices for a few symbols | `make quantlab-data TARGET=prod ARGS="ingest AAPL.US MSFT.US --start 2015-01-01"` |
+| FRED macro (VIX, HY spread, yields) | `make ingest-fred TARGET=prod` |
+| BoE macro | `make quantlab-data TARGET=prod ARGS="ingest-macro"` |
+| OpenFIGI identifiers | `make quantlab-data TARGET=prod ARGS="map-identifiers"` |
+| SEC fundamentals | `make quantlab-data TARGET=prod ARGS="map-sec-tickers"`, then `ARGS="ingest-sec-fundamentals"` |
+| Companies House fundamentals | `make quantlab-data TARGET=prod ARGS="map-ch-companies"`, then `ARGS="ingest-ch-fundamentals"` |
+| FINRA / FCA short data | `make quantlab-data TARGET=prod ARGS="ingest-finra-shorts"` / `ARGS="ingest-fca-shorts"` |
+| Universe snapshot | `make quantlab-data TARGET=prod ARGS="universe-snapshot liquid-500-ftse-core"` |
+| What the warehouse holds | `make quantlab-data TARGET=prod ARGS="coverage"` |
+| S&P 500 minute bars | the pipeline's own runbook (`pipeline crawl` / `load`) |
 
-```bash
-# A few symbols
-make prod-ingest SYMBOLS="AAPL.US MSFT.US SHEL.LON" START=2015-01-01
-
-# Refresh recent history for everything (daily/weekly top-up)
-make prod-ingest SYMBOLS="$(cat artifacts/ingest_universe.txt | tr '\n' ' ') AAPL.US MSFT.US NVDA.US" START=2026-09-01
-
-# Full backfill (what was run to load prod)
-make prod-ingest SYMBOLS="$(cat artifacts/ingest_universe.txt | tr '\n' ' ') AAPL.US MSFT.US NVDA.US" START=2010-01-01
-```
-
-### 3.2 Macro series
-
-```bash
-# BoE (keyless): GBPUSD.BOE, GBPEUR.BOE, BANKRATE.BOE, GILT10Y.BOE, M4GROWTH.BOE
-gcloud compute ssh $GCP_INSTANCE --zone $GCP_ZONE --tunnel-through-iap --quiet --command \
-  "cd /opt/quantlab && sudo docker compose --env-file .env --env-file .env.images -f docker-compose.prod.yml \
-   --profile ingest run --rm ingest ingest-macro"
-
-# FRED (needs FRED_API_KEY on the VM): VIX, UST 2y/10y, HY spread, real 10y, dollar index
-# Same command with: ingest-macro --provider fred
-# (status "partial" is expected: negative 2020-21 real yields are quarantined)
-```
-
-### 3.3 Identifiers
-
-```bash
-# OpenFIGI (keyless, ~25 req/min, resumable — run after any price ingest of new symbols)
-... run --rm ingest map-identifiers
-
-# SEC ticker -> CIK (needs SEC_USER_AGENT)
-... run --rm ingest map-sec-tickers
-
-# Companies House company numbers (needs COMPANIES_HOUSE_API_KEY)
-... run --rm ingest map-ch-companies
-```
-
-(`... run --rm ingest` = the same ssh + compose prefix as in 3.2.)
-
-### 3.4 Fundamentals
-
-```bash
-# SEC companyfacts, ~5.7M rows, ~60 min — run detached (see §5)
-... run --rm ingest ingest-sec-fundamentals            # full
-... run --rm ingest ingest-sec-fundamentals --limit 20 # pilot
-
-# Companies House iXBRL — expect 0 facts for FTSE (PDF-only filings, known gap)
-... run --rm ingest ingest-ch-fundamentals
-```
-
-### 3.5 Short data (both keyless)
-
-```bash
-# FINRA daily short volume (default: last 31 days; CDN history back to 2018)
-... run --rm ingest ingest-finra-shorts
-... run --rm ingest ingest-finra-shorts --start 2026-08-01 --end 2026-09-18
-
-# FCA net short positions (run AFTER map-identifiers — it matches on OpenFIGI names)
-... run --rm ingest ingest-fca-shorts
-```
-
-### 3.6 Universe snapshot + signals
-
-```bash
-# Archive current universe membership (survivorship-bias tracking; run daily-ish)
-... run --rm ingest universe-snapshot liquid-500-ftse-core
-
-# Recompute all signal rules from warehouse bars (drives the public API)
-make prod-signals
-```
+Every job is idempotent and additive. After a price load, recompute signals here
+with `make prod-signals`.
 
 ## 4. Verify
 
@@ -170,30 +113,20 @@ sudo docker compose --env-file .env -f docker-compose.prod.yml exec -T clickhous
   "SELECT countDistinct(instrument_id), count(), min(ts), max(ts) FROM quantlab.price_bars_current"
 ```
 
-## 5. Long jobs: detach so SSH can drop
+## 5. Long jobs
 
-An ingest dies with its SSH session. For anything over a few minutes, run it
-under `nohup` on the VM and poll:
-
-```bash
-gcloud compute ssh $GCP_INSTANCE --zone $GCP_ZONE --tunnel-through-iap --quiet --command \
-  "cd /opt/quantlab && nohup sudo docker compose --env-file .env --env-file .env.images \
-   -f docker-compose.prod.yml --profile ingest run --rm ingest ingest-sec-fundamentals \
-   > /tmp/sec_fund.log 2>&1 &"
-
-# poll
-gcloud compute ssh $GCP_INSTANCE --zone $GCP_ZONE --tunnel-through-iap --quiet \
-  --command "tail -5 /tmp/sec_fund.log"
-```
+Loads run from the pipeline on your machine, not on the VM, so an SSH session
+dropping no longer kills them; a pipeline job dies only with its own terminal
+(run it under `nohup` or `tmux` there for multi-hour backfills).
 
 ## 6. Suggested refresh cadence
 
 | Job | When |
 |---|---|
-| `prod-ingest` (recent START) | daily, after US close |
+| pipeline `ingest` (recent `--start`) | daily, after US close |
 | `ingest-finra-shorts` | daily, after 18:00 ET |
 | `prod-signals` | after every price ingest |
-| `ingest-macro` / `--provider fred` | weekly |
+| pipeline `ingest-macro` / `make ingest-fred` | weekly |
 | `ingest-sec-fundamentals` | weekly during earnings season, monthly otherwise |
 | `map-identifiers`, `map-sec-tickers`, `map-ch-companies` | after ingesting new symbols |
 | `universe-snapshot` | daily (append-only archive) |

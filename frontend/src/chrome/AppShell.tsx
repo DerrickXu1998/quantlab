@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { UserMenu } from '../auth/UserMenu';
+import { GlossaryButton } from '../glossary/GlossaryButton';
 import { DataSourceBanner } from '../components/DataSourceBanner';
 import { DataDisclaimer } from '../components/DataDisclaimer';
 import { Button } from '../components/ui/button';
@@ -198,6 +199,7 @@ export function AppShell() {
                     <DatasetBadge />
                   </>
                 ) : null}
+                <GlossaryButton />
                 <ThemeToggle />
                 <UserMenu />
               </div>

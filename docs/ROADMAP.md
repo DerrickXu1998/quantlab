@@ -10,9 +10,9 @@ was made it is recorded as such; open questions are marked **open**.
 The warehouse works: ClickHouse holds append-only `price_bars`, Postgres holds
 the catalog (`instruments`, `symbol_map`, `universe_snapshots`,
 `universe_members`, `ingest_runs`), ingestion is human-triggered via
-`make ingest`, and everything runs on one Compute Engine VM deployed from
+`make quantlab-data` in quantlab-data-pipeline, and everything runs on one Compute Engine VM deployed from
 GitHub Actions (see `docs/DEPLOY.md`). Universes exist as a plugin abstraction
-(`src/quantlab/universe/`: `static`, `lse`, `nasdaqtrader`) but there are no
+(`quantlab_data/universe/` (quantlab-data-pipeline): `static`, `lse`, `nasdaqtrader`) but there are no
 index universes (S&P 500, FTSE 100) and no DB-backed user universes. There is
 no real-time path at all — no tick data, no IBKR integration.
 
@@ -44,7 +44,7 @@ mechanism, one snapshot model, one resolution path.
 
 What exists:
 
-- `UniverseSource` plugin contract (`src/quantlab/universe/base.py`) with a
+- `UniverseSource` plugin contract (`quantlab_data/universe/base.py` (quantlab-data-pipeline)) with a
   registry; `static` (custom lists / CSV / watchlists) covers the ad-hoc case.
 - `universe_snapshots` + `universe_members` (`001_catalog.sql`), append-only
   enforced by trigger — the point-in-time storage is already right.
@@ -193,7 +193,7 @@ What is missing:
 
 - [ ] **UK accounts (data gap D6).** 0 of 99 `.LON` names have any accounts
       concept; the only UK fundamental is FCA short interest (77 names).
-      `make ingest-ch-fundamentals` exists but has never populated this
+      the pipeline's `ingest-ch-fundamentals` exists but has never populated this
       database. First establish whether Companies House returns *structured*
       accounts for listed plcs at all — many file in forms the ingest may not
       parse. **Open**: if not, the fallback is to exclude `.LON` names from

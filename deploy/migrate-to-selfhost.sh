@@ -149,7 +149,7 @@ src_ch -q 'SELECT 1' </dev/null >/dev/null ||
 	fail "cannot reach ClickHouse Cloud at $SRC_CH_HOST:9440 -- check the service's IP allow-list"
 # The table from the repo's own migration (stock ReplacingMergeTree); its
 # checksum is what the source recorded, so `migrate` later finds it applied.
-docker run --rm --entrypoint sh "$(from "$APP_DIR/.env.images" QUANTLAB_INGEST_IMAGE)" \
+docker run --rm --entrypoint sh "$(from "$APP_DIR/.env.images" QUANTLAB_MIGRATE_IMAGE || from "$APP_DIR/.env.images" QUANTLAB_INGEST_IMAGE)" \
 	-c 'cat "$(python -c "import importlib; print(importlib.import_module(\"quantlab.store.migrate\").CH_MIGRATIONS_DIR)")"/*.sql' |
 	dst_ch --multiquery
 # Views: plain SELECTs, portable as the source wrote them. Views over views

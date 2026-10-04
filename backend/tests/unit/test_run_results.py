@@ -202,5 +202,5 @@ def test_a_strategy_reading_unloaded_macro_series_is_refused_at_submit(client, s
     assert response.status_code == 422, response.json()
     detail = response.json()["detail"]
     assert "VIX.FRED" in detail
-    assert "ingest-macro --provider fred" in detail
+    assert "make ingest-fred" in detail
     assert client.get("/api/v1/runs").json()["total"] == before

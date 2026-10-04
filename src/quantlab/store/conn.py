@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import contextlib
 import os
-from typing import Any, Iterator
+from collections.abc import Iterator
+from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 DEFAULT_DSN = "postgresql://quantlab:quantlab@localhost:5432/quantlab"
@@ -80,7 +81,7 @@ def ping(url: str = "") -> bool:
         with session(url, autocommit=True) as conn:
             conn.execute("SELECT 1")
         return True
-    except Exception:
+    except Exception:  # noqa: BLE001 - any failure means unreachable
         return False
 
 
@@ -166,5 +167,5 @@ def ch_ping(url: str = "") -> bool:
         with ch_session(url) as client:
             client.command("SELECT 1")
         return True
-    except Exception:
+    except Exception:  # noqa: BLE001 - any failure means unreachable
         return False

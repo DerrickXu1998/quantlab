@@ -63,7 +63,7 @@ The strategies below are chosen to be **replicable in QuantLab** with the smalle
 **Book concept**: compute many features (momentum, volatility, volume ratios, RSI/MACD/Bollinger position, ATR, skew/kurtosis, autocorrelation), select by IC > 0.03 / ICIR > 0.5 / inter-feature corr < 0.7, label with **triple-barrier**, validate with **purged/embargoed CV**, evaluate on IC and long-short quintile spread — never accuracy.
 
 **QuantLab mapping**:
-- Features: ~70 indicators + 22 derived features already exist (`src/quantlab/indicators/`, `src/quantlab/derived/`). This is QuantLab's strongest alignment with the book.
+- Features: ~70 indicators + 22 derived features already exist (`quantlab_data/indicators/`, `quantlab_data/derived/` in quantlab-data-pipeline). This is QuantLab's strongest alignment with the book.
 - Labels: **triple-barrier labeling does not exist** — new derived-feature module.
 - Model: book recommends Ridge (<5k samples) or LightGBM (5k–50k) — with daily bars on ~600 names × 16y you have ~2.4M rows but ~600 independent cross-sections; treat as panel data.
 - Evaluation: IC/ICIR computation + quintile spread — new research endpoint.
@@ -251,7 +251,7 @@ The large caps look split-adjusted (NVDA's 2021 and 2024 splits leave no gap), b
 - Universe: ~595 US symbols ingested; static/LSE/NasdaqTrader universe sources; **no index universes** (roadmap Phase 1).
 - Missing: intraday, news/sentiment, options, adjusted prices, analyst estimates.
 
-**Signals**: 70 indicators + 22 derived features (`src/quantlab/indicators/`, `derived/`); 20+ signal rules incl. `sma-crossover`, `macd-crossover`, `adx-trend-filter`, `bollinger-reversion`, `zscore-reversion`, `roc-momentum`, `donchian-breakout`, volume-spike, and 9 fundamental rules with PIT `requires_facts` (`backend/src/quantlab/signals/`). Extension: `@register_signal_rule`, auto-appears in `/models` and builder.
+**Signals**: 70 indicators + 22 derived features (`quantlab_data/indicators/`, `derived/` in quantlab-data-pipeline); 20+ signal rules incl. `sma-crossover`, `macd-crossover`, `adx-trend-filter`, `bollinger-reversion`, `zscore-reversion`, `roc-momentum`, `donchian-breakout`, volume-spike, and 9 fundamental rules with PIT `requires_facts` (`backend/src/quantlab/signals/`). Extension: `@register_signal_rule`, auto-appears in `/models` and builder.
 
 **Engine**: `StrategySpec` (components, `all|any|majority|weighted` combinators); `ExecutionConfig` (17 fields: 4 sizing modes incl. volatility_target, commission/slippage, stop/trailing/ATR stops, shorts); pessimistic intrabar resolution; look-ahead enforced by SQL CHECK + truncation sweep; replay via SSE. Missing: market impact, borrow costs, dividends, financing.
 

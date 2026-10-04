@@ -10,6 +10,7 @@ import { fieldClasses, Input, Select } from '../components/ui/field';
 import { StatusBadge } from '../components/ui/status-badge';
 import { navigate } from '../chrome/router';
 import { Panel } from '../quantlab/chrome/Panel';
+import { GlossaryFrequency, Term } from '../glossary/Term';
 import { useRuns } from '../runs/RunsContext';
 import { useDataWindow } from '../workbench/useDataWindow';
 import { CoverageWarning } from './CoverageWarning';
@@ -198,7 +199,10 @@ export function StrategyBuilder({
     }));
 
   const addComponent = useCallback((model: CatalogModel, role: StrategyRole) => {
-    setDraft((current) => ({ ...current, components: [...current.components, componentFor(model, role)] }));
+    setDraft((current) => ({
+      ...current,
+      components: [...current.components, componentFor(model, role)],
+    }));
     setNotice(`${model.name} added as ${ROLE_LABELS[role].toLowerCase()}.`);
   }, []);
 
@@ -361,426 +365,482 @@ export function StrategyBuilder({
   }
 
   return (
-    <div data-testid="strategy-builder" className="flex min-h-0 flex-1 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto lg:grid lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)] lg:overflow-hidden">
-        <div className="flex min-h-0 flex-col border-b border-border p-4 lg:border-b-0 lg:border-r">
-          <LibraryRail
-            list={shownList}
-            onListChange={setList}
-            library={library}
-            templates={templates}
-            catalog={catalog}
-            modelsLoading={modelsStatus === 'loading'}
-            coverage={fundamentals.coverage}
-            currentId={draft.id}
-            runNames={runNames}
-            onLoadStrategy={loadStrategy}
-            onLoadTemplate={loadTemplate}
-            onAdd={addComponent}
-            onDeleted={(strategyId) =>
-              setDraft((current) => (current.id === strategyId ? { ...current, id: null } : current))
-            }
-          />
-        </div>
-
-        <div className="min-h-0 space-y-4 p-4 lg:overflow-y-auto">
-          {pendingReplace ? (
-            <div
-              role="alert"
-              data-testid="replace-draft"
-              className="flex flex-wrap items-center gap-2 border border-primary/40 bg-primary/5 p-3 text-sm"
-            >
-              <TriangleAlert size={16} strokeWidth={1.5} aria-hidden="true" className="shrink-0" />
-              <p className="min-w-0 flex-1">
-                {draft.name ? `"${draft.name}"` : 'This strategy'} has unsaved changes. Discard them to{' '}
-                {pendingReplace.label}?
-              </p>
-              <Button type="button" size="sm" variant="outline" onClick={() => setPendingReplace(null)}>
-                Keep editing
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => {
-                  pendingReplace.apply();
-                  setPendingReplace(null);
-                }}
-              >
-                Discard and continue
-              </Button>
-            </div>
-          ) : null}
-
-          <div id={SECTION_IDS.strategy} className="scroll-mt-4">
-            <Panel
-              title="1 · Strategy"
-              actions={
-                <Button type="button" size="sm" variant="outline" onClick={startEmpty}>
-                  New
-                </Button>
+    <GlossaryFrequency frequency={frequency}>
+      <div data-testid="strategy-builder" className="flex min-h-0 flex-1 flex-col">
+        <div className="min-h-0 flex-1 overflow-y-auto lg:grid lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)] lg:overflow-hidden">
+          <div className="flex min-h-0 flex-col border-b border-border p-4 lg:border-b-0 lg:border-r">
+            <LibraryRail
+              list={shownList}
+              onListChange={setList}
+              library={library}
+              templates={templates}
+              catalog={catalog}
+              modelsLoading={modelsStatus === 'loading'}
+              coverage={fundamentals.coverage}
+              currentId={draft.id}
+              runNames={runNames}
+              onLoadStrategy={loadStrategy}
+              onLoadTemplate={loadTemplate}
+              onAdd={addComponent}
+              onDeleted={(strategyId) =>
+                setDraft((current) =>
+                  current.id === strategyId ? { ...current, id: null } : current,
+                )
               }
-              bodyClassName="space-y-4"
-            >
-              {/* The single most important element on the screen: the assembled
+            />
+          </div>
+
+          <div className="min-h-0 space-y-4 p-4 lg:overflow-y-auto">
+            {pendingReplace ? (
+              <div
+                role="alert"
+                data-testid="replace-draft"
+                className="flex flex-wrap items-center gap-2 border border-primary/40 bg-primary/5 p-3 text-sm"
+              >
+                <TriangleAlert
+                  size={16}
+                  strokeWidth={1.5}
+                  aria-hidden="true"
+                  className="shrink-0"
+                />
+                <p className="min-w-0 flex-1">
+                  {draft.name ? `"${draft.name}"` : 'This strategy'} has unsaved changes. Discard
+                  them to {pendingReplace.label}?
+                </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setPendingReplace(null)}
+                >
+                  Keep editing
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => {
+                    pendingReplace.apply();
+                    setPendingReplace(null);
+                  }}
+                >
+                  Discard and continue
+                </Button>
+              </div>
+            ) : null}
+
+            <div id={SECTION_IDS.strategy} className="scroll-mt-4">
+              <Panel
+                title="1 · Strategy"
+                actions={
+                  <Button type="button" size="sm" variant="outline" onClick={startEmpty}>
+                    New
+                  </Button>
+                }
+                bodyClassName="space-y-4"
+              >
+                {/* The single most important element on the screen: the assembled
                   strategy in a sentence, regenerated on every edit. It is how a
                   non-expert checks they built what they meant. */}
-              <div className="border border-primary/40 bg-primary/5 p-3">
-                <p className={MICRO}>In plain English</p>
-                <p data-testid="strategy-summary" aria-live="polite" className="mt-1 text-sm leading-relaxed">
-                  {sentence}
-                </p>
-              </div>
+                <div className="border border-primary/40 bg-primary/5 p-3">
+                  <p className={MICRO}>In plain English</p>
+                  <p
+                    data-testid="strategy-summary"
+                    aria-live="polite"
+                    className="mt-1 text-sm leading-relaxed"
+                  >
+                    {sentence}
+                  </p>
+                </div>
 
-              {/* Directly under the sentence, and above the ordinary warnings:
+                {/* Directly under the sentence, and above the ordinary warnings:
                   this one says the strategy cannot do what the sentence just
                   claimed for part of the selection, and it is the last honest
                   moment before a number gets drawn from a run. */}
-              <CoverageWarning
-                draft={draft}
-                catalog={catalog}
-                symbols={symbols}
-                startDate={startDate}
-                endDate={endDate}
-                coverage={fundamentals.coverage}
-                status={fundamentals.status}
-                message={fundamentals.message}
-                onReload={fundamentals.reload}
-                onInspect={(symbol) => navigate('research', { mode: 'company', symbol, as_of: endDate })}
-              />
-
-              {warnings.length > 0 ? (
-                <ul data-testid="strategy-warnings" className="space-y-1">
-                  {warnings.map((warning) => (
-                    <li
-                      key={warning}
-                      role="alert"
-                      className="flex gap-2 border border-border px-2 py-1.5 text-xs text-muted-foreground"
-                    >
-                      <TriangleAlert size={16} strokeWidth={1.5} aria-hidden="true" className="mt-px shrink-0" />
-                      {warning}
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-
-              {notice ? (
-                <p role="status" data-testid="builder-notice" className="text-xs text-primary">
-                  {notice}
-                </p>
-              ) : null}
-              {saveError ? (
-                <p
-                  role="alert"
-                  data-testid="builder-save-error"
-                  className="border border-destructive/40 bg-destructive/5 px-2 py-1.5 text-xs text-destructive"
-                >
-                  {saveError}
-                </p>
-              ) : null}
-
-              {draft.components.length === 0 ? (
-                <EmptyState
-                  testId="builder-no-components"
-                  icon={FlaskConical}
-                  title="No components yet"
-                  detail="Pick a signal from the Signals list and give it a role, or load one of the templates to see a finished strategy."
-                  action={
-                    shownList !== 'signals' ? (
-                      <Button type="button" size="sm" variant="outline" onClick={() => setList('signals')}>
-                        Show signals
-                      </Button>
-                    ) : undefined
+                <CoverageWarning
+                  draft={draft}
+                  catalog={catalog}
+                  symbols={symbols}
+                  startDate={startDate}
+                  endDate={endDate}
+                  coverage={fundamentals.coverage}
+                  status={fundamentals.status}
+                  message={fundamentals.message}
+                  onReload={fundamentals.reload}
+                  onInspect={(symbol) =>
+                    navigate('research', { mode: 'company', symbol, as_of: endDate })
                   }
                 />
-              ) : (
-                ROLE_ORDER.map((role) => {
-                  const components = byRole(role);
-                  if (components.length === 0) return null;
-                  return (
-                    <section key={role} aria-label={`${ROLE_LABELS[role]} components`} className="space-y-2">
-                      <h3 className={MICRO}>
-                        {ROLE_LABELS[role]}
-                        <span className="ml-2 normal-case tracking-normal">{ROLE_EXPLAINERS[role]}</span>
-                      </h3>
-                      <ul className="space-y-2">
-                        {components.map((component) => (
-                          <StrategyComponentEditor
-                            key={component.id}
-                            component={component}
-                            model={findModel(catalog, component.rule_name)}
-                            weighted={role === 'exit' ? exitWeighted : entryWeighted}
-                            coverage={fundamentals.coverage}
-                            onChange={updateComponent}
-                            onRemove={() => removeComponent(component.id)}
-                          />
-                        ))}
-                      </ul>
-                    </section>
-                  );
-                })
-              )}
-            </Panel>
-          </div>
 
-          <div id={SECTION_IDS.combine} className="scroll-mt-4">
-            <Panel
-              title="2 · Combine"
-              bodyClassName="grid grid-cols-1 gap-3 sm:grid-cols-2"
-            >
-              <div className="space-y-1">
-                <label className={MICRO} htmlFor="entry-logic">
-                  Entry logic
-                </label>
-                <Select
-                  id="entry-logic"
-                  value={draft.entry_logic}
-                  onChange={(event) =>
-                    setDraft((current) => ({ ...current, entry_logic: event.target.value as CombineLogic }))
-                  }
-                >
-                  {COMBINE_LOGICS.map((logic) => (
-                    <option key={logic} value={logic}>
-                      {LOGIC_LABELS[logic]}
-                    </option>
-                  ))}
-                </Select>
-                <p className="text-xs text-muted-foreground">{LOGIC_EXPLAINERS[draft.entry_logic]}</p>
-              </div>
-
-              <div className="space-y-1">
-                <label className={MICRO} htmlFor="exit-logic">
-                  Exit logic
-                </label>
-                <Select
-                  id="exit-logic"
-                  value={draft.exit_logic}
-                  onChange={(event) =>
-                    setDraft((current) => ({ ...current, exit_logic: event.target.value as CombineLogic }))
-                  }
-                >
-                  {COMBINE_LOGICS.map((logic) => (
-                    <option key={logic} value={logic}>
-                      {LOGIC_LABELS[logic]}
-                    </option>
-                  ))}
-                </Select>
-                <p className="text-xs text-muted-foreground">{LOGIC_EXPLAINERS[draft.exit_logic]}</p>
-              </div>
-
-              {/* Thresholds only mean something to weighted logic. */}
-              {entryWeighted ? (
-                <div className="space-y-1">
-                  <label className={MICRO} htmlFor="entry-threshold">
-                    Entry threshold
-                  </label>
-                  <Input
-                    id="entry-threshold"
-                    type="number"
-                    step="any"
-                    min={0}
-                    value={String(draft.entry_threshold)}
-                    onChange={(event) =>
-                      setDraft((current) => ({ ...current, entry_threshold: Number(event.target.value) }))
-                    }
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Net weight the firing entry components must reach before a position opens.
-                  </p>
-                </div>
-              ) : null}
-
-              {exitWeighted ? (
-                <div className="space-y-1">
-                  <label className={MICRO} htmlFor="exit-threshold">
-                    Exit threshold
-                  </label>
-                  <Input
-                    id="exit-threshold"
-                    type="number"
-                    step="any"
-                    min={0}
-                    value={String(draft.exit_threshold)}
-                    onChange={(event) =>
-                      setDraft((current) => ({ ...current, exit_threshold: Number(event.target.value) }))
-                    }
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Net weight the firing exit components must reach before the position closes.
-                  </p>
-                </div>
-              ) : null}
-
-              <div className="space-y-1">
-                <label className={MICRO} htmlFor="combine-window">
-                  Agreement window
-                </label>
-                <Input
-                  id="combine-window"
-                  type="number"
-                  min={1}
-                  step="1"
-                  value={String(draft.combine_window_days)}
-                  onChange={(event) =>
-                    setDraft((current) => ({ ...current, combine_window_days: Number(event.target.value) }))
-                  }
-                />
-                <p className="text-xs text-muted-foreground">
-                  Components may agree within this many bars rather than only on the same bar. 1 means
-                  "fired on this bar".
-                </p>
-              </div>
-            </Panel>
-          </div>
-
-          <div id={SECTION_IDS.universe} className="scroll-mt-4">
-            <Panel
-              title="3 · Universe & window"
-              actions={
-                <StatusBadge tone="idle" title={BAR_FREQUENCY_EXPLAINERS[frequency]}>
-                  {BAR_FREQUENCY_LABELS[frequency]}
-                </StatusBadge>
-              }
-              bodyClassName="space-y-3"
-            >
-              <div className="space-y-1">
-                <label className={MICRO} htmlFor="strategy-bars">
-                  Bars
-                </label>
-                <Select
-                  id="strategy-bars"
-                  value={frequency}
-                  aria-describedby="strategy-bars-explainer"
-                  onChange={(event) => setFrequency(event.target.value as BarFrequency)}
-                >
-                  {BAR_FREQUENCIES.map((option) => (
-                    <option key={option} value={option}>
-                      {BAR_FREQUENCY_LABELS[option]}
-                    </option>
-                  ))}
-                </Select>
-                <p id="strategy-bars-explainer" className="text-xs text-muted-foreground">
-                  {BAR_FREQUENCY_EXPLAINERS[frequency]}
-                  {isIntraday(frequency)
-                    ? ` Indicator periods and the agreement window count ${BAR_FREQUENCY_LABELS[frequency]} bars (${BARS_PER_SESSION[frequency]} a session); holding periods and cooldowns stay in trading days. Percentage stops sized for daily bars will rarely trigger; ATR stops scale on their own. Positions may be held overnight.`
-                    : ''}
-                </p>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className={MICRO} htmlFor="strategy-start">
-                    Start
-                  </label>
-                  <input
-                    id="strategy-start"
-                    type="date"
-                    className={fieldClasses}
-                    value={startDate}
-                    onChange={(event) => setStartDate(event.target.value)}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className={MICRO} htmlFor="strategy-end">
-                    End
-                  </label>
-                  <input
-                    id="strategy-end"
-                    type="date"
-                    className={fieldClasses}
-                    value={endDate}
-                    onChange={(event) => setEndDate(event.target.value)}
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <p className={MICRO}>Universe</p>
-                <UniversePicker instruments={instruments} selected={symbols} onChange={setSymbols} />
-              </div>
-            </Panel>
-          </div>
-
-          <div id={SECTION_IDS.execution} className="scroll-mt-4">
-            <Panel
-              title="4 · Execution"
-              bodyClassName="space-y-3"
-            >
-              <details
-                open={advancedOpen}
-                onToggle={(event) => setAdvancedOpen((event.target as HTMLDetailsElement).open)}
-                data-testid="execution-advanced"
-              >
-                <summary
-                  className="flex cursor-pointer list-none items-start gap-2 text-xs"
-                  aria-label={`Execution settings, ${changedCount} changed from the defaults`}
-                >
-                  <ChevronRight
-                    size={16}
-                    strokeWidth={1.5}
-                    aria-hidden="true"
-                    className={advancedOpen ? 'mt-px shrink-0 rotate-90' : 'mt-px shrink-0'}
-                  />
-                  <span className="min-w-0 flex-1" data-testid="execution-summary">
-                    <span className={MICRO}>
-                      Settings{changedCount > 0 ? ` · ${changedCount} changed` : ''}
-                    </span>{' '}
-                    {summary.map((item, index) => (
-                      <span key={item.key}>
-                        {index > 0 ? <span className="text-muted-foreground"> · </span> : null}
-                        <span
-                          title={item.caution}
-                          className={item.changed ? 'text-foreground' : 'text-muted-foreground'}
-                        >
-                          {item.changed ? '● ' : ''}
-                          {item.text}
-                          {item.caution ? (
-                            <TriangleAlert
-                              size={16}
-                              strokeWidth={1.5}
-                              aria-label={item.caution}
-                              className="ml-0.5 inline align-[-3px] text-destructive"
-                            />
-                          ) : null}
-                        </span>
-                      </span>
+                {warnings.length > 0 ? (
+                  <ul data-testid="strategy-warnings" className="space-y-1">
+                    {warnings.map((warning) => (
+                      <li
+                        key={warning}
+                        role="alert"
+                        className="flex gap-2 border border-border px-2 py-1.5 text-xs text-muted-foreground"
+                      >
+                        <TriangleAlert
+                          size={16}
+                          strokeWidth={1.5}
+                          aria-hidden="true"
+                          className="mt-px shrink-0"
+                        />
+                        {warning}
+                      </li>
                     ))}
-                  </span>
-                </summary>
-                <div className="mt-3">
-                  <ExecutionForm
-                    value={draft.execution}
-                    onChange={(execution) => setDraft((current) => ({ ...current, execution }))}
+                  </ul>
+                ) : null}
+
+                {notice ? (
+                  <p role="status" data-testid="builder-notice" className="text-xs text-primary">
+                    {notice}
+                  </p>
+                ) : null}
+                {saveError ? (
+                  <p
+                    role="alert"
+                    data-testid="builder-save-error"
+                    className="border border-destructive/40 bg-destructive/5 px-2 py-1.5 text-xs text-destructive"
+                  >
+                    {saveError}
+                  </p>
+                ) : null}
+
+                {draft.components.length === 0 ? (
+                  <EmptyState
+                    testId="builder-no-components"
+                    icon={FlaskConical}
+                    title="No components yet"
+                    detail="Pick a signal from the Signals list and give it a role, or load one of the templates to see a finished strategy."
+                    action={
+                      shownList !== 'signals' ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setList('signals')}
+                        >
+                          Show signals
+                        </Button>
+                      ) : undefined
+                    }
+                  />
+                ) : (
+                  ROLE_ORDER.map((role) => {
+                    const components = byRole(role);
+                    if (components.length === 0) return null;
+                    return (
+                      <section
+                        key={role}
+                        aria-label={`${ROLE_LABELS[role]} components`}
+                        className="space-y-2"
+                      >
+                        <h3 className={MICRO}>
+                          {ROLE_LABELS[role]}
+                          <span className="ml-2 normal-case tracking-normal">
+                            {ROLE_EXPLAINERS[role]}
+                          </span>
+                        </h3>
+                        <ul className="space-y-2">
+                          {components.map((component) => (
+                            <StrategyComponentEditor
+                              key={component.id}
+                              component={component}
+                              model={findModel(catalog, component.rule_name)}
+                              weighted={role === 'exit' ? exitWeighted : entryWeighted}
+                              coverage={fundamentals.coverage}
+                              onChange={updateComponent}
+                              onRemove={() => removeComponent(component.id)}
+                            />
+                          ))}
+                        </ul>
+                      </section>
+                    );
+                  })
+                )}
+              </Panel>
+            </div>
+
+            <div id={SECTION_IDS.combine} className="scroll-mt-4">
+              <Panel title="2 · Combine" bodyClassName="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <label className={MICRO} htmlFor="entry-logic">
+                    <Term id="entry_logic">Entry logic</Term>
+                  </label>
+                  <Select
+                    id="entry-logic"
+                    value={draft.entry_logic}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        entry_logic: event.target.value as CombineLogic,
+                      }))
+                    }
+                  >
+                    {COMBINE_LOGICS.map((logic) => (
+                      <option key={logic} value={logic}>
+                        {LOGIC_LABELS[logic]}
+                      </option>
+                    ))}
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    {LOGIC_EXPLAINERS[draft.entry_logic]}
+                  </p>
+                </div>
+
+                <div className="space-y-1">
+                  <label className={MICRO} htmlFor="exit-logic">
+                    <Term id="exit_logic">Exit logic</Term>
+                  </label>
+                  <Select
+                    id="exit-logic"
+                    value={draft.exit_logic}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        exit_logic: event.target.value as CombineLogic,
+                      }))
+                    }
+                  >
+                    {COMBINE_LOGICS.map((logic) => (
+                      <option key={logic} value={logic}>
+                        {LOGIC_LABELS[logic]}
+                      </option>
+                    ))}
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    {LOGIC_EXPLAINERS[draft.exit_logic]}
+                  </p>
+                </div>
+
+                {/* Thresholds only mean something to weighted logic. */}
+                {entryWeighted ? (
+                  <div className="space-y-1">
+                    <label className={MICRO} htmlFor="entry-threshold">
+                      <Term id="weighted_threshold">Entry threshold</Term>
+                    </label>
+                    <Input
+                      id="entry-threshold"
+                      type="number"
+                      step="any"
+                      min={0}
+                      value={String(draft.entry_threshold)}
+                      onChange={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          entry_threshold: Number(event.target.value),
+                        }))
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Net weight the firing entry components must reach before a position opens.
+                    </p>
+                  </div>
+                ) : null}
+
+                {exitWeighted ? (
+                  <div className="space-y-1">
+                    <label className={MICRO} htmlFor="exit-threshold">
+                      <Term id="weighted_threshold">Exit threshold</Term>
+                    </label>
+                    <Input
+                      id="exit-threshold"
+                      type="number"
+                      step="any"
+                      min={0}
+                      value={String(draft.exit_threshold)}
+                      onChange={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          exit_threshold: Number(event.target.value),
+                        }))
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Net weight the firing exit components must reach before the position closes.
+                    </p>
+                  </div>
+                ) : null}
+
+                <div className="space-y-1">
+                  <label className={MICRO} htmlFor="combine-window">
+                    <Term id="agreement_window" example={draft.combine_window_days}>
+                      Agreement window
+                    </Term>
+                  </label>
+                  <Input
+                    id="combine-window"
+                    type="number"
+                    min={1}
+                    step="1"
+                    value={String(draft.combine_window_days)}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        combine_window_days: Number(event.target.value),
+                      }))
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Components may agree within this many bars rather than only on the same bar. 1
+                    means "fired on this bar".
+                  </p>
+                </div>
+              </Panel>
+            </div>
+
+            <div id={SECTION_IDS.universe} className="scroll-mt-4">
+              <Panel
+                title="3 · Universe & window"
+                actions={
+                  <StatusBadge tone="idle" title={BAR_FREQUENCY_EXPLAINERS[frequency]}>
+                    {BAR_FREQUENCY_LABELS[frequency]}
+                  </StatusBadge>
+                }
+                bodyClassName="space-y-3"
+              >
+                <div className="space-y-1">
+                  <label className={MICRO} htmlFor="strategy-bars">
+                    <Term id="bar_frequency">Bars</Term>
+                  </label>
+                  <Select
+                    id="strategy-bars"
+                    value={frequency}
+                    aria-describedby="strategy-bars-explainer"
+                    onChange={(event) => setFrequency(event.target.value as BarFrequency)}
+                  >
+                    {BAR_FREQUENCIES.map((option) => (
+                      <option key={option} value={option}>
+                        {BAR_FREQUENCY_LABELS[option]}
+                      </option>
+                    ))}
+                  </Select>
+                  <p id="strategy-bars-explainer" className="text-xs text-muted-foreground">
+                    {BAR_FREQUENCY_EXPLAINERS[frequency]}
+                    {isIntraday(frequency)
+                      ? ` Indicator periods and the agreement window count ${BAR_FREQUENCY_LABELS[frequency]} bars (${BARS_PER_SESSION[frequency]} a session); holding periods and cooldowns stay in trading days. Percentage stops sized for daily bars will rarely trigger; ATR stops scale on their own. Positions may be held overnight.`
+                      : ''}
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className={MICRO} htmlFor="strategy-start">
+                      Start
+                    </label>
+                    <input
+                      id="strategy-start"
+                      type="date"
+                      className={fieldClasses}
+                      value={startDate}
+                      onChange={(event) => setStartDate(event.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className={MICRO} htmlFor="strategy-end">
+                      End
+                    </label>
+                    <input
+                      id="strategy-end"
+                      type="date"
+                      className={fieldClasses}
+                      value={endDate}
+                      onChange={(event) => setEndDate(event.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <p className={MICRO}>
+                    <Term id="universe">Universe</Term>
+                  </p>
+                  <UniversePicker
+                    instruments={instruments}
+                    selected={symbols}
+                    onChange={setSymbols}
                   />
                 </div>
-              </details>
-            </Panel>
+              </Panel>
+            </div>
+
+            <div id={SECTION_IDS.execution} className="scroll-mt-4">
+              <Panel title="4 · Execution" bodyClassName="space-y-3">
+                <details
+                  open={advancedOpen}
+                  onToggle={(event) => setAdvancedOpen((event.target as HTMLDetailsElement).open)}
+                  data-testid="execution-advanced"
+                >
+                  <summary
+                    className="flex cursor-pointer list-none items-start gap-2 text-xs"
+                    aria-label={`Execution settings, ${changedCount} changed from the defaults`}
+                  >
+                    <ChevronRight
+                      size={16}
+                      strokeWidth={1.5}
+                      aria-hidden="true"
+                      className={advancedOpen ? 'mt-px shrink-0 rotate-90' : 'mt-px shrink-0'}
+                    />
+                    <span className="min-w-0 flex-1" data-testid="execution-summary">
+                      <span className={MICRO}>
+                        Settings{changedCount > 0 ? ` · ${changedCount} changed` : ''}
+                      </span>{' '}
+                      {summary.map((item, index) => (
+                        <span key={item.key}>
+                          {index > 0 ? <span className="text-muted-foreground"> · </span> : null}
+                          <span
+                            title={item.caution}
+                            className={item.changed ? 'text-foreground' : 'text-muted-foreground'}
+                          >
+                            {item.changed ? '● ' : ''}
+                            {item.text}
+                            {item.caution ? (
+                              <TriangleAlert
+                                size={16}
+                                strokeWidth={1.5}
+                                aria-label={item.caution}
+                                className="ml-0.5 inline align-[-3px] text-destructive"
+                              />
+                            ) : null}
+                          </span>
+                        </span>
+                      ))}
+                    </span>
+                  </summary>
+                  <div className="mt-3">
+                    <ExecutionForm
+                      value={draft.execution}
+                      onChange={(execution) => setDraft((current) => ({ ...current, execution }))}
+                    />
+                  </div>
+                </details>
+              </Panel>
+            </div>
           </div>
         </div>
-      </div>
 
-      <SubmitBar
-        name={draft.name}
-        onNameChange={(name) => setDraft((current) => ({ ...current, name }))}
-        saved={Boolean(draft.id)}
-        dirty={dirty}
-        saving={saving}
-        onSave={() => void save(false)}
-        onSaveAsCopy={() => void save(true)}
-        size={size}
-        components={draft.components.length}
-        symbolsCount={symbols.length}
-        blockers={blockers}
-        hasErrors={hasErrors}
-        warningCount={warnings.length}
-        runError={runError}
-        submitting={submitting}
-        canSubmit={canSubmit}
-        onSubmit={() => void submit()}
-        queued={queued}
-        onShowRun={showRun}
-        onDismissQueued={() => setQueued(null)}
-        onJump={jumpTo}
-      />
-    </div>
+        <SubmitBar
+          name={draft.name}
+          onNameChange={(name) => setDraft((current) => ({ ...current, name }))}
+          saved={Boolean(draft.id)}
+          dirty={dirty}
+          saving={saving}
+          onSave={() => void save(false)}
+          onSaveAsCopy={() => void save(true)}
+          size={size}
+          components={draft.components.length}
+          symbolsCount={symbols.length}
+          blockers={blockers}
+          hasErrors={hasErrors}
+          warningCount={warnings.length}
+          runError={runError}
+          submitting={submitting}
+          canSubmit={canSubmit}
+          onSubmit={() => void submit()}
+          queued={queued}
+          onShowRun={showRun}
+          onDismissQueued={() => setQueued(null)}
+          onJump={jumpTo}
+        />
+      </div>
+    </GlossaryFrequency>
   );
 }
-

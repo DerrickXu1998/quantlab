@@ -31,7 +31,8 @@
 # changing them in .env alone does NOT change them in the databases.
 #
 # Memory budget (host has 8 GiB): clickhouse 2.5G + postgres 1G + backend 1G +
-# caddy 128M, plus the on-demand ingest container's 2G.
+# worker 1.5G + caddy 128M. Data loading does not run here: it is
+# quantlab-data-pipeline's job, run over the IAP tunnel.
 
 name: quantlab
 
@@ -163,11 +164,14 @@ services:
 
   # --------------------------------------------------------------------------
   # Schema owner. Runs to completion on every deploy, before the new backend
-  # is allowed to serve. Shares the ingest image (same Dockerfile) -- pin the
-  # same tag or the two drift and this one applies an out-of-date schema.
+  # is allowed to serve: `quantlab migrate` from the migrate image
+  # (Dockerfile.migrate), which carries the schema in src/quantlab/store and
+  # nothing else.
   # --------------------------------------------------------------------------
   migrate:
-    image: ${QUANTLAB_INGEST_IMAGE:?set QUANTLAB_INGEST_IMAGE in .env}
+    # Either name: QUANTLAB_INGEST_IMAGE is the old one, still in a rollback's
+    # .env.images.prev. remote-deploy.sh writes both.
+    image: ${QUANTLAB_MIGRATE_IMAGE:-${QUANTLAB_INGEST_IMAGE}}
     command: ["migrate"]
     environment:
       QUANTLAB_DB_URL: ${QUANTLAB_DB_URL:?set QUANTLAB_DB_URL in .env}
@@ -179,38 +183,6 @@ services:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
-    logging: *logging
-    restart: "no"
-
-  # --------------------------------------------------------------------------
-  # Historical data ingest. Never part of `up` -- it reaches the network, so it
-  # runs on demand (`make prod-ingest SYMBOLS="AAPL.US"` from your laptop, or
-  # `docker compose run --rm ingest ...` on the VM).
-  # --------------------------------------------------------------------------
-  ingest:
-    image: ${QUANTLAB_INGEST_IMAGE:?set QUANTLAB_INGEST_IMAGE in .env}
-    profiles: ["ingest"]
-    environment:
-      QUANTLAB_DB_URL: ${QUANTLAB_DB_URL}
-      QUANTLAB_CH_URL: ${QUANTLAB_CH_URL}
-      PGPASSWORD: ${QUANTLAB_PG_PASSWORD}
-      QUANTLAB_CH_PASSWORD: ${QUANTLAB_CH_PASSWORD}
-      QUANTLAB_HOME: /var/lib/quantlab
-      QUANTLAB_USER_AGENT: ${QUANTLAB_USER_AGENT:-quantlab/0.1 (research)}
-      SEC_USER_AGENT: ${SEC_USER_AGENT:-}
-      FRED_API_KEY: ${FRED_API_KEY:-}
-      COMPANIES_HOUSE_API_KEY: ${COMPANIES_HOUSE_API_KEY:-}
-    volumes:
-      - quantlab-cache:/var/lib/quantlab
-    depends_on:
-      postgres:
-        condition: service_healthy
-      clickhouse:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          memory: 2048M
     logging: *logging
     restart: "no"
 
@@ -331,8 +303,8 @@ services:
           # One large run at a time (~650 MB at the 6M-bar intraday ceiling,
           # research/runner.py) beside one quick-lane run, plus performance.
           # Always-on limits total 6.1 GB of the VM's 7.9 GB (clickhouse 2.5 +
-          # postgres 1 + backend 1 + worker 1.5 + caddy 0.1); the one-off ingest
-          # job adds 2 if run at the same time.
+          # postgres 1 + backend 1 + worker 1.5 + caddy 0.1); data loading runs
+          # from quantlab-data-pipeline over the IAP tunnel, not on this VM.
           memory: 1536M
     logging: *logging
     restart: unless-stopped
@@ -352,7 +324,6 @@ volumes:
   # `docker volume rm quantlab_quantlab-chdata quantlab_quantlab-pgdata`.
   quantlab-chdata:
   quantlab-pgdata:
-  quantlab-cache:         # provider HTTP cache + Parquet exports
   quantlab-data:          # synthetic demo SQLite (fallback dataset)
   quantlab-caddy-data:    # TLS certificates -- losing this re-issues them
   quantlab-caddy-config:

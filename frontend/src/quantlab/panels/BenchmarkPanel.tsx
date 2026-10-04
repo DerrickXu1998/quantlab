@@ -1,4 +1,6 @@
 import type { BenchmarkRegression } from '../../api/types';
+import { Term } from '../../glossary/Term';
+import type { TermId } from '../../glossary/terms';
 import { StatGrid } from '../../components/ui/layout';
 import { Numeric } from '../chrome/Numeric';
 import { Panel } from '../chrome/Panel';
@@ -10,16 +12,18 @@ const MIN_OBSERVATIONS = 60;
 
 function Stat({
   label,
+  term,
   hint,
   children,
 }: {
   label: string;
+  term?: TermId;
   hint: string;
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-1" title={hint}>
-      <span className={MICRO}>{label}</span>
+    <div className="flex flex-col gap-1" title={term ? undefined : hint}>
+      <span className={MICRO}>{term ? <Term id={term}>{label}</Term> : label}</span>
       <span className="text-lg">{children}</span>
     </div>
   );
@@ -76,30 +80,35 @@ export function BenchmarkPanel({
             <StatGrid min="7.5rem">
               <Stat
                 label="Alpha (ann.)"
+                term="alpha"
                 hint="Annualised intercept of daily strategy returns on daily benchmark returns, risk-free rate taken as zero."
               >
                 <Numeric value={regression.alpha} format="signedPercent" tone="signed" />
               </Stat>
               <Stat
                 label="Beta"
+                term="beta"
                 hint="Sensitivity to the benchmark: 1 moves with it, 0 is unrelated, negative moves against it."
               >
                 <Numeric value={regression.beta} format="ratio" />
               </Stat>
               <Stat
                 label="R²"
+                term="r_squared"
                 hint="Share of the strategy's daily variance explained by the benchmark."
               >
                 <Numeric value={regression.r_squared} format="ratio" />
               </Stat>
               <Stat
                 label="Tracking error"
+                term="tracking_error"
                 hint="Annualised volatility of strategy minus benchmark returns."
               >
                 <Numeric value={regression.tracking_error ?? null} format="percent" />
               </Stat>
               <Stat
                 label="Info ratio"
+                term="information_ratio"
                 hint="Annualised active return over tracking error. A dash means it is not measurable."
               >
                 <Numeric value={regression.information_ratio ?? null} format="ratio" />

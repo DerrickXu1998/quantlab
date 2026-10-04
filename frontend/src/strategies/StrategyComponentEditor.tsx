@@ -6,6 +6,7 @@ import { ROLE_EXPLAINERS, ROLE_LABELS, STRATEGY_ROLES, UNIT_PRESENTATION, unitOf
 import { Button } from '../components/ui/button';
 import { Input, Select } from '../components/ui/field';
 import { StatusBadge } from '../components/ui/status-badge';
+import { ParamTerm, Term } from '../glossary/Term';
 import { displayBound, displayValue, wireValue } from '../workbench/paramSpec';
 import { conceptCoverage, conceptLabel } from './fundamentals';
 import { canFillRole, componentErrors, describeComponent, roleRefusal } from './strategyModel';
@@ -90,7 +91,7 @@ export function StrategyComponentEditor({
         <>
           <div className="grid grid-cols-2 gap-2">
             <label className={MICRO}>
-              Role
+              <Term id={`role_${component.role}`}>Role</Term>
               <Select
                 className="mt-1"
                 value={component.role}
@@ -156,9 +157,13 @@ export function StrategyComponentEditor({
               const raw = component.values[spec.name] ?? '';
               return (
                 <label key={spec.name} className={MICRO}>
-                  <span className="normal-case tracking-normal" title={spec.description}>
-                    <span className="font-mono uppercase tracking-[0.12em]">{spec.name}</span>
-                  </span>
+                  <ParamTerm
+                    rule={component.rule_name}
+                    name={spec.name}
+                    description={spec.description}
+                    declaredUnit={presentation?.help}
+                    example={raw === '' || Number.isNaN(Number(raw)) ? null : Number(raw)}
+                  />
                   {spec.type === 'enum' ? (
                     <Select
                       className="mt-1"

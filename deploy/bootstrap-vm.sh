@@ -218,7 +218,7 @@ if [ ! -f "$APP_DIR/.env.images" ]; then
 # Written by .github/workflows/deploy.yml on every deploy. Do not edit by hand.
 # Two images: the SPA is served by Vercel, so no frontend image runs here.
 QUANTLAB_BACKEND_IMAGE=
-QUANTLAB_INGEST_IMAGE=
+QUANTLAB_MIGRATE_IMAGE=
 IMAGES
 	chown "$DEPLOY_USER:$DEPLOY_USER" "$APP_DIR/.env.images"
 fi
