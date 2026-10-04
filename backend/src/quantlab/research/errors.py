@@ -141,7 +141,7 @@ class MissingSeriesError(ExperimentError):
         self.series = sorted(series)
         fred = [name for name in self.series if name.endswith(".FRED")]
         how = (
-            " Load them with `quantlab ingest-macro --provider fred` (make ingest-fred)."
+            " Load them with quantlab-data-pipeline: `make ingest-fred TARGET=prod`."
             if fred
             else ""
         )

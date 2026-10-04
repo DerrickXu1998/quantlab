@@ -122,16 +122,16 @@ jobs:
             context: ./backend
             dockerfile: ./backend/Dockerfile
             cache_scope: backend
-          # Not optional, despite never being part of `up`: the `migrate`
-          # service runs from this image, and the backend will not start until
-          # that container has exited successfully.
-          #
-          # Its build context is the repository root -- it packages
-          # src/quantlab, not backend/src.
-          - image: quantlab-ingest
+          # The warehouse schema and `quantlab migrate`. Not optional: the
+          # `migrate` service runs from this image, and the backend will not
+          # start until that container has exited successfully. Its build
+          # context is the repository root -- it packages src/quantlab (the
+          # schema), not backend/src. Data ingestion is not here: it lives in
+          # quantlab-data-pipeline.
+          - image: quantlab-migrate
             context: .
-            dockerfile: ./Dockerfile.ingest
-            cache_scope: ingest
+            dockerfile: ./Dockerfile.migrate
+            cache_scope: migrate
           # No quantlab-frontend. Vercel builds and serves the SPA from
           # frontend/ on every push to this repository; building it here too
           # would ship one artefact twice. CI still runs its tests.
@@ -194,7 +194,7 @@ jobs:
           base="${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_AR_REPO }}"
           {
             echo "backend=${base}/quantlab-backend:${{ github.sha }}"
-            echo "ingest=${base}/quantlab-ingest:${{ github.sha }}"
+            echo "migrate=${base}/quantlab-migrate:${{ github.sha }}"
           } >> "$GITHUB_OUTPUT"
 
       # gcloud generates an SSH key on first use and registers it with the
@@ -228,7 +228,7 @@ jobs:
             --zone "${{ vars.GCP_ZONE }}" --tunnel-through-iap --quiet \
             --command "sudo bash \$HOME/${stage}/remote-deploy.sh \
               '${{ steps.images.outputs.backend }}' \
-              '${{ steps.images.outputs.ingest }}'"
+              '${{ steps.images.outputs.migrate }}'"
 
       - name: Clean up the staging directory
         if: always()
