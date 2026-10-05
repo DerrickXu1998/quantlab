@@ -285,10 +285,12 @@ nothing in particular.
 |---|---|---|
 | `GET /instruments/{symbol}/fundamentals?as_of=` | `facts_as_of` | exists, unrouted — thin |
 | `GET /instruments/{symbol}/overview?as_of=` | composed | meta + last close + facts + signal counts + coverage |
-| `GET /screen?universe=&...` | `load_facts_for` | universe-bounded; returns rank + per-metric coverage |
+| `GET /screen?universe=&...` | `load_facts_for` + Tiingo | universe-bounded; returns rank + per-metric coverage |
+| `GET /instruments/{symbol}/fundamentals/tiingo?as_of=&start=&releases=` | Tiingo rows | profile, daily valuation, as-reported statements grid |
 
-All three resolve fundamentals through `load_facts_for`, so there remains one
-point-in-time implementation in the system.
+The three concept reads resolve fundamentals through `load_facts_for`, so there
+remains one point-in-time implementation for filed concepts. Tiingo's figures
+(§9) are read as Tiingo published them, cut at the same as-of date.
 
 ---
 
@@ -403,3 +405,48 @@ was comprehension, and the two want opposite things.
 `usePanelSize` stays. It declares its own structural shape and never imported
 the library, so charts size themselves as before; its test fake moved to
 `tests/mocks/panel-api.ts`.
+
+## 9. Tiingo's fundamentals in Research
+
+The US list's fundamentals come from Tiingo (constitution v1.3.0, Principle
+III): daily valuation metrics and as-reported statements, from 2023-10-05.
+None of it is reachable through the filed-concept path above -- statement rows
+are stored with `concept = ''` so they never compete with SEC figures in a
+backtest, and the daily metrics are concepts no rule reads -- so Research reads
+them directly, by provider and Tiingo dataCode.
+
+**Screen.** Thirteen published metrics sit beside the seven computed ratios,
+labelled as Tiingo's (`P/E (Tiingo)` beside `P/E`): market cap, enterprise
+value, P/E, P/B and trailing PEG daily; ROE, ROA, gross margin, current ratio,
+debt/equity, revenue and EPS quarter-on-quarter growth, and the Piotroski
+F-score per quarterly release. Coverage names the field: `needs Tiingo's
+peRatio`. Point in time as everything else here: the newest value filed on or
+before the as-of date, unknown when older than a week (daily) or 200 days
+(quarterly). Not `profitMargin`, which Tiingo marks deprecated -- it is a gross
+margin.
+
+- **A non-positive multiple is unknown, not cheap.** Tiingo publishes negative
+  P/E, P/B, PEG and debt/equity (on 2026-10-02: 28, 34, 142 and, for negative
+  book, McDonald's at -53). Each would pass an upper bound and sort as the
+  cheapest name, so the screen treats them as never measured -- the same rule
+  as the computed ratios' non-positive denominators. Enterprise value is not a
+  multiple and keeps its sign.
+- **One query, two halves.** `WHERE ... (daily) OR (overview)` measured 9.5 s
+  on production for 503 names: the OR kept the planner off `concept` and the
+  quarterly window dragged in 200 days of daily rows (359,104). As a `UNION
+  ALL`, each half on `fundamentals_pit_idx` with its own floor, it is 1.0 s and
+  23,033 rows; the whole screen answers in 0.9 s.
+- **Columns follow coverage.** Every metric is fetched; the table starts from
+  those measured for at least one name (a curated eight when more), and the
+  Columns chooser changes the view without re-running. Metrics measured for
+  nobody collapse into one sentence naming what they would need.
+
+**Company.** A full-width *Tiingo fundamentals* panel: the /meta profile
+(Tiingo's SIC-derived sector beside the catalogue's GICS one, reporting
+currency flagged when not USD, permaTicker, SEC filings link), the daily
+valuation history one metric at a time, and the statements as a grid -- one
+statement per tab, fields by releases, newest first, each column headed by its
+fiscal period and the date it was posted to the SEC, filterable by name or
+dataCode, Tiingo's definition on hover. The annual report and the fourth
+quarter share a release date and appear as two columns. Measured for AAPL: 3.7k
+daily rows in 12 ms and 1.1k statement rows in 3.6 ms.

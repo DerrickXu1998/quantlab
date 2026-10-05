@@ -32,8 +32,19 @@ export function newDraft(metric: ScreenMetric): ConstraintDraft {
  * value is sent exactly as typed and echoed back formatted so the user can see
  * what the number they typed actually means.
  */
+const FRACTIONS: ReadonlySet<ScreenMetric> = new Set<ScreenMetric>([
+  'roe',
+  'net_margin',
+  'gross_margin',
+  'roe_reported',
+  'roa_reported',
+  'gross_margin_reported',
+  'revenue_qoq',
+  'eps_qoq',
+]);
+
 export function isFraction(metric: ScreenMetric): boolean {
-  return metric === 'roe' || metric === 'net_margin' || metric === 'gross_margin';
+  return FRACTIONS.has(metric);
 }
 
 /** What a typed bound means, written out. Empty is unbounded, not zero. */

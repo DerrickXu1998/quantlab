@@ -336,6 +336,37 @@ def get_company_overview(
 
 
 @router.get(
+    "/instruments/{symbol}/fundamentals/tiingo",
+    response_model=schemas.CompanyFundamentals,
+    tags=["instruments"],
+    operation_id="getTiingoFundamentals",
+    dependencies=[Depends(require_seeded)],
+)
+def get_company_fundamentals(
+    request: Request,
+    symbol: Annotated[str, Path(pattern=SYMBOL_PATTERN)],
+    as_of: date | None = None,
+    start: Annotated[
+        date | None, Query(description="First day of the daily metrics; default all held")
+    ] = None,
+    releases: Annotated[int, Query(ge=1, le=40, description="Newest statement releases")] = 12,
+) -> dict:
+    """Tiingo's profile, daily valuation metrics and as-reported statements.
+
+    Everything filed on or before ``as_of``: the statements grid ends at the
+    newest release knowable that day and the daily metrics at that day's
+    close, so the page agrees with a backtest standing on the same date.
+    """
+    resolved = _as_of(as_of)
+    result = backend(request).company_fundamentals(
+        symbol, resolved, start.isoformat() if start else None, releases
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"unknown symbol: {symbol}")
+    return result
+
+
+@router.get(
     "/universes",
     response_model=schemas.UniverseList,
     tags=["instruments"],

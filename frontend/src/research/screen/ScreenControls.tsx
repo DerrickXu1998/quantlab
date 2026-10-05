@@ -3,7 +3,7 @@ import type { ScreenMetric, ScreenMetricCoverage } from '../../api/types';
 import { SCREEN_METRICS } from '../../api/types';
 import { Button } from '../../components/ui/button';
 import { fieldClasses } from '../../components/ui/field';
-import { METRIC_FORMAT } from '../format';
+import { METRIC_FORMAT, metricSource } from '../format';
 import { CoverageLine } from './Coverage';
 import { echoBound, isFraction, type ConstraintDraft, type DraftErrors } from './constraints';
 import type { Universe } from '../../api/client';
@@ -204,11 +204,22 @@ function ConstraintRow({
           value={draft.metric}
           onChange={(event) => onChange({ metric: event.target.value as ScreenMetric })}
         >
-          {SCREEN_METRICS.map((metric) => (
-            <option key={metric} value={metric}>
-              {METRIC_FORMAT[metric].label}
-            </option>
-          ))}
+          {/* Grouped by source: Tiingo's published figures are the ones held
+              for the US list; the computed ratios need SEC-filed concepts. */}
+          <optgroup label="Published by Tiingo">
+            {SCREEN_METRICS.filter((metric) => metricSource(metric) === 'tiingo').map((metric) => (
+              <option key={metric} value={metric}>
+                {METRIC_FORMAT[metric].label}
+              </option>
+            ))}
+          </optgroup>
+          <optgroup label="Computed from filed accounts">
+            {SCREEN_METRICS.filter((metric) => metricSource(metric) === 'filed').map((metric) => (
+              <option key={metric} value={metric}>
+                {METRIC_FORMAT[metric].label}
+              </option>
+            ))}
+          </optgroup>
         </select>
         <Button
           type="button"

@@ -684,10 +684,88 @@ class CompanyOverview(BaseModel):
     signal_total: int = 0
 
 
+class TiingoProfile(BaseModel):
+    """Tiingo's /meta snapshot for the company: reference data, refreshed on
+    each fundamentals ingest, not a point-in-time history."""
+
+    name: str | None = None
+    #: Tiingo's sector and industry, derived from the SIC code -- a different
+    #: scheme from the catalogue's own ``sector``, shown beside it, not over it.
+    sector: str | None = None
+    industry: str | None = None
+    sic_code: int | None = None
+    sic_sector: str | None = None
+    sic_industry: str | None = None
+    location: str | None = None
+    #: What the company files in. Tiingo converts every figure to USD, so a
+    #: value other than "usd" means the numbers went through an FX rate.
+    reporting_currency: str | None = None
+    is_adr: bool | None = None
+    is_active: bool | None = None
+    perma_ticker: str | None = None
+    company_website: str | None = None
+    sec_filing_website: str | None = None
+    statement_last_updated: str | None = None
+    daily_last_updated: str | None = None
+    fetched_at: str | None = None
+
+
+class DailyFundamentals(BaseModel):
+    """One trading day of Tiingo's daily valuation metrics."""
+
+    date: str
+    market_cap: float | None = None
+    enterprise_value: float | None = None
+    pe_ratio: float | None = None
+    pb_ratio: float | None = None
+    peg_ratio_1y: float | None = None
+
+
+class StatementRelease(BaseModel):
+    """One as-reported release: a column of the statements grid."""
+
+    #: The date the filing was posted to the SEC -- when it became knowable.
+    filed_at: str
+    fiscal_year: int | None = None
+    #: 0 is the annual report, 1-4 the quarters.
+    fiscal_quarter: int | None = None
+    label: str
+
+
+class StatementLine(BaseModel):
+    """One Tiingo field across the releases, in the order of ``releases``."""
+
+    statement: Literal["incomeStatement", "balanceSheet", "cashFlow", "overview"] | str
+    code: str
+    label: str
+    description: str = ""
+    #: "$", "%" (held as a fraction: 0.12 is 12%) or "" (a count or a ratio).
+    units: str = ""
+    #: Null where that release did not report the field.
+    values: list[float | None] = []
+
+
+class CompanyFundamentals(BaseModel):
+    """Tiingo's fundamentals for one name, as they stood on ``as_of``."""
+
+    symbol: str
+    as_of: str
+    source: Literal["tiingo"] = "tiingo"
+    profile: TiingoProfile | None = None
+    daily: list[DailyFundamentals] = []
+    #: Newest first.
+    releases: list[StatementRelease] = []
+    lines: list[StatementLine] = []
+
+
 ScreenMetric = Literal[
-    "pe", "pb", "roe", "leverage", "net_margin", "gross_margin", "current_ratio"
+    "pe", "pb", "roe", "leverage", "net_margin", "gross_margin", "current_ratio",
+    # Published by Tiingo rather than computed here (warehouse.VENDOR_METRICS).
+    "market_cap", "enterprise_value", "pe_ratio", "pb_ratio", "peg_ratio_1y",
+    "roe_reported", "roa_reported", "gross_margin_reported", "current_ratio_reported",
+    "debt_equity_reported", "revenue_qoq", "eps_qoq", "piotroski_f_score",
 ]
-"""The ratios a screen can constrain, each derived from filed concepts.
+"""The ratios a screen can constrain: computed from filed concepts, or as Tiingo publishes them.
 
 The vocabulary lives here because the request has to validate against it;
 which concepts each one needs, and how it is computed, live beside the rules

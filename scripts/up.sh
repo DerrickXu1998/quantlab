@@ -91,6 +91,8 @@ The data warehouse is empty. Load some history from quantlab-data-pipeline:
 
     make quantlab-data ARGS="ingest AAPL.US MSFT.US HSBA.LON --start 2020-01-01"
     # or, no network: make quantlab-data ARGS="seed-synthetic"
+    #   (fake bars plus fake Tiingo fundamentals, so the Research tab's
+    #   screen and company views have something to show)
 
 then, here:
 

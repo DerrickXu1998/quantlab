@@ -1,6 +1,6 @@
 import type { ScreenMetric, ScreenMetricCoverage, ScreenResult } from '../../api/types';
 import { StatGrid } from '../../components/ui/layout';
-import { conceptLabel, formatCount, formatPercent, METRIC_FORMAT } from '../format';
+import { formatCount, formatPercent, METRIC_FORMAT, requirementLabel } from '../format';
 
 /**
  * Coverage, per metric, on the screen that offers the metric.
@@ -52,7 +52,7 @@ export function CoverageLine({
       </div>
       {requires.length > 0 ? (
         <p className="text-xs text-muted-foreground">
-          needs {requires.map(conceptLabel).join(', ').toLowerCase()}
+          needs {requires.map(requirementLabel).join(', ')}
         </p>
       ) : null}
     </div>

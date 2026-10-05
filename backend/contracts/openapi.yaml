@@ -1196,6 +1196,60 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /instruments/{symbol}/fundamentals/tiingo:
+    get:
+      tags: [research]
+      operationId: getTiingoFundamentals
+      summary: Tiingo's profile, daily metrics and as-reported statements for one name
+      description: >
+        Everything Tiingo published about the company on or before `as_of`: the
+        /meta profile (reference data), the daily valuation metrics from `start`
+        to `as_of`, and the as-reported statements as a grid of fields by
+        release, newest first. Statement fields are read by Tiingo dataCode, not
+        by concept, so they are shown exactly as Tiingo published them.
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[A-Z0-9][A-Z0-9._-]{0,19}$"
+        - name: as_of
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: start
+          in: query
+          required: false
+          description: First day of the daily metrics; default all held.
+          schema:
+            type: string
+            format: date
+        - name: releases
+          in: query
+          required: false
+          description: How many of the newest statement releases to return.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 40
+            default: 12
+      responses:
+        "200":
+          description: The company's Tiingo fundamentals as they stood
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanyFundamentals"
+        "404":
+          description: Unknown symbol
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /fundamentals/coverage:
     get:
       tags: [research]
@@ -3054,7 +3108,146 @@ components:
 
     ScreenMetric:
       type: string
-      enum: [pe, pb, roe, leverage, net_margin, gross_margin, current_ratio]
+      description: >
+        The first seven are computed from filed concepts; the rest are published
+        by Tiingo (daily valuation, and quarterly overview ratios) and screened
+        as published. A Tiingo metric's coverage `requires` is `tiingo:<dataCode>`.
+      enum:
+        - pe
+        - pb
+        - roe
+        - leverage
+        - net_margin
+        - gross_margin
+        - current_ratio
+        - market_cap
+        - enterprise_value
+        - pe_ratio
+        - pb_ratio
+        - peg_ratio_1y
+        - roe_reported
+        - roa_reported
+        - gross_margin_reported
+        - current_ratio_reported
+        - debt_equity_reported
+        - revenue_qoq
+        - eps_qoq
+        - piotroski_f_score
+
+    TiingoProfile:
+      type: object
+      additionalProperties: false
+      description: >
+        Tiingo's /meta snapshot: reference data refreshed on each fundamentals
+        ingest, not a point-in-time history. Sector and industry are Tiingo's
+        (SIC-derived), shown beside the catalogue's own, never over it.
+      properties:
+        name: {type: [string, "null"]}
+        sector: {type: [string, "null"]}
+        industry: {type: [string, "null"]}
+        sic_code: {type: [integer, "null"]}
+        sic_sector: {type: [string, "null"]}
+        sic_industry: {type: [string, "null"]}
+        location: {type: [string, "null"]}
+        reporting_currency:
+          type: [string, "null"]
+          description: >
+            What the company files in. Tiingo converts every figure to USD, so
+            anything but "usd" means the numbers went through an FX rate.
+        is_adr: {type: [boolean, "null"]}
+        is_active: {type: [boolean, "null"]}
+        perma_ticker: {type: [string, "null"]}
+        company_website: {type: [string, "null"]}
+        sec_filing_website: {type: [string, "null"]}
+        statement_last_updated: {type: [string, "null"]}
+        daily_last_updated: {type: [string, "null"]}
+        fetched_at: {type: [string, "null"]}
+
+    DailyFundamentals:
+      type: object
+      additionalProperties: false
+      required: [date]
+      properties:
+        date: {type: string, format: date}
+        market_cap: {type: [number, "null"]}
+        enterprise_value: {type: [number, "null"]}
+        pe_ratio: {type: [number, "null"]}
+        pb_ratio: {type: [number, "null"]}
+        peg_ratio_1y: {type: [number, "null"]}
+
+    StatementRelease:
+      type: object
+      additionalProperties: false
+      required: [filed_at, label]
+      properties:
+        filed_at:
+          type: string
+          format: date
+          description: The date the filing was posted to the SEC -- when it became knowable.
+        fiscal_year: {type: [integer, "null"]}
+        fiscal_quarter:
+          type: [integer, "null"]
+          description: 0 is the annual report, 1-4 the quarters.
+        label:
+          type: string
+          example: FY2025 Q4
+
+    StatementLine:
+      type: object
+      additionalProperties: false
+      required: [statement, code, label]
+      properties:
+        statement:
+          type: string
+          description: incomeStatement, balanceSheet, cashFlow or overview.
+        code:
+          type: string
+          description: Tiingo's dataCode.
+          example: netinc
+        label:
+          type: string
+          example: Net Income
+        description:
+          type: string
+          default: ""
+        units:
+          type: string
+          default: ""
+          description: '"$", "%" (held as a fraction: 0.12 is 12%) or "" (a count or a ratio).'
+        values:
+          type: array
+          items:
+            type: [number, "null"]
+          description: One per release, in the order of `releases`; null where not reported.
+
+    CompanyFundamentals:
+      type: object
+      additionalProperties: false
+      required: [symbol, as_of]
+      properties:
+        symbol: {type: string}
+        as_of: {type: string, format: date}
+        source:
+          type: string
+          enum: [tiingo]
+          default: tiingo
+        profile:
+          oneOf:
+            - $ref: "#/components/schemas/TiingoProfile"
+            - type: "null"
+        daily:
+          type: array
+          items:
+            $ref: "#/components/schemas/DailyFundamentals"
+        releases:
+          type: array
+          description: Newest first.
+          items:
+            $ref: "#/components/schemas/StatementRelease"
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/StatementLine"
 
     ScreenMetricCoverage:
       type: object

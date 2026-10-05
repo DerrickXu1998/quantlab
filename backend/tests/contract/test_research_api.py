@@ -58,6 +58,47 @@ def test_fundamentals_for_an_unknown_symbol_are_a_404(client):
     assert "NOSUCH" in response.json()["detail"]
 
 
+def test_tiingo_fundamentals_on_the_demo_are_empty_rather_than_an_error(client, symbol):
+    response = client.get(f"{API}/instruments/{symbol}/fundamentals/tiingo")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["symbol"] == symbol
+    assert body["source"] == "tiingo"
+    assert body["profile"] is None
+    assert body["daily"] == body["releases"] == body["lines"] == []
+
+
+def test_tiingo_fundamentals_for_an_unknown_symbol_are_a_404(client):
+    response = client.get(f"{API}/instruments/NOSUCH/fundamentals/tiingo")
+
+    assert response.status_code == 404
+
+
+def test_tiingo_fundamentals_bound_the_release_count(client, symbol):
+    response = client.get(
+        f"{API}/instruments/{symbol}/fundamentals/tiingo", params={"releases": 0}
+    )
+
+    assert response.status_code == 422
+
+
+def test_a_screen_accepts_tiingo_published_metrics(client):
+    response = client.get(
+        f"{API}/screen",
+        params={
+            "universe": "liquid-500-ftse-core",
+            "metrics": "pe_ratio,piotroski_f_score",
+            "constraints": "piotroski_f_score:7:",
+            "sort_by": "pe_ratio",
+        },
+    )
+
+    assert response.status_code == 200
+    coverage = {item["metric"]: item for item in response.json()["coverage"]}
+    assert coverage["pe_ratio"]["requires"] == ["tiingo:peRatio"]
+
+
 def test_fundamentals_accept_a_concept_filter(client, symbol):
     response = client.get(
         f"{API}/instruments/{symbol}/fundamentals",

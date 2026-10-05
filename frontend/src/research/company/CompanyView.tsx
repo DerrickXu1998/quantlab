@@ -15,6 +15,7 @@ import { PricePanel } from './PricePanel';
 import { RangeControl, rangeStart, type RangeId } from './RangeControl';
 import { SignalHistoryPanel } from './SignalHistoryPanel';
 import { SymbolPicker, SymbolPickerRetry } from './SymbolPicker';
+import { TiingoFundamentalsPanel } from './TiingoFundamentalsPanel';
 import { markerLabel, useModelOverlays } from './useModelOverlays';
 import {
   todayISO,
@@ -22,6 +23,7 @@ import {
   useCompanyOverview,
   useCompanyPrices,
   useInstruments,
+  useTiingoFundamentals,
   type ReadStatus,
 } from './useCompany';
 
@@ -70,6 +72,8 @@ export function CompanyView({ symbol, onSelectSymbol, asOf: asOfProp, onAsOfChan
   const [range, setRange] = useState<RangeId>('MAX');
   const start = rangeStart(asOf, range);
   const prices = useCompanyPrices(symbol, asOf, start);
+  const [releases, setReleases] = useState(12);
+  const tiingo = useTiingoFundamentals(symbol, asOf, releases);
 
   // While `/overview` is being written it answers 404, and the accounts are
   // still reachable through the thin fundamentals route. The fallback fires
@@ -140,6 +144,7 @@ export function CompanyView({ symbol, onSelectSymbol, asOf: asOfProp, onAsOfChan
     overview.reload();
     prices.reload();
     fallbackFacts.reload();
+    tiingo.reload();
   }
 
   return (
@@ -273,6 +278,22 @@ export function CompanyView({ symbol, onSelectSymbol, asOf: asOfProp, onAsOfChan
                 onRetry={overview.reload}
               />
             </div>
+          </div>
+
+          {/*
+            Full width: the statements grid is a release per column, and it
+            reads best with a year of quarters side by side.
+          */}
+          <div className="mt-3">
+            <TiingoFundamentalsPanel
+              symbol={symbol}
+              data={tiingo.data}
+              status={tiingo.status}
+              message={tiingo.message}
+              releases={releases}
+              onReleases={setReleases}
+              onRetry={tiingo.reload}
+            />
           </div>
         </ScrollRegion>
       )}
