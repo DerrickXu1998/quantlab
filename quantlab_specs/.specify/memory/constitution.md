@@ -51,6 +51,9 @@ The approved source stack is:
 - **Yahoo (yfinance)** — fallback; best LSE coverage and the only free source of UK corporate
   actions. Known to break periodically; never the primary.
 - **SEC EDGAR** — US fundamentals (public domain; `frames` endpoint for cross-filer concepts).
+- **Tiingo (fundamentals add-on)** — US daily valuation metrics (market cap, enterprise value,
+  P/E, P/B, PEG) and as-reported quarterly statements, beyond the Dow (e.g. ROKU, CELH).
+  Used under the add-on's own licence terms; history is short (see Fundamentals coverage).
 - **Companies House** — UK financials (acknowledged gap: ~10–20% of LSE issuers are
   Jersey/Guernsey-incorporated and absent).
 - **OpenFIGI** — identifier bridge between sources.
@@ -72,9 +75,26 @@ reconstructed later. The LSE instrument list has no stable free endpoint; it is 
 manually from the LSE reports page and supplied by path, with the bundled FTSE fallback list
 used only as a bootstrap default.
 
+Fundamentals coverage (fundamental constraint): fundamentals history is shorter than price
+history, and analysis MUST be bounded by it rather than padded past it. Measured on the
+2026-10 Tiingo ingest (run 20, no errors): daily metrics cover 500 of 503 instruments and
+statements 498 of 503; history begins **2023-10-05** (about three years) even when requested
+from 2000 — a Tiingo limit, not the ingest's — and runs through 2026-10-02; 2,395,856 rows, of
+which 533,528 are statement rows; spot check AAPL market cap $4.90T, P/E 38.0. Therefore:
+- Any backtest whose rules read fundamentals MUST NOT start before the first date on which
+  every concept those rules read has a filing for the selection. The start is limited to that
+  date — computed from the stored data, never hard-coded — and the run MUST report both the
+  requested start and the fundamentals start. Before it every fundamental gate holds shut, so
+  the earlier years would be a flat line against a moving benchmark: a data gap presented as
+  a result.
+- A run whose concepts have no filings at all is refused by name, not limited to nothing.
+- Coverage figures like those above are re-measured on each fundamentals ingest; when they
+  change materially (a new source, deeper history), this section is amended.
+
 Rationale: Quantitative conclusions are only as trustworthy as their data lineage; free sources
 have rate limits, licensing limits, and unit quirks that must be contained in adapters, not
-leaked into analysis code.
+leaked into analysis code. A window that silently outruns its data produces statistics about
+the absence of data.
 
 ### IV. Test-First (NON-NEGOTIABLE)
 
@@ -129,9 +149,12 @@ under it. Artifacts that a spec legitimately owns — OpenAPI documents, JSON Sc
 data referenced by the spec — are contracts, not code, and belong in the feature's
 `contracts/` directory.
 
-Runnable code lives at the repository root: the `quantlab` library in `src/` with its `tests/`,
-and the demo application in `backend/` and `frontend/` with its `Makefile`,
-`docker-compose.yml`, and `scripts/`.
+Runnable code lives at the repository root: the warehouse schema (every Postgres and
+ClickHouse migration) and `quantlab migrate` in `src/` with its `tests/`, and the application
+in `backend/` and `frontend/` with its `Makefile`, `docker-compose.yml`, and `scripts/`. Data
+ingestion and the research library (providers, universes, indicators, derived features) live
+in the separate quantlab-data-pipeline repository, which keeps pinned, drift-checked copies of
+the schema and never changes it; a schema change is made here first.
 
 There MUST be exactly one Spec Kit installation in the repository. `.specify/` exists only
 inside `quantlab_specs/`, which makes that directory the Spec Kit project root, so
@@ -180,7 +203,8 @@ it is supposed to certify.
 - Code review MUST verify: plugin contract conformance for indicators (including scale class
   and publication lag declarations), adapter isolation and rate-limit handling for data
   sources, GBX→GBP normalization at adapter boundaries, provenance metadata on derived data,
-  no analytical logic in the frontend, and no code added under `quantlab_specs/`.
+  no analytical logic in the frontend, no code added under `quantlab_specs/`, and that any run
+  reading fundamentals is bounded by fundamentals availability (Principle III).
 - Complexity beyond the simplest working design (YAGNI) must be justified in the plan.
 
 ## Governance
@@ -192,4 +216,4 @@ PATCH for clarifications and wording fixes), and a migration note where existing
 affected. All pull requests and reviews MUST verify compliance with the principles above;
 violations block merge unless a justified exception is recorded in the plan.
 
-**Version**: 1.2.0 | **Ratified**: 2026-09-19 | **Last Amended**: 2026-09-19
+**Version**: 1.3.0 | **Ratified**: 2026-09-19 | **Last Amended**: 2026-10-05
