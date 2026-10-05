@@ -283,15 +283,21 @@ class _FactsBackend:
 
     name = "warehouse"
 
-    def __init__(self, inner, facts):
+    def __init__(self, inner, facts, fundamentals_start=None):
         self._inner = inner
         self._facts = facts
+        self._fundamentals_start = fundamentals_start
+        self.fundamentals_start_calls = 0
 
     def __getattr__(self, attr):
         return getattr(self._inner, attr)
 
     def load_facts_for(self, symbols, concepts, start, end):
         return {s: self._facts[s] for s in symbols if s in self._facts}
+
+    def fundamentals_start(self, symbols, concepts, end):
+        self.fundamentals_start_calls += 1
+        return self._fundamentals_start
 
 
 def test_a_fundamental_run_on_the_demo_is_refused_naming_the_dataset(conn):
@@ -347,7 +353,105 @@ def test_partial_fact_coverage_is_reported_and_persisted(conn):
         "instruments_with_facts": 1,
         "missing_by_concept": {"revenue": 1},
         "instruments_missing_facts": [uncovered],
+        # The demo-backed fake knows no fundamentals start, so nothing moved.
+        "fundamentals_start": None,
+        "requested_start_date": None,
     }
+
+
+# --- fundamentals bound the window ------------------------------------------
+#
+# Before the first filing every fundamental gate holds shut, so those years
+# are a flat line against a moving benchmark: not a result, a data gap. A run
+# that reads fundamentals starts where they do (constitution, Principle III).
+
+
+def test_a_fundamental_run_starts_where_its_fundamentals_do(conn):
+    from quantlab.research.runner import prepare_run
+
+    backend = _FactsBackend(conn, facts={}, fundamentals_start="2024-03-01")
+    prepared = prepare_run(
+        backend,
+        model_name="revenue-growth",
+        symbols=_symbols(conn),
+        start_date="2024-01-01",
+        end_date="2024-12-31",
+    )
+
+    assert prepared.start_date == "2024-03-01"
+    assert prepared.requested_start_date == "2024-01-01"
+    assert prepared.fundamentals_start == "2024-03-01"
+    # The worker re-prepares from the request, so it must carry what was asked
+    # for: re-limiting the limited start would lose the original.
+    assert prepared.request()["start_date"] == "2024-01-01"
+    again = prepare_run(backend, **prepared.request())
+    assert (again.start_date, again.requested_start_date) == ("2024-03-01", "2024-01-01")
+
+
+def test_a_start_inside_fundamental_coverage_is_left_alone(conn):
+    from quantlab.research.runner import prepare_run
+
+    backend = _FactsBackend(conn, facts={}, fundamentals_start="2023-10-05")
+    prepared = prepare_run(
+        backend,
+        model_name="revenue-growth",
+        symbols=_symbols(conn),
+        start_date="2024-01-01",
+        end_date="2024-12-31",
+    )
+
+    assert prepared.start_date == "2024-01-01"
+    assert prepared.requested_start_date is None
+    assert prepared.fundamentals_start == "2023-10-05"
+
+
+def test_a_bars_only_run_never_asks_where_fundamentals_start(conn):
+    from quantlab.research.runner import prepare_run
+
+    backend = _FactsBackend(conn, facts={}, fundamentals_start="2024-03-01")
+    prepared = prepare_run(
+        backend,
+        model_name="sma-crossover",
+        symbols=_symbols(conn),
+        start_date="2024-01-01",
+        end_date="2024-12-31",
+    )
+
+    assert prepared.start_date == "2024-01-01"
+    assert prepared.fundamentals_start is None
+    assert backend.fundamentals_start_calls == 0
+
+
+def test_a_limited_run_records_both_dates_in_its_fact_coverage(conn):
+    from quantlab.storage.experiments import SqliteExperimentStore
+
+    covered, uncovered = _symbols(conn)
+    backend = _FactsBackend(
+        conn, facts={covered: _annual_revenue(2018, 2023)}, fundamentals_start="2024-03-01"
+    )
+    result = run_experiment(
+        backend,
+        model_name="revenue-growth",
+        symbols=[covered, uncovered],
+        start_date="2024-01-01",
+        end_date="2024-12-31",
+    )
+
+    assert result.start_date == "2024-03-01"
+    assert result.coverage.facts.fundamentals_start == "2024-03-01"
+    assert result.coverage.facts.requested_start_date == "2024-01-01"
+
+    store = SqliteExperimentStore(conn.db_path)
+    store.save_run(result)
+    stored = store.get_run(result.id, None)
+    assert stored["start_date"] == "2024-03-01"
+    assert stored["coverage"]["facts"]["requested_start_date"] == "2024-01-01"
+
+
+def test_the_demo_has_no_fundamentals_start():
+    """Unknown, not "today": the demo's refusal stays the one that names it."""
+    start = backends.SqliteBackend.fundamentals_start(None, ["AAA"], ["revenue"], "2024-12-31")
+    assert start is None
 
 
 def test_a_run_without_fundamental_rules_reports_no_fact_coverage(conn):

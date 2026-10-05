@@ -997,6 +997,42 @@ def load_facts_for(
     return {symbol: facts.build_series(items) for symbol, items in grouped.items()}
 
 
+def fundamentals_start(
+    wh: Warehouse, symbols: list[str], concepts: list[str], end: str
+) -> str | None:
+    """The first date on which every concept has a filing for some symbol.
+
+    Per concept, the earliest ``filed_at`` (on or before ``end``) across the
+    selection; the answer is the latest of those, because a rule reading two
+    concepts cannot fire until both exist. None when any concept has no filing
+    at all -- that is not a window to narrow but a run with nothing to read,
+    and the runner refuses it by name (NoFactCoverageError).
+
+    Answered from ``fundamentals_pit_idx`` (instrument_id, concept, filed_at):
+    one index probe per instrument and concept, not a scan.
+    """
+    ids = _instrument_ids(wh, symbols)
+    wanted = sorted(set(concepts))
+    if not ids or not wanted:
+        return None
+    with wh.catalog() as conn:
+        rows = conn.execute(
+            """
+            SELECT concept, min(filed_at)
+              FROM fundamentals
+             WHERE instrument_id = ANY(%s)
+               AND concept = ANY(%s)
+               AND filed_at <= %s
+             GROUP BY concept
+            """,
+            (list(ids.values()), wanted, end),
+        ).fetchall()
+    first = {concept: filed_at for concept, filed_at in rows}
+    if any(first.get(concept) is None for concept in wanted):
+        return None
+    return max(first.values()).isoformat()
+
+
 def facts_as_of(
     wh: Warehouse, symbol: str, as_of: str, concepts: list[str] | None = None
 ) -> list[dict[str, Any]]:

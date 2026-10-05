@@ -37,6 +37,7 @@ export function SubmitBar({
   canSubmit,
   onSubmit,
   queued,
+  queuedFrom,
   onShowRun,
   onDismissQueued,
   onJump,
@@ -60,6 +61,8 @@ export function SubmitBar({
   canSubmit: boolean;
   onSubmit: () => void;
   queued: RunV2 | null;
+  /** The start date that was submitted; the server may move it to where fundamentals begin. */
+  queuedFrom: string | null;
   onShowRun: (runId: string) => void;
   onDismissQueued: () => void;
   onJump: (section: Section) => void;
@@ -192,6 +195,13 @@ export function SubmitBar({
             Queued "{queued.name ?? queued.strategy?.name ?? queued.model_name}"
             {queued.queue_position ? ` — #${queued.queue_position} in line` : ''}. It runs in the
             background; you can keep editing and submit another.
+            {queuedFrom && queued.start_date > queuedFrom ? (
+              <span data-testid="run-queued-start-moved">
+                {' '}
+                It starts {queued.start_date}, not {queuedFrom}: the fundamentals it reads begin
+                then.
+              </span>
+            ) : null}
           </span>
           <Button type="button" size="sm" variant="outline" onClick={() => onShowRun(queued.id)}>
             View in Runs

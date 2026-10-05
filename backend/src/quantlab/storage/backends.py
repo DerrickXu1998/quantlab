@@ -62,6 +62,11 @@ class StorageBackend(Protocol):
     def load_facts_for(
         self, symbols: list[str], concepts: list[str], start: str, end: str
     ) -> dict: ...
+    #: The first date every concept has a filing for some symbol; None if any
+    #: concept has none (or the store holds no fundamentals at all).
+    def fundamentals_start(
+        self, symbols: list[str], concepts: list[str], end: str
+    ) -> str | None: ...
     def facts_as_of(
         self, symbol: str, as_of: str, concepts: list[str] | None = None
     ) -> list[dict]: ...
@@ -189,6 +194,13 @@ class SqliteBackend:
         (docs/FUNDAMENTALS.md §5.5).
         """
         return {}
+
+    def fundamentals_start(
+        self, symbols: list[str], concepts: list[str], end: str
+    ) -> str | None:
+        # No filings, so no start to limit a window to; the runner's demo
+        # refusal is what names the problem.
+        return None
 
     def facts_as_of(
         self, symbol: str, as_of: str, concepts: list[str] | None = None
@@ -394,6 +406,11 @@ class WarehouseBackend:
         self, symbols: list[str], concepts: list[str], start: str, end: str
     ) -> dict[str, facts.FactSeries]:
         return warehouse.load_facts_for(self.wh, symbols, concepts, start, end)
+
+    def fundamentals_start(
+        self, symbols: list[str], concepts: list[str], end: str
+    ) -> str | None:
+        return warehouse.fundamentals_start(self.wh, symbols, concepts, end)
 
     def facts_as_of(
         self, symbol: str, as_of: str, concepts: list[str] | None = None

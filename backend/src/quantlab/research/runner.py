@@ -26,7 +26,7 @@ built from a later bar) is enforced by the CHECK constraint on
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from datetime import date as _date
 from typing import Any
@@ -115,6 +115,11 @@ class FactCoverage:
     missing_by_concept: dict[str, int]
     #: The requested instruments lacking at least one concept, in request order.
     instruments_missing_facts: list[str]
+    #: The first date every concept had a filing for some requested name.
+    fundamentals_start: str | None = None
+    #: What the user asked to start from, when that was before
+    #: ``fundamentals_start`` and the run was started there instead.
+    requested_start_date: str | None = None
 
 
 @dataclass(frozen=True)
@@ -287,6 +292,10 @@ class PreparedRun:
     warmup_start: str
     #: Bars the run will read, from weekdays alone (see estimate_bars).
     estimated_bars: int
+    #: Where the fundamentals the rules read begin; None for bars-only runs.
+    fundamentals_start: str | None = None
+    #: The start as submitted, when it was moved up to ``fundamentals_start``.
+    requested_start_date: str | None = None
 
     @property
     def large(self) -> bool:
@@ -302,9 +311,22 @@ class PreparedRun:
         return {
             "strategy": self.spec.to_dict(),
             "symbols": list(self.symbols),
-            "start_date": self.start_date,
+            # As submitted, not as limited: the worker prepares the run again,
+            # and must still know what was asked for to report it.
+            "start_date": self.requested_start_date or self.start_date,
             "end_date": self.end_date,
         }
+
+
+def required_concepts(spec: StrategySpec) -> list[str]:
+    """Fundamental concepts the strategy's rules read, e.g. net_income."""
+    return sorted(
+        {
+            concept
+            for index, component in enumerate(spec.components)
+            for concept in component.resolve(index).requires_facts
+        }
+    )
 
 
 def required_series(spec: StrategySpec) -> list[str]:
@@ -386,6 +408,21 @@ def prepare_run(
         raise errors.UnknownSymbolError([])
 
     requested_symbols = sorted(set(symbols))
+
+    # A strategy that reads fundamentals starts where they do. Before the
+    # first filing every fundamental gate holds shut, so those years would be
+    # a flat line against a moving benchmark -- a data gap reported as a
+    # result. Limited rather than refused: the user asked for a backtest, and
+    # the part of the window the data can answer is still one. Done before the
+    # size checks, which then measure the window that will actually run.
+    requested_start_date = None
+    fundamentals_start = None
+    concepts = required_concepts(spec)
+    if concepts:
+        fundamentals_start = backend.fundamentals_start(requested_symbols, concepts, end_date)
+        if fundamentals_start is not None and fundamentals_start > start_date:
+            requested_start_date, start_date = start_date, fundamentals_start
+            start = _parse(start_date, "start_date")
     window_days = (end - start).days + 1
     frequency = spec.execution.bar_frequency
     intraday = is_intraday(frequency)
@@ -435,6 +472,8 @@ def prepare_run(
         end_date=end_date,
         warmup_start=warmup_start,
         estimated_bars=estimate,
+        fundamentals_start=fundamentals_start,
+        requested_start_date=requested_start_date,
     )
 
 
@@ -460,6 +499,8 @@ def execute_prepared(
         run_id=run_id,
         should_cancel=should_cancel,
         keep_bars=keep_bars,
+        fundamentals_start=prepared.fundamentals_start,
+        requested_start_date=prepared.requested_start_date,
     )
 
 
@@ -475,6 +516,8 @@ def _execute(
     run_id: str | None = None,
     should_cancel=None,
     keep_bars: bool = False,
+    fundamentals_start: str | None = None,
+    requested_start_date: str | None = None,
 ) -> RunResult:
     """Load, compose, execute and summarise a validated run."""
 
@@ -497,19 +540,19 @@ def _execute(
     # force on the warm-up morning was filed before it, often long before, so a
     # window bounded at `warmup_start` would start every run with no
     # fundamentals at all (docs/FUNDAMENTALS.md §2).
-    wanted_concepts = sorted(
-        {
-            concept
-            for index, component in enumerate(spec.components)
-            for concept in component.resolve(index).requires_facts
-        }
-    )
+    wanted_concepts = required_concepts(spec)
     facts_by_symbol = (
         backend.load_facts_for(requested_symbols, wanted_concepts, warmup_start, end_date)
         if wanted_concepts
         else {}
     )
     fact_coverage = _fact_coverage(requested_symbols, wanted_concepts, facts_by_symbol)
+    if fact_coverage is not None:
+        fact_coverage = replace(
+            fact_coverage,
+            fundamentals_start=fundamentals_start,
+            requested_start_date=requested_start_date,
+        )
     if fact_coverage is not None and all(
         missing == len(requested_symbols) for missing in fact_coverage.missing_by_concept.values()
     ):

@@ -126,6 +126,8 @@ export function StrategyBuilder({
   const [serverWarnings, setServerWarnings] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [queued, setQueued] = useState<RunV2 | null>(null);
+  /** The start as submitted, to tell when the server moved it (fundamentals). */
+  const [queuedFrom, setQueuedFrom] = useState<string | null>(null);
   const [pendingReplace, setPendingReplace] = useState<{ label: string; apply: () => void } | null>(
     null,
   );
@@ -335,7 +337,10 @@ export function StrategyBuilder({
       start_date: startDate,
       end_date: endDate,
     });
-    if (run) setQueued(run);
+    if (run) {
+      setQueued(run);
+      setQueuedFrom(startDate);
+    }
   };
 
   const showRun = (runId: string) =>
@@ -836,6 +841,7 @@ export function StrategyBuilder({
           canSubmit={canSubmit}
           onSubmit={() => void submit()}
           queued={queued}
+          queuedFrom={queuedFrom}
           onShowRun={showRun}
           onDismissQueued={() => setQueued(null)}
           onJump={jumpTo}

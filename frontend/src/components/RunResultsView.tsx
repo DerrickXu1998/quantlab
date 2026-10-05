@@ -81,6 +81,30 @@ const MISSING_SHOWN = 8;
  * shut and says nothing, so without this a name that never filed revenue reads
  * exactly like one whose revenue never grew.
  */
+/**
+ * A run that reads fundamentals starts where they do. Said plainly, because a
+ * window that silently differs from the one asked for reads as a bug.
+ */
+function FundamentalsWindowNote({ run }: { run: Run }) {
+  const facts = run.coverage.facts;
+  if (!facts?.requested_start_date) return null;
+  return (
+    <p
+      role="note"
+      data-testid="run-fundamentals-window"
+      className="mt-3 flex gap-2 rounded-sm border border-border bg-muted/40 p-2 text-xs text-muted-foreground"
+    >
+      <Info size={16} strokeWidth={1.5} className="mt-px shrink-0" aria-hidden="true" />
+      <span>
+        Started {run.start_date}, not {facts.requested_start_date}: the fundamentals this strategy
+        reads ({facts.concepts.join(', ')}) begin {facts.fundamentals_start}. Before that every
+        fundamental gate holds shut, so the earlier years would show no strategy, only the
+        benchmark.
+      </span>
+    </p>
+  );
+}
+
 function FactCoverageWarning({ run }: { run: Run }) {
   const facts = run.coverage.facts;
   if (!facts || facts.instruments_missing_facts.length === 0) return null;
@@ -308,6 +332,7 @@ export function RunResultsView({ run }: { run: RunDetailV2 }) {
         );
       })()}
 
+      <FundamentalsWindowNote run={run} />
       <FactCoverageWarning run={run} />
 
       {run.strategy ? <StrategyProvenance run={run} /> : null}

@@ -875,6 +875,18 @@ export interface components {
             };
             /** @description Requested instruments lacking at least one concept -- their fundamental gates never opened. */
             instruments_missing_facts: string[];
+            /**
+             * Format: date
+             * @description The first date every concept had a filing for some requested instrument. A run reading fundamentals never starts before it.
+             * @example 2023-10-05
+             */
+            fundamentals_start?: string | null;
+            /**
+             * Format: date
+             * @description The start as submitted, when it was before fundamentals_start and the run was started at fundamentals_start instead. Null when the window was not moved.
+             * @example 2015-01-01
+             */
+            requested_start_date?: string | null;
         };
         Run: {
             id: string;
