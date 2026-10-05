@@ -103,6 +103,24 @@ export function formatCount(value: number | null | undefined): string {
  * Kept beside the formatters rather than in the screen UI so that a metric
  * added to the contract cannot acquire two different renderings in two panels.
  */
+/** A ratio that is not a multiple: a current ratio of 1.07, a PEG of 1.30. */
+function formatRatio(v: number | null | undefined): string {
+  return absent(v) ? NOT_APPLICABLE : v.toFixed(2);
+}
+
+/** A whole-number score, such as the 0–9 Piotroski F-score. */
+function formatScore(v: number | null | undefined): string {
+  return absent(v) ? NOT_APPLICABLE : String(Math.round(v));
+}
+
+/** A dollar magnitude, scaled: $4.90T, $67.1bn. */
+function formatDollars(v: number | null | undefined): string {
+  return absent(v) ? NOT_APPLICABLE : `$${formatCompact(v)}`.replace('$-', '-$');
+}
+
+/** Where a screen metric comes from: computed here, or as Tiingo publishes it. */
+export type MetricSource = 'filed' | 'tiingo';
+
 export const METRIC_FORMAT = {
   pe: { label: 'P/E', render: formatMultiple, hint: 'Price ÷ earnings' },
   pb: { label: 'P/B', render: formatMultiple, hint: 'Price ÷ book value' },
@@ -119,7 +137,92 @@ export const METRIC_FORMAT = {
     render: (v: number | null | undefined) => (absent(v) ? NOT_APPLICABLE : v.toFixed(2)),
     hint: 'Current assets ÷ current liabilities',
   },
+  // Published by Tiingo. Labels say so, because a P/E computed here and the
+  // one Tiingo publishes are two numbers, and a ranking must say which it used.
+  market_cap: { label: 'Market cap', render: formatDollars, hint: 'Tiingo daily: shares × price' },
+  enterprise_value: {
+    label: 'Enterprise value',
+    render: formatDollars,
+    hint: 'Tiingo daily: market cap + debt − cash',
+  },
+  pe_ratio: { label: 'P/E (Tiingo)', render: formatMultiple, hint: 'Tiingo daily price ÷ earnings; a loss-maker has none' },
+  pb_ratio: { label: 'P/B (Tiingo)', render: formatMultiple, hint: 'Tiingo daily price ÷ book value; none on negative book' },
+  peg_ratio_1y: {
+    label: 'PEG 1y',
+    render: formatRatio,
+    hint: 'Tiingo daily: P/E ÷ trailing 1-year EPS growth; none when negative',
+  },
+  roe_reported: { label: 'ROE (Tiingo)', render: formatPercent, hint: 'Tiingo quarterly: net income ÷ equity' },
+  roa_reported: { label: 'ROA (Tiingo)', render: formatPercent, hint: 'Tiingo quarterly: net income ÷ total assets' },
+  gross_margin_reported: {
+    label: 'Gross margin (Tiingo)',
+    render: formatPercent,
+    hint: 'Tiingo quarterly: (revenue − cost of revenue) ÷ revenue',
+  },
+  current_ratio_reported: {
+    label: 'Current ratio (Tiingo)',
+    render: formatRatio,
+    hint: 'Tiingo quarterly: current assets ÷ current liabilities',
+  },
+  debt_equity_reported: {
+    label: 'Debt/equity (Tiingo)',
+    render: formatRatio,
+    hint: 'Tiingo quarterly: total debt ÷ equity; none on negative equity',
+  },
+  revenue_qoq: { label: 'Revenue QoQ', render: formatPercent, hint: 'Tiingo quarterly: revenue growth on the prior quarter' },
+  eps_qoq: { label: 'EPS QoQ', render: formatPercent, hint: 'Tiingo quarterly: EPS growth on the prior quarter' },
+  piotroski_f_score: {
+    label: 'Piotroski F',
+    render: formatScore,
+    hint: 'Tiingo quarterly: 0–9 score of financial strength',
+  },
 } as const;
+
+/** Which metrics Tiingo publishes, in the order the screen offers them. */
+export const TIINGO_METRICS = [
+  'market_cap',
+  'enterprise_value',
+  'pe_ratio',
+  'pb_ratio',
+  'peg_ratio_1y',
+  'roe_reported',
+  'roa_reported',
+  'gross_margin_reported',
+  'current_ratio_reported',
+  'debt_equity_reported',
+  'revenue_qoq',
+  'eps_qoq',
+  'piotroski_f_score',
+] as const;
+
+export function metricSource(metric: string): MetricSource {
+  return (TIINGO_METRICS as readonly string[]).includes(metric) ? 'tiingo' : 'filed';
+}
+
+/**
+ * What a coverage line says a metric needs. `tiingo:peRatio` is a published
+ * field, not a filed concept, and is named as one.
+ */
+export function requirementLabel(requirement: string): string {
+  if (requirement.startsWith('tiingo:')) return `Tiingo's ${requirement.slice(7)}`;
+  return conceptLabel(requirement).toLowerCase();
+}
+
+/**
+ * One statement figure, in the unit Tiingo declares for it.
+ *
+ * `%` fields are held as fractions (0.4718 is 47.2%); `$` fields are scaled;
+ * blank-unit fields are counts (shares) or ratios, told apart by magnitude.
+ */
+export function formatStatementValue(value: number | null | undefined, units?: string): string {
+  if (absent(value)) return NOT_APPLICABLE;
+  if (units === '%') return formatPercent(value);
+  if (units === '$') {
+    // Per-share figures (EPS, book value per share) are small; keep the cents.
+    return Math.abs(value) < 1000 ? `$${value.toFixed(2)}`.replace('$-', '-$') : formatDollars(value);
+  }
+  return Math.abs(value) >= 1e4 ? formatCompact(value) : formatRatio(value);
+}
 
 /**
  * A filed concept's name, written the way an analyst says it.

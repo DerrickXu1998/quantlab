@@ -11,6 +11,7 @@ No pandas here either -- the backend serves JSON, and raw rows are cheaper.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 import threading
 import time
@@ -29,7 +30,7 @@ import numpy as np
 from quantlab.execution.bars import BarSeries
 from quantlab.execution.minutes import MinuteBar
 from quantlab.signals import fundamental as fundamental_rules
-from quantlab.storage import facts
+from quantlab.storage import facts, tiingo_fields
 from quantlab.storage.pool import ClientPool, pool_config
 
 DB_URL_ENV = "QUANTLAB_DB_URL"
@@ -1272,6 +1273,179 @@ def resolve_universe(wh: Warehouse, universe: str, as_of: str) -> UniverseSnapsh
 # ---------------------------------------------------------------------------
 
 
+#: Daily metric concept -> its column in the response.
+_DAILY_METRIC_COLUMNS: tuple[str, ...] = (
+    "market_cap", "enterprise_value", "pe_ratio", "pb_ratio", "peg_ratio_1y",
+)
+
+#: The profile fields kept from Tiingo's /meta snapshot, response name -> key.
+_PROFILE_FIELDS: dict[str, str] = {
+    "name": "name",
+    "sector": "sector",
+    "industry": "industry",
+    "sic_code": "sicCode",
+    "sic_sector": "sicSector",
+    "sic_industry": "sicIndustry",
+    "location": "location",
+    "reporting_currency": "reportingCurrency",
+    "is_adr": "isADR",
+    "is_active": "isActive",
+    "perma_ticker": "permaTicker",
+    "company_website": "companyWebsite",
+    "sec_filing_website": "secFilingWebsite",
+    "statement_last_updated": "statementLastUpdated",
+    "daily_last_updated": "dailyLastUpdated",
+    "fetched_at": "fetched_at",
+}
+
+_STATEMENT_ORDER = {"incomeStatement": 0, "balanceSheet": 1, "cashFlow": 2, "overview": 3}
+#: dataCode -> its place in the definitions, which are in reading order.
+_FIELD_ORDER = {code: index for index, code in enumerate(tiingo_fields.FIELDS)}
+
+
+def _release_label(fiscal_year: int | None, fiscal_quarter: int | None) -> str:
+    if fiscal_year is None:
+        return "Release"
+    return f"FY{fiscal_year}" if not fiscal_quarter else f"FY{fiscal_year} Q{fiscal_quarter}"
+
+
+def company_fundamentals(
+    wh: Warehouse,
+    symbol: str,
+    as_of: str,
+    start: str | None = None,
+    releases: int = 12,
+) -> dict[str, Any] | None:
+    """Tiingo's fundamentals for one name as they stood on ``as_of``.
+
+    Three reads, each point-in-time: the company profile (Tiingo's /meta
+    snapshot, reference data rather than history), the daily valuation
+    metrics from ``start`` to ``as_of``, and the as-reported statements as a
+    grid of fields by release -- the newest ``releases`` releases filed on or
+    before ``as_of``. None when the symbol is not in the catalogue.
+
+    Statement rows are read by provider and tag, not concept: Tiingo's
+    statements are stored with ``concept = ''`` so they never compete with
+    SEC figures in a backtest, and this page shows them as Tiingo published
+    them. The annual report and the fourth quarter share a release date, so a
+    release is keyed by fiscal year and quarter as well as by date.
+    """
+    with wh.catalog() as conn:
+        row = conn.execute(
+            "SELECT instrument_id, meta FROM instruments WHERE symbol = %s", (symbol,)
+        ).fetchone()
+        if row is None:
+            return None
+        instrument_id, meta = int(row[0]), row[1] or {}
+        if isinstance(meta, str):
+            meta = json.loads(meta)
+        tiingo_meta = meta.get("tiingo") or {}
+
+        daily_rows = conn.execute(
+            """
+            -- company: Tiingo daily metrics
+            SELECT filed_at, concept, value
+              FROM fundamentals
+             WHERE instrument_id = %s
+               AND concept = ANY(%s)
+               AND filed_at <= %s
+               AND filed_at >= %s
+               AND taxonomy = 'tiingo-daily'
+             ORDER BY filed_at
+            """,
+            (instrument_id, list(_DAILY_METRIC_COLUMNS), as_of, start or "1900-01-01"),
+        ).fetchall()
+
+        statement_rows = conn.execute(
+            """
+            -- company: Tiingo statements
+            SELECT taxonomy, tag, unit, filed_at, value,
+                   (meta->>'fiscal_year')::int, (meta->>'fiscal_quarter')::int
+              FROM fundamentals
+             WHERE instrument_id = %s
+               AND concept = ''
+               AND filed_at <= %s
+               AND provider = 'tiingo'
+               AND taxonomy LIKE 'tiingo-%%'
+            """,
+            (instrument_id, as_of),
+        ).fetchall()
+
+    by_day: dict[str, dict[str, Any]] = {}
+    for filed_at, concept, value in daily_rows:
+        day = _iso_date(filed_at)
+        if day > as_of:  # the WHERE clause says so too; this is the guarantee
+            continue
+        entry = by_day.setdefault(day, {"date": day, **dict.fromkeys(_DAILY_METRIC_COLUMNS)})
+        entry[concept] = None if value is None else float(value)
+
+    # Releases, newest first: (filed_at, fiscal_year, fiscal_quarter). The
+    # fourth quarter sorts before the annual report filed the same day.
+    cells: dict[tuple[str, str], dict[tuple, float | None]] = {}
+    units: dict[tuple[str, str], str] = {}
+    keys: set[tuple] = set()
+    for taxonomy, tag, unit, filed_at, value, fiscal_year, fiscal_quarter in statement_rows:
+        filed = _iso_date(filed_at)
+        if filed > as_of:
+            continue
+        release = (filed, fiscal_year, fiscal_quarter)
+        keys.add(release)
+        statement = taxonomy.removeprefix("tiingo-")
+        cells.setdefault((statement, tag), {})[release] = None if value is None else float(value)
+        units[(statement, tag)] = unit or ""
+    ordered = sorted(keys, key=lambda k: (k[0], k[1] or 0, k[2] or 0), reverse=True)[:releases]
+
+    lines = []
+    for statement, tag in sorted(
+        cells,
+        key=lambda st: (
+            _STATEMENT_ORDER.get(st[0], 9),
+            _FIELD_ORDER.get(st[1], len(_FIELD_ORDER)),
+            st[1],
+        ),
+    ):
+        values = [cells[(statement, tag)].get(release) for release in ordered]
+        if all(value is None for value in values):
+            continue
+        field_def = tiingo_fields.FIELDS.get(tag)
+        lines.append(
+            {
+                "statement": statement,
+                "code": tag,
+                "label": field_def.name if field_def else tag,
+                "description": field_def.description if field_def else "",
+                "units": field_def.units if field_def else units[(statement, tag)],
+                "values": values,
+            }
+        )
+
+    return {
+        "symbol": symbol,
+        "as_of": as_of,
+        "source": "tiingo",
+        "profile": (
+            {name: tiingo_meta.get(key) for name, key in _PROFILE_FIELDS.items()}
+            if tiingo_meta
+            else None
+        ),
+        "daily": [by_day[day] for day in sorted(by_day)],
+        "releases": [
+            {
+                "filed_at": filed,
+                "fiscal_year": fiscal_year,
+                "fiscal_quarter": fiscal_quarter,
+                "label": _release_label(fiscal_year, fiscal_quarter),
+            }
+            for filed, fiscal_year, fiscal_quarter in ordered
+        ],
+        "lines": lines,
+    }
+
+
+def _iso_date(value: Any) -> str:
+    return value.isoformat() if isinstance(value, dt.date) else str(value)[:10]
+
+
 def company_overview(wh: Warehouse, symbol: str, as_of: str) -> dict[str, Any] | None:
     """Everything filed about one name, composed rather than newly sourced.
 
@@ -1432,9 +1606,161 @@ SCREEN_METRIC_CONCEPTS: dict[str, tuple[str, ...]] = {
     "current_ratio": ("current_assets", "current_liabilities"),
 }
 
+@dataclass(frozen=True)
+class VendorMetric:
+    """A figure Tiingo publishes ready-made, screened as published.
+
+    Not rebuilt from filed concepts, and named apart from the metrics that
+    are (``pe_ratio`` beside ``pe``): two P/Es computed two ways are two
+    numbers, and a screen must say which one it is sorting by.
+    """
+
+    #: ``tiingo-daily`` (one value per trading day) or ``tiingo-overview``
+    #: (one per quarterly release).
+    taxonomy: str
+    #: How the row is keyed: the daily metrics carry a concept, the overview
+    #: ratios only their Tiingo dataCode in ``tag``.
+    key: str
+    #: Tiingo's own name for it, reported back in coverage as ``tiingo:<code>``.
+    code: str
+    #: Older than this on the as-of date and it is unknown, not in force. A
+    #: daily metric covers a weekend and a holiday; a quarterly one two
+    #: quarters and a late filer.
+    max_stale_days: int
+    #: A multiple whose non-positive value means "no multiple", not "cheap".
+    #: Tiingo publishes them anyway -- on 2026-10-02, 28 negative P/Es, 34
+    #: negative P/Bs and 142 negative PEGs across 503 names -- and a negative
+    #: P/E passes `pe_ratio <= 25` and sorts as the cheapest name on the page.
+    #: The screen's own ratios refuse a non-positive denominator for the same
+    #: reason (fundamental_rules._ratio); these refuse a non-positive result.
+    positive_only: bool = False
+
+
+_DAILY, _OVERVIEW = "tiingo-daily", "tiingo-overview"
+
+VENDOR_METRICS: dict[str, VendorMetric] = {
+    "market_cap": VendorMetric(_DAILY, "market_cap", "marketCap", 7),
+    "enterprise_value": VendorMetric(_DAILY, "enterprise_value", "enterpriseVal", 7),
+    "pe_ratio": VendorMetric(_DAILY, "pe_ratio", "peRatio", 7, positive_only=True),
+    "pb_ratio": VendorMetric(_DAILY, "pb_ratio", "pbRatio", 7, positive_only=True),
+    "peg_ratio_1y": VendorMetric(_DAILY, "peg_ratio_1y", "trailingPEG1Y", 7, positive_only=True),
+    "roe_reported": VendorMetric(_OVERVIEW, "roe", "roe", 200),
+    "roa_reported": VendorMetric(_OVERVIEW, "roa", "roa", 200),
+    # Not profitMargin: Tiingo marks it deprecated, and it is a gross margin.
+    "gross_margin_reported": VendorMetric(_OVERVIEW, "grossMargin", "grossMargin", 200),
+    "current_ratio_reported": VendorMetric(_OVERVIEW, "currentRatio", "currentRatio", 200),
+    # Negative only when equity is: McDonald's at -53 would pass `<= 1` as
+    # barely levered. Unknown, like a P/B on negative book.
+    "debt_equity_reported": VendorMetric(
+        _OVERVIEW, "debtEquity", "debtEquity", 200, positive_only=True
+    ),
+    "revenue_qoq": VendorMetric(_OVERVIEW, "revenueQoQ", "revenueQoQ", 200),
+    "eps_qoq": VendorMetric(_OVERVIEW, "epsQoQ", "epsQoQ", 200),
+    "piotroski_f_score": VendorMetric(_OVERVIEW, "piotroskiFScore", "piotroskiFScore", 200),
+}
+
 #: The canonical order metrics are reported in, whatever order they were asked
 #: for -- so two screens of the same metrics produce the same columns.
-SCREEN_METRICS: tuple[str, ...] = tuple(SCREEN_METRIC_CONCEPTS)
+SCREEN_METRICS: tuple[str, ...] = (*SCREEN_METRIC_CONCEPTS, *VENDOR_METRICS)
+
+
+def metric_requires(metric: str) -> list[str]:
+    """What a metric is made from: filed concepts, or a Tiingo code."""
+    if metric in VENDOR_METRICS:
+        return [f"tiingo:{VENDOR_METRICS[metric].code}"]
+    return list(SCREEN_METRIC_CONCEPTS[metric])
+
+
+def _vendor_values(
+    wh: Warehouse, symbols: Sequence[str], metrics: Sequence[str], as_of: str
+) -> dict[str, dict[str, float | None]]:
+    """Tiingo's published figures in force on ``as_of``, per symbol.
+
+    One statement for the universe, in two halves joined by UNION ALL rather
+    than an OR. Each half pins ``concept`` so it can probe
+    ``fundamentals_pit_idx`` (instrument_id, concept, filed_at), and each has
+    its own staleness floor. Measured on production as a single OR it was
+    9.5 s: the planner could use only the date in the index, and the quarterly
+    window dragged in 200 days of daily rows (359,104 rows for 503 names).
+
+    Point in time twice over, as everywhere else here: the SQL bounds
+    ``filed_at`` by the as-of date, and the resolution below refuses a later
+    or a stale row on its own -- so the guarantee does not rest on a WHERE
+    clause that a future edit could loosen.
+    """
+    wanted = [VENDOR_METRICS[m] for m in metrics if m in VENDOR_METRICS]
+    out: dict[str, dict[str, float | None]] = {
+        symbol: {m: None for m in metrics if m in VENDOR_METRICS} for symbol in symbols
+    }
+    ids = _instrument_ids(wh, list(symbols))
+    if not wanted or not ids:
+        return out
+    by_id = {instrument_id: symbol for symbol, instrument_id in ids.items()}
+    as_of_date = dt.date.fromisoformat(as_of)
+
+    def floor(taxonomy: str) -> str:
+        days = max((m.max_stale_days for m in wanted if m.taxonomy == taxonomy), default=0)
+        return (as_of_date - dt.timedelta(days=days)).isoformat()
+
+    daily_keys = sorted({m.key for m in wanted if m.taxonomy == _DAILY})
+    overview_keys = sorted({m.key for m in wanted if m.taxonomy == _OVERVIEW})
+    ids_list = list(by_id)
+
+    with wh.catalog() as conn:
+        rows = conn.execute(
+            """
+            -- screen: Tiingo published metrics
+            SELECT instrument_id, taxonomy, concept, tag, filed_at, value
+              FROM fundamentals
+             WHERE instrument_id = ANY(%s)
+               AND provider = %s
+               AND filed_at <= %s
+               AND filed_at >= %s
+               AND taxonomy = 'tiingo-daily'
+               AND concept = ANY(%s)
+            UNION ALL
+            SELECT instrument_id, taxonomy, concept, tag, filed_at, value
+              FROM fundamentals
+             WHERE instrument_id = ANY(%s)
+               AND provider = %s
+               AND filed_at <= %s
+               AND filed_at >= %s
+               AND taxonomy = 'tiingo-overview'
+               AND concept = ''
+               AND tag = ANY(%s)
+            """,
+            (
+                ids_list, "tiingo", as_of, floor(_DAILY), daily_keys,
+                ids_list, "tiingo", as_of, floor(_OVERVIEW), overview_keys,
+            ),
+        ).fetchall()
+
+    # (symbol, taxonomy, key) -> (filed_at, value) of the latest row in force.
+    latest: dict[tuple[str, str, str], tuple[dt.date, float]] = {}
+    for instrument_id, taxonomy, concept, tag, filed_at, value in rows:
+        symbol = by_id.get(int(instrument_id))
+        filed = filed_at if isinstance(filed_at, dt.date) else dt.date.fromisoformat(str(filed_at))
+        if symbol is None or filed > as_of_date or value is None:
+            continue
+        key = (symbol, taxonomy, concept if taxonomy == _DAILY else tag)
+        held = latest.get(key)
+        # Latest release wins; on one date the larger value, only so the
+        # answer never depends on row order (Constitution VI).
+        if held is None or (filed, float(value)) > held:
+            latest[key] = (filed, float(value))
+
+    for metric in metrics:
+        spec = VENDOR_METRICS.get(metric)
+        if spec is None:
+            continue
+        for symbol in symbols:
+            found = latest.get((symbol, spec.taxonomy, spec.key))
+            if found is None or (as_of_date - found[0]).days > spec.max_stale_days:
+                continue
+            if spec.positive_only and found[1] <= 0:
+                continue  # a loss-maker has no P/E; it is unknown, not cheap
+            out[symbol][metric] = round(found[1], 6)
+    return out
 
 #: How many names' facts are resolved at once.
 #:
@@ -1557,19 +1883,28 @@ def screen(
         return None
 
     wanted = [metric for metric in SCREEN_METRICS if metric in set(metrics)]
-    concepts = sorted({c for metric in wanted for c in SCREEN_METRIC_CONCEPTS[metric]})
+    computed = [metric for metric in wanted if metric in SCREEN_METRIC_CONCEPTS]
+    concepts = sorted({c for metric in computed for c in SCREEN_METRIC_CONCEPTS[metric]})
     symbols = snapshot.symbols
-    closes = _last_closes(wh, symbols, as_of)
 
-    values: dict[str, dict[str, float | None]] = {}
-    for start in range(0, len(symbols), SCREEN_CHUNK):
-        chunk = symbols[start : start + SCREEN_CHUNK]
-        series_by_symbol = load_facts_for(wh, chunk, concepts, as_of, as_of)
-        for symbol in chunk:
-            values[symbol] = _screen_values(
-                wanted, series_by_symbol.get(symbol), closes.get(symbol), as_of,
-                max_stale_days,
-            )
+    values: dict[str, dict[str, float | None]] = {symbol: {} for symbol in symbols}
+    if computed:
+        closes = _last_closes(wh, symbols, as_of)
+        for start in range(0, len(symbols), SCREEN_CHUNK):
+            chunk = symbols[start : start + SCREEN_CHUNK]
+            series_by_symbol = load_facts_for(wh, chunk, concepts, as_of, as_of)
+            for symbol in chunk:
+                values[symbol] = _screen_values(
+                    computed, series_by_symbol.get(symbol), closes.get(symbol), as_of,
+                    max_stale_days,
+                )
+    if any(metric in VENDOR_METRICS for metric in wanted):
+        for symbol, published in _vendor_values(wh, symbols, wanted, as_of).items():
+            values[symbol].update(published)
+    # Reported in canonical order whichever source filled them.
+    values = {
+        symbol: {metric: row.get(metric) for metric in wanted} for symbol, row in values.items()
+    }
 
     kept: list[str] = []
     excluded_by_constraint = 0
@@ -1603,7 +1938,7 @@ def screen(
                 "metric": metric,
                 "measured": sum(1 for row in values.values() if row.get(metric) is not None),
                 "universe": len(symbols),
-                "requires": list(SCREEN_METRIC_CONCEPTS[metric]),
+                "requires": metric_requires(metric),
             }
             for metric in wanted
         ],

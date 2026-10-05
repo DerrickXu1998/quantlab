@@ -3,11 +3,12 @@ import {
   ApiError,
   getCompanyOverview,
   getPrices,
+  getTiingoFundamentals,
   listInstruments,
   type Instrument,
   type PriceBar,
 } from '../../api/client';
-import type { CompanyOverview, FundamentalFact } from '../../api/types';
+import type { CompanyFundamentals, CompanyOverview, FundamentalFact } from '../../api/types';
 
 /**
  * The reads behind the company view.
@@ -190,6 +191,24 @@ export function useCompanyOverview(
   return useKeyedRead<CompanyOverview | null>(
     symbol && asOf ? `overview:${symbol}@${asOf}` : null,
     () => getCompanyOverview(symbol as string, asOf),
+    null,
+  );
+}
+
+/**
+ * Tiingo's fundamentals for the company, as they stood on the as-of date.
+ *
+ * Keyed like the overview, so moving either control re-reads it, and a release
+ * filed after the date cannot be on screen.
+ */
+export function useTiingoFundamentals(
+  symbol: string | null,
+  asOf: string,
+  releases = 12,
+): Read<CompanyFundamentals | null> {
+  return useKeyedRead<CompanyFundamentals | null>(
+    symbol && asOf ? `tiingo:${symbol}@${asOf}#${releases}` : null,
+    () => getTiingoFundamentals(symbol as string, asOf, null, releases),
     null,
   );
 }

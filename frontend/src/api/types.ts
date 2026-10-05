@@ -770,7 +770,14 @@ export interface CompanyOverview {
   signal_total: number;
 }
 
-/** The ratios a screen can constrain, each derived from filed concepts. */
+/**
+ * The ratios a screen can constrain.
+ *
+ * The first seven are computed here from filed concepts, by the same arithmetic
+ * the fundamental rules gate on. The rest are published by Tiingo — daily
+ * valuation and quarterly overview ratios — and screened as published; their
+ * coverage `requires` reads `tiingo:<dataCode>`.
+ */
 export const SCREEN_METRICS = [
   'pe',
   'pb',
@@ -779,6 +786,19 @@ export const SCREEN_METRICS = [
   'net_margin',
   'gross_margin',
   'current_ratio',
+  'market_cap',
+  'enterprise_value',
+  'pe_ratio',
+  'pb_ratio',
+  'peg_ratio_1y',
+  'roe_reported',
+  'roa_reported',
+  'gross_margin_reported',
+  'current_ratio_reported',
+  'debt_equity_reported',
+  'revenue_qoq',
+  'eps_qoq',
+  'piotroski_f_score',
 ] as const;
 
 export type ScreenMetric = (typeof SCREEN_METRICS)[number];
@@ -822,4 +842,73 @@ export interface ScreenResult {
   excluded_by_constraint: number;
   /** Names dropped because a constrained metric could not be computed. */
   excluded_unmeasured: number;
+}
+
+// --- Tiingo fundamentals for one company -------------------------------------
+
+/** Tiingo's /meta snapshot: reference data, refreshed each ingest, not history. */
+export interface TiingoProfile {
+  name?: string | null;
+  /** Tiingo's SIC-derived sector, shown beside the catalogue's, never over it. */
+  sector?: string | null;
+  industry?: string | null;
+  sic_code?: number | null;
+  sic_sector?: string | null;
+  sic_industry?: string | null;
+  location?: string | null;
+  /** Anything but "usd" means Tiingo converted the figures through an FX rate. */
+  reporting_currency?: string | null;
+  is_adr?: boolean | null;
+  is_active?: boolean | null;
+  perma_ticker?: string | null;
+  company_website?: string | null;
+  sec_filing_website?: string | null;
+  statement_last_updated?: string | null;
+  daily_last_updated?: string | null;
+  fetched_at?: string | null;
+}
+
+export interface DailyFundamentals {
+  date: string;
+  market_cap?: number | null;
+  enterprise_value?: number | null;
+  pe_ratio?: number | null;
+  pb_ratio?: number | null;
+  peg_ratio_1y?: number | null;
+}
+
+export type DailyMetric = Exclude<keyof DailyFundamentals, 'date'>;
+
+export interface StatementRelease {
+  /** When the filing was posted to the SEC: when it became knowable. */
+  filed_at: string;
+  fiscal_year?: number | null;
+  /** 0 is the annual report, 1–4 the quarters. */
+  fiscal_quarter?: number | null;
+  label: string;
+}
+
+export type StatementType = 'incomeStatement' | 'balanceSheet' | 'cashFlow' | 'overview';
+
+export interface StatementLine {
+  statement: StatementType | string;
+  /** Tiingo's dataCode, e.g. `netinc`. */
+  code: string;
+  label: string;
+  description?: string;
+  /** "$", "%" (held as a fraction: 0.12 is 12%) or "" (a count or a ratio). */
+  units?: string;
+  /** One per release, in the order of `releases`; null where not reported. */
+  values: (number | null)[];
+}
+
+export interface CompanyFundamentals {
+  symbol: string;
+  as_of: string;
+  source?: 'tiingo';
+  profile?: TiingoProfile | null;
+  daily: DailyFundamentals[];
+  /** Newest first. */
+  releases: StatementRelease[];
+  lines: StatementLine[];
 }

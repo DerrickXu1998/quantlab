@@ -78,6 +78,10 @@ class StorageBackend(Protocol):
     def ensure_default_universe(self) -> None: ...
     def universe_members(self, name: str, as_of: str) -> dict | None: ...
     def company_overview(self, symbol: str, as_of: str) -> dict | None: ...
+    #: Tiingo's profile, daily metrics and as-reported statements for a name.
+    def company_fundamentals(
+        self, symbol: str, as_of: str, start: str | None = None, releases: int = 12
+    ) -> dict | None: ...
     def screen(self, **kwargs) -> dict | None: ...
 
 
@@ -228,6 +232,22 @@ class SqliteBackend:
         # No universe history, so no universe to resolve.
         return None
 
+    def company_fundamentals(
+        self, symbol: str, as_of: str, start: str | None = None, releases: int = 12
+    ) -> dict | None:
+        """Empty, never an error: the demo has prices and no vendor fundamentals."""
+        if not self.instrument_exists(symbol):
+            return None
+        return {
+            "symbol": symbol,
+            "as_of": as_of,
+            "source": "tiingo",
+            "profile": None,
+            "daily": [],
+            "releases": [],
+            "lines": [],
+        }
+
     def company_overview(self, symbol: str, as_of: str) -> dict | None:
         """The same page, minus the half the demo has no data for.
 
@@ -317,7 +337,7 @@ class SqliteBackend:
                     "metric": metric,
                     "measured": 0,
                     "universe": 0,
-                    "requires": list(warehouse.SCREEN_METRIC_CONCEPTS[metric]),
+                    "requires": warehouse.metric_requires(metric),
                 }
                 for metric in warehouse.SCREEN_METRICS
                 if metric in set(metrics)
@@ -425,6 +445,11 @@ class WarehouseBackend:
 
     def company_overview(self, symbol: str, as_of: str) -> dict | None:
         return warehouse.company_overview(self.wh, symbol, as_of)
+
+    def company_fundamentals(
+        self, symbol: str, as_of: str, start: str | None = None, releases: int = 12
+    ) -> dict | None:
+        return warehouse.company_fundamentals(self.wh, symbol, as_of, start, releases)
 
     def screen(self, **kwargs) -> dict | None:
         return warehouse.screen(self.wh, **kwargs)

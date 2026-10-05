@@ -4,6 +4,7 @@ import type {
   AuthSession,
   AuthUser,
   Credentials,
+  CompanyFundamentals,
   CompanyOverview,
   ExecutionConfig,
   FundamentalFact,
@@ -378,6 +379,26 @@ export function getCompanyOverview(symbol: string, asOf?: string): Promise<Compa
   return request<CompanyOverview>(
     `/instruments/${encodeURIComponent(symbol)}/overview`,
     asOf ? { as_of: asOf } : {},
+  );
+}
+
+/**
+ * Tiingo's profile, daily valuation metrics and as-reported statements for one
+ * name, everything published on or before `asOf`.
+ */
+export function getTiingoFundamentals(
+  symbol: string,
+  asOf?: string,
+  start?: string | null,
+  releases?: number,
+): Promise<CompanyFundamentals> {
+  const query: Record<string, string> = {};
+  if (asOf) query.as_of = asOf;
+  if (start) query.start = start;
+  if (releases !== undefined) query.releases = String(releases);
+  return request<CompanyFundamentals>(
+    `/instruments/${encodeURIComponent(symbol)}/fundamentals/tiingo`,
+    query,
   );
 }
 

@@ -333,7 +333,13 @@ def test_the_universe_is_read_in_bounded_chunks(wh, monkeypatch):
 
     chunked = _screen(wh)
 
-    assert len([1 for sql, _ in wh._catalog.calls if "FROM fundamentals" in sql]) == 3
+    # The filed-concept reads, one per chunk. Tiingo's published metrics are
+    # one query for the whole universe and are not part of this count.
+    concept_reads = [
+        sql for sql, _ in wh._catalog.calls
+        if "FROM fundamentals" in sql and "screen: Tiingo published metrics" not in sql
+    ]
+    assert len(concept_reads) == 3
     assert _values(chunked, "CAT.US")["pe"] == pytest.approx(5.0)
 
 
@@ -455,3 +461,141 @@ def test_a_metric_needs_exactly_what_its_rule_needs(metric, rule_name):
     rule = signal_registry.get_rule(rule_name)
 
     assert set(warehouse.SCREEN_METRIC_CONCEPTS[metric]) == set(rule.requires_facts)
+
+
+# --- Tiingo's published metrics --------------------------------------------
+#
+# Screened as Tiingo publishes them: daily valuation (one row per trading day,
+# keyed by concept) and quarterly overview ratios (keyed by tag under an empty
+# concept). The fake below returns every row it holds, as the one above does,
+# so the point-in-time and staleness rules are proved in the resolution.
+
+#: (instrument_id, taxonomy, concept, tag, filed_at, value)
+TIINGO_ROWS = [
+    # In force on the as-of date: Friday's close, read on Sunday.
+    (1, "tiingo-daily", "pe_ratio", "peRatio", dt.date(2024, 6, 28), 18.5),
+    (1, "tiingo-daily", "market_cap", "marketCap", dt.date(2024, 6, 28), 150e9),
+    # Published after the screen's date. Using it would be a look-ahead.
+    (1, "tiingo-daily", "pe_ratio", "peRatio", dt.date(2024, 7, 15), 99.0),
+    (1, "tiingo-overview", "", "roe", dt.date(2024, 5, 1), 0.42),
+    (1, "tiingo-overview", "", "piotroskiFScore", dt.date(2024, 5, 1), 8.0),
+    # NEG.US: a P/E last published six weeks before -- stale for a daily
+    # figure, so unknown rather than in force.
+    (2, "tiingo-daily", "pe_ratio", "peRatio", dt.date(2024, 5, 15), 7.0),
+    (2, "tiingo-overview", "", "roe", dt.date(2024, 5, 1), -0.3),
+    # Negative book makes debt/equity negative: not "barely levered".
+    (2, "tiingo-overview", "", "debtEquity", dt.date(2024, 5, 1), -53.4),
+    (1, "tiingo-overview", "", "debtEquity", dt.date(2024, 5, 1), 0.8),
+    # QUIET.US makes a loss: Tiingo publishes a negative P/E for it, and a
+    # negative enterprise value (more cash than debt plus equity).
+    (3, "tiingo-daily", "pe_ratio", "peRatio", dt.date(2024, 6, 28), -12.0),
+    (3, "tiingo-daily", "enterprise_value", "enterpriseVal", dt.date(2024, 6, 28), -1e8),
+    # Outside the universe.
+    (4, "tiingo-daily", "pe_ratio", "peRatio", dt.date(2024, 6, 28), 3.0),
+]
+
+
+class _TiingoCatalog(_Catalog):
+    def _rows_for(self, sql, params):
+        if "screen: Tiingo published metrics" in sql:
+            ids = set(params[0])
+            daily, overview = set(params[4]), set(params[9])
+            return [
+                row for row in TIINGO_ROWS
+                if row[0] in ids
+                and ((row[1] == "tiingo-daily" and row[2] in daily)
+                     or (row[1] == "tiingo-overview" and row[3] in overview))
+            ]
+        return super()._rows_for(sql, params)
+
+
+@pytest.fixture()
+def tiingo_wh():
+    store = _Warehouse()
+    store._catalog = _TiingoCatalog()
+    return store
+
+
+def test_a_published_metric_is_read_as_of_the_screen_date(tiingo_wh):
+    result = _screen(tiingo_wh, metrics=["pe_ratio", "market_cap", "roe_reported"])
+
+    cat = _values(result, "CAT.US")
+    # Friday's 18.5, not the 99.0 published two weeks after the as-of date.
+    assert cat["pe_ratio"] == pytest.approx(18.5)
+    assert cat["market_cap"] == pytest.approx(150e9)
+    assert cat["roe_reported"] == pytest.approx(0.42)
+
+
+def test_a_stale_daily_metric_is_unknown_not_in_force(tiingo_wh):
+    result = _screen(tiingo_wh, metrics=["pe_ratio", "roe_reported"])
+
+    neg = _values(result, "NEG.US")
+    assert neg["pe_ratio"] is None  # six weeks old: not a daily figure any more
+    assert neg["roe_reported"] == pytest.approx(-0.3)  # a quarter's ratio, in force
+    assert _values(result, "QUIET.US") == {"pe_ratio": None, "roe_reported": None}
+
+
+def test_a_negative_published_multiple_is_unknown_not_cheap(tiingo_wh):
+    """A loss-maker's P/E of -12 passes `pe_ratio <= 25` and would rank as the
+    cheapest name. It has no P/E; the screen says it was never measured."""
+    result = _screen(
+        tiingo_wh, metrics=["pe_ratio", "enterprise_value"], constraints=[("pe_ratio", None, 25.0)]
+    )
+
+    assert [row["symbol"] for row in result["rows"]] == ["CAT.US"]
+    assert "QUIET.US" not in {row["symbol"] for row in result["rows"]}
+    assert result["excluded_unmeasured"] == 2  # NEG.US stale, QUIET.US a loss
+    # Debt/equity on negative book is no ratio either: it must not pass `<= 1`.
+    levered = _screen(
+        tiingo_wh,
+        metrics=["debt_equity_reported"],
+        constraints=[("debt_equity_reported", None, 1.0)],
+    )
+    assert [row["symbol"] for row in levered["rows"]] == ["CAT.US"]
+    # Enterprise value is not a multiple: negative is a real, reportable value.
+    unconstrained = _screen(tiingo_wh, metrics=["enterprise_value"])
+    assert _values(unconstrained, "QUIET.US")["enterprise_value"] == pytest.approx(-1e8)
+
+
+def test_published_metrics_constrain_and_report_their_source(tiingo_wh):
+    result = _screen(
+        tiingo_wh,
+        metrics=["pe_ratio", "piotroski_f_score"],
+        constraints=[("piotroski_f_score", 7.0, None)],
+        sort_by="pe_ratio",
+    )
+
+    assert [row["symbol"] for row in result["rows"]] == ["CAT.US"]
+    assert result["excluded_unmeasured"] == 2
+    coverage = {item["metric"]: item for item in result["coverage"]}
+    assert coverage["pe_ratio"] == {
+        "metric": "pe_ratio", "measured": 1, "universe": 3, "requires": ["tiingo:peRatio"],
+    }
+    assert coverage["piotroski_f_score"]["requires"] == ["tiingo:piotroskiFScore"]
+
+
+def test_a_vendor_only_screen_reads_no_bars_and_no_filed_concepts(tiingo_wh):
+    """Published metrics need neither a close nor the concept series; asking
+    for them alone should cost one fundamentals query, not a bars read too."""
+    _screen(tiingo_wh, metrics=["pe_ratio"])
+
+    assert tiingo_wh.client.parameters == []
+    fundamentals = [sql for sql, _ in tiingo_wh._catalog.calls if "FROM fundamentals" in sql]
+    assert len(fundamentals) == 1
+    assert "screen: Tiingo published metrics" in fundamentals[0]
+
+
+def test_the_published_metrics_query_is_bounded_by_universe_and_date(tiingo_wh):
+    _screen(tiingo_wh, metrics=["pe_ratio", "roe_reported"])
+
+    (params,) = [
+        params for sql, params in tiingo_wh._catalog.calls
+        if "screen: Tiingo published metrics" in sql
+    ]
+    assert set(params[0]) <= {IDS[s] for s in UNIVERSE_MEMBERS}
+    assert params[1] == params[6] == "tiingo"
+    assert params[2] == params[7] == AS_OF
+    # Each half has its own floor: a week for daily figures, 200 days for a
+    # quarter's -- so the daily half never reads 200 days of daily rows.
+    assert params[3] == "2024-06-23"
+    assert params[8] == "2023-12-13"

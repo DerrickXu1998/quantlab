@@ -527,6 +527,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/instruments/{symbol}/fundamentals/tiingo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Tiingo's profile, daily metrics and as-reported statements for one name
+         * @description Everything Tiingo published about the company on or before `as_of`: the /meta profile (reference data), the daily valuation metrics from `start` to `as_of`, and the as-reported statements as a grid of fields by release, newest first. Statement fields are read by Tiingo dataCode, not by concept, so they are shown exactly as Tiingo published them.
+         */
+        get: operations["getTiingoFundamentals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/fundamentals/coverage": {
         parameters: {
             query?: never;
@@ -1415,8 +1435,87 @@ export interface components {
             signals: components["schemas"]["CompanySignalCount"][];
             signal_total: number;
         };
-        /** @enum {string} */
-        ScreenMetric: "pe" | "pb" | "roe" | "leverage" | "net_margin" | "gross_margin" | "current_ratio";
+        /**
+         * @description The first seven are computed from filed concepts; the rest are published by Tiingo (daily valuation, and quarterly overview ratios) and screened as published. A Tiingo metric's coverage `requires` is `tiingo:<dataCode>`.
+         * @enum {string}
+         */
+        ScreenMetric: "pe" | "pb" | "roe" | "leverage" | "net_margin" | "gross_margin" | "current_ratio" | "market_cap" | "enterprise_value" | "pe_ratio" | "pb_ratio" | "peg_ratio_1y" | "roe_reported" | "roa_reported" | "gross_margin_reported" | "current_ratio_reported" | "debt_equity_reported" | "revenue_qoq" | "eps_qoq" | "piotroski_f_score";
+        /** @description Tiingo's /meta snapshot: reference data refreshed on each fundamentals ingest, not a point-in-time history. Sector and industry are Tiingo's (SIC-derived), shown beside the catalogue's own, never over it. */
+        TiingoProfile: {
+            name?: string | null;
+            sector?: string | null;
+            industry?: string | null;
+            sic_code?: number | null;
+            sic_sector?: string | null;
+            sic_industry?: string | null;
+            location?: string | null;
+            /** @description What the company files in. Tiingo converts every figure to USD, so anything but "usd" means the numbers went through an FX rate. */
+            reporting_currency?: string | null;
+            is_adr?: boolean | null;
+            is_active?: boolean | null;
+            perma_ticker?: string | null;
+            company_website?: string | null;
+            sec_filing_website?: string | null;
+            statement_last_updated?: string | null;
+            daily_last_updated?: string | null;
+            fetched_at?: string | null;
+        };
+        DailyFundamentals: {
+            /** Format: date */
+            date: string;
+            market_cap?: number | null;
+            enterprise_value?: number | null;
+            pe_ratio?: number | null;
+            pb_ratio?: number | null;
+            peg_ratio_1y?: number | null;
+        };
+        StatementRelease: {
+            /**
+             * Format: date
+             * @description The date the filing was posted to the SEC -- when it became knowable.
+             */
+            filed_at: string;
+            fiscal_year?: number | null;
+            /** @description 0 is the annual report, 1-4 the quarters. */
+            fiscal_quarter?: number | null;
+            /** @example FY2025 Q4 */
+            label: string;
+        };
+        StatementLine: {
+            /** @description incomeStatement, balanceSheet, cashFlow or overview. */
+            statement: string;
+            /**
+             * @description Tiingo's dataCode.
+             * @example netinc
+             */
+            code: string;
+            /** @example Net Income */
+            label: string;
+            /** @default  */
+            description: string;
+            /**
+             * @description "$", "%" (held as a fraction: 0.12 is 12%) or "" (a count or a ratio).
+             * @default
+             */
+            units: string;
+            /** @description One per release, in the order of `releases`; null where not reported. */
+            values?: (number | null)[];
+        };
+        CompanyFundamentals: {
+            symbol: string;
+            /** Format: date */
+            as_of: string;
+            /**
+             * @default tiingo
+             * @enum {string}
+             */
+            source: "tiingo";
+            profile?: components["schemas"]["TiingoProfile"] | null;
+            daily?: components["schemas"]["DailyFundamentals"][];
+            /** @description Newest first. */
+            releases?: components["schemas"]["StatementRelease"][];
+            lines?: components["schemas"]["StatementLine"][];
+        };
         ScreenMetricCoverage: {
             metric: components["schemas"]["ScreenMetric"];
             measured: number;
@@ -2657,6 +2756,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CompanyOverview"];
+                };
+            };
+            /** @description Unknown symbol */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getTiingoFundamentals: {
+        parameters: {
+            query?: {
+                as_of?: string;
+                /** @description First day of the daily metrics; default all held. */
+                start?: string;
+                /** @description How many of the newest statement releases to return. */
+                releases?: number;
+            };
+            header?: never;
+            path: {
+                symbol: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The company's Tiingo fundamentals as they stood */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyFundamentals"];
                 };
             };
             /** @description Unknown symbol */

@@ -6,7 +6,13 @@ import { Button } from '../../components/ui/button';
 import { EmptyState } from '../../components/ui/empty-state';
 import { FillColumn, ScrollRegion } from '../../components/ui/layout';
 import { CascadeItem } from '../../quantlab/chrome/Cascade';
-import { formatCount } from '../format';
+import {
+  formatCount,
+  METRIC_FORMAT,
+  metricSource,
+  requirementLabel,
+  TIINGO_METRICS,
+} from '../format';
 import { ResearchPanel } from '../shell/ResearchShell';
 import { CoverageLine, ExclusionLedger } from './Coverage';
 import { ScreenControls } from './ScreenControls';
@@ -22,6 +28,53 @@ export interface ScreenViewProps {
 
 /** Every ratio is asked for, so coverage comes back for every ratio. */
 const ALL_METRICS: ScreenMetric[] = [...SCREEN_METRICS];
+
+/**
+ * The columns shown before the reader picks their own: every metric the
+ * answer could measure for at least one name. On the US list that is Tiingo's
+ * published figures; where SEC concepts are filed, the computed ratios join
+ * them. A column that is a dash in every row tells the reader nothing the
+ * coverage lines do not already say. Every metric is still fetched, so
+ * changing columns never re-runs the screen.
+ */
+export function autoColumns(coverage: readonly ScreenMetricCoverage[] | undefined): ScreenMetric[] {
+  const measured = new Set(
+    (coverage ?? []).filter((entry) => entry.measured > 0).map((entry) => entry.metric),
+  );
+  const all = SCREEN_METRICS.filter((metric) => measured.has(metric));
+  if (all.length <= MAX_AUTO_COLUMNS) return all;
+  // More than a table can carry legibly: start from the figures a valuation
+  // screen is usually read by. Every other measured metric is one tick away.
+  const preferred = all.filter((metric) => PREFERRED_COLUMNS.has(metric));
+  return preferred.length > 0 ? preferred : all.slice(0, MAX_AUTO_COLUMNS);
+}
+
+const MAX_AUTO_COLUMNS = 8;
+
+const PREFERRED_COLUMNS: ReadonlySet<ScreenMetric> = new Set<ScreenMetric>([
+  'pe',
+  'pb',
+  'roe',
+  'market_cap',
+  'pe_ratio',
+  'pb_ratio',
+  'peg_ratio_1y',
+  'roe_reported',
+  'gross_margin_reported',
+  'debt_equity_reported',
+  'piotroski_f_score',
+]);
+
+/** Shown columns: the chosen ones, plus whatever the answer was constrained or ranked by. */
+export function visibleMetrics(
+  columns: readonly ScreenMetric[],
+  answered: { constraints: { metric: ScreenMetric }[]; sortBy: ScreenMetric | null } | null,
+): ScreenMetric[] {
+  const wanted = new Set<ScreenMetric>(columns);
+  for (const constraint of answered?.constraints ?? []) wanted.add(constraint.metric);
+  if (answered?.sortBy) wanted.add(answered.sortBy);
+  return SCREEN_METRICS.filter((metric) => wanted.has(metric));
+}
 
 /**
  * Screen — narrow a universe by what companies actually filed.
@@ -48,6 +101,9 @@ export function ScreenView({ onSelectSymbol }: ScreenViewProps): JSX.Element {
   const [drafts, setDrafts] = useState<ConstraintDraft[]>([]);
   const [sortBy, setSortBy] = useState<ScreenMetric | null>(null);
   const [descending, setDescending] = useState(false);
+  // Null until the reader ticks a box: until then the columns follow coverage.
+  const [chosenColumns, setColumns] = useState<ScreenMetric[] | null>(null);
+  const columns = chosenColumns ?? autoColumns(result?.coverage);
 
   // Default to the first published universe rather than a hardcoded name: the
   // one real list is `liquid-500-ftse-core`, but naming it here would make the
@@ -84,7 +140,12 @@ export function ScreenView({ onSelectSymbol }: ScreenViewProps): JSX.Element {
 
   const addConstraint = () => {
     const used = new Set(drafts.map((draft) => draft.metric));
-    const next = SCREEN_METRICS.find((metric) => !used.has(metric)) ?? SCREEN_METRICS[0];
+    // Once a screen has run, the first metric it could actually measure: a
+    // constraint on a ratio nobody has is a constraint that empties the table.
+    const next =
+      autoColumns(result?.coverage).find((metric) => !used.has(metric)) ??
+      SCREEN_METRICS.find((metric) => !used.has(metric)) ??
+      SCREEN_METRICS[0];
     setDrafts((current) => [...current, newDraft(next)]);
   };
 
@@ -165,12 +226,98 @@ export function ScreenView({ onSelectSymbol }: ScreenViewProps): JSX.Element {
                 onRetry={() => run(query)}
                 onSelectSymbol={onSelectSymbol}
                 onSort={sortByMetric}
+                columns={columns}
+                onColumns={setColumns}
               />
             </div>
           </ResearchPanel>
         </CascadeItem>
       </div>
     </FillColumn>
+  );
+}
+
+/**
+ * The metrics no member could be measured on, in one sentence.
+ *
+ * Still stated -- a reader about to constrain on P/E must learn first that
+ * nobody here has the concepts it needs -- but as one line, not seven bars at
+ * zero pushing the answer below the fold.
+ */
+function Unmeasurable({ coverage }: { coverage: ScreenMetricCoverage[] }) {
+  const none = coverage.filter((entry) => entry.measured === 0);
+  if (none.length === 0) return null;
+  const needs = [...new Set(none.flatMap((entry) => entry.requires ?? []))].map(requirementLabel);
+  return (
+    <p data-testid="coverage-unmeasurable" className="text-xs text-muted-foreground">
+      Measured for no name in this list:{' '}
+      <span className="text-foreground">
+        {none.map((entry) => METRIC_FORMAT[entry.metric].label).join(', ')}
+      </span>
+      {needs.length > 0 ? ` — they need ${needs.join(', ')}, which no member has filed.` : '.'}
+    </p>
+  );
+}
+
+/**
+ * Which figures the table shows, chosen without re-running the screen.
+ *
+ * Every metric was fetched, so this is a view over the answer already on
+ * screen. A metric the answer was constrained or ranked by stays shown and
+ * cannot be unticked: hiding the column a ranking is ordered by would leave
+ * the order unexplained.
+ */
+function ColumnChooser({
+  columns,
+  pinned,
+  onColumns,
+}: {
+  columns: ScreenMetric[];
+  pinned: ScreenMetric[];
+  onColumns: (columns: ScreenMetric[]) => void;
+}) {
+  const chosen = new Set<ScreenMetric>(columns);
+  const locked = new Set<ScreenMetric>(pinned.filter((metric) => !chosen.has(metric)));
+  const toggle = (metric: ScreenMetric) =>
+    onColumns(
+      chosen.has(metric)
+        ? columns.filter((item) => item !== metric)
+        : SCREEN_METRICS.filter((item) => chosen.has(item) || item === metric),
+    );
+  const group = (title: string, metrics: readonly ScreenMetric[]) => (
+    <fieldset className="space-y-1">
+      <legend className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+        {title}
+      </legend>
+      <div className="flex flex-wrap gap-x-4 gap-y-1">
+        {metrics.map((metric) => (
+          <label key={metric} className="inline-flex items-center gap-1.5 text-xs">
+            <input
+              type="checkbox"
+              checked={chosen.has(metric) || locked.has(metric)}
+              disabled={locked.has(metric)}
+              onChange={() => toggle(metric)}
+              data-testid={`column-${metric}`}
+            />
+            {METRIC_FORMAT[metric].label}
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  );
+  return (
+    <details className="border-t border-border pt-3" data-testid="screen-columns">
+      <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground hover:text-foreground">
+        Columns ({pinned.length} shown)
+      </summary>
+      <div className="mt-2 space-y-2">
+        {group('Published by Tiingo', TIINGO_METRICS)}
+        {group(
+          'Computed from filed accounts',
+          SCREEN_METRICS.filter((metric) => metricSource(metric) === 'filed'),
+        )}
+      </div>
+    </details>
   );
 }
 
@@ -268,6 +415,8 @@ function Results({
   onRetry,
   onSelectSymbol,
   onSort,
+  columns,
+  onColumns,
 }: {
   status: ReturnType<typeof useScreen>['status'];
   message: string | null;
@@ -277,6 +426,8 @@ function Results({
   onRetry: () => void;
   onSelectSymbol: (symbol: string) => void;
   onSort: (metric: ScreenMetric) => void;
+  columns: ScreenMetric[];
+  onColumns: (columns: ScreenMetric[]) => void;
 }) {
   if (status === 'idle') {
     return (
@@ -335,6 +486,8 @@ function Results({
 
   if (!result || !answered) return <></>;
 
+  const shown = visibleMetrics(columns, answered);
+
   return (
     <>
       <div className="shrink-0 space-y-3 border-b border-border p-3">
@@ -345,6 +498,8 @@ function Results({
         </p>
 
         <ExclusionLedger result={result} />
+
+        <ColumnChooser columns={columns} pinned={shown} onColumns={onColumns} />
 
         {/*
           Coverage for every ratio on offer, not only the constrained ones. A
@@ -358,10 +513,13 @@ function Results({
               What could be measured at all
             </p>
             <div className="grid grid-cols-1 gap-x-8 gap-y-2 md:grid-cols-2 xl:grid-cols-3">
-              {result.coverage.map((entry) => (
-                <CoverageLine key={entry.metric} metric={entry.metric} coverage={entry} />
-              ))}
+              {result.coverage
+                .filter((entry) => entry.measured > 0)
+                .map((entry) => (
+                  <CoverageLine key={entry.metric} metric={entry.metric} coverage={entry} />
+                ))}
             </div>
+            <Unmeasurable coverage={result.coverage} />
           </div>
         ) : null}
       </div>
@@ -378,7 +536,7 @@ function Results({
         <ScrollRegion testId="screen-rows">
           <ScreenTable
             result={result}
-            metrics={answered.metrics}
+            metrics={shown}
             descending={answered.descending}
             busy={status === 'running'}
             onSelectSymbol={onSelectSymbol}
