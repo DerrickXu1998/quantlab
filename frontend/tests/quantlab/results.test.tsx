@@ -239,3 +239,39 @@ describe('run results, with execution criteria', () => {
     expect(screen.getAllByText('—').length).toBeGreaterThan(0);
   });
 });
+
+describe('a run limited to where its fundamentals begin', () => {
+  const factCoverage = (extra: { fundamentals_start: string; requested_start_date: string | null }) => ({
+    concepts: ['net_income', 'shares_outstanding'],
+    instruments_with_facts: 1,
+    missing_by_concept: { net_income: 0, shares_outstanding: 0 },
+    instruments_missing_facts: [],
+    ...extra,
+  });
+
+  it('says it started later than asked, and why', async () => {
+    const run = runWithStrategy();
+    run.start_date = '2023-10-05';
+    run.coverage = {
+      ...run.coverage,
+      facts: factCoverage({ fundamentals_start: '2023-10-05', requested_start_date: '2015-01-01' }),
+    };
+    renderResults(run);
+
+    const note = await screen.findByTestId('run-fundamentals-window');
+    expect(note).toHaveTextContent('Started 2023-10-05, not 2015-01-01');
+    expect(note).toHaveTextContent('net_income, shares_outstanding');
+  });
+
+  it('says nothing when the window was not moved', async () => {
+    const run = runWithStrategy();
+    run.coverage = {
+      ...run.coverage,
+      facts: factCoverage({ fundamentals_start: '2023-10-05', requested_start_date: null }),
+    };
+    renderResults(run);
+
+    await screen.findByTestId('trade-log');
+    expect(screen.queryByTestId('run-fundamentals-window')).not.toBeInTheDocument();
+  });
+});

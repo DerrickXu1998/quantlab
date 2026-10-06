@@ -1920,6 +1920,21 @@ components:
           description: >
             Requested instruments lacking at least one concept -- their
             fundamental gates never opened.
+        fundamentals_start:
+          type: [string, "null"]
+          format: date
+          description: >
+            The first date every concept had a filing for some requested
+            instrument. A run reading fundamentals never starts before it.
+          example: "2023-10-05"
+        requested_start_date:
+          type: [string, "null"]
+          format: date
+          description: >
+            The start as submitted, when it was before fundamentals_start and
+            the run was started at fundamentals_start instead. Null when the
+            window was not moved.
+          example: "2015-01-01"
 
     Run:
       type: object

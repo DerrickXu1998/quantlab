@@ -163,6 +163,11 @@ class FactCoverage(BaseModel):
     instruments_with_facts: int
     missing_by_concept: dict[str, int]
     instruments_missing_facts: list[str]
+    #: The first date every concept had a filing for some requested name.
+    fundamentals_start: str | None = None
+    #: The start as submitted, when it was before ``fundamentals_start`` and
+    #: the run was started there instead.
+    requested_start_date: str | None = None
 
 
 class RunCoverage(BaseModel):
