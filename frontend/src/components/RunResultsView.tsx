@@ -19,14 +19,7 @@ import { Input } from './ui/field';
 import { Numeric } from './ui/numeric';
 import { Panel } from '../quantlab/chrome/Panel';
 import { StatusBadge } from './ui/status-badge';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from './ui/table';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 
 /**
  * Coverage always accompanies a signal count. A count without its denominator
@@ -82,12 +75,14 @@ const MISSING_SHOWN = 8;
  * exactly like one whose revenue never grew.
  */
 /**
- * A run that reads fundamentals starts where they do. Said plainly, because a
- * window that silently differs from the one asked for reads as a bug.
+ * A run that reads fundamentals starts where they do, and no more than three
+ * years back. Said plainly, because a window that silently differs from the
+ * one asked for reads as a bug.
  */
 function FundamentalsWindowNote({ run }: { run: Run }) {
   const facts = run.coverage.facts;
   if (!facts?.requested_start_date) return null;
+  const capped = facts.lookback_start != null && run.start_date === facts.lookback_start;
   return (
     <p
       role="note"
@@ -95,12 +90,19 @@ function FundamentalsWindowNote({ run }: { run: Run }) {
       className="mt-3 flex gap-2 rounded-sm border border-border bg-muted/40 p-2 text-xs text-muted-foreground"
     >
       <Info size={16} strokeWidth={1.5} className="mt-px shrink-0" aria-hidden="true" />
-      <span>
-        Started {run.start_date}, not {facts.requested_start_date}: the fundamentals this strategy
-        reads ({facts.concepts.join(', ')}) begin {facts.fundamentals_start}. Before that every
-        fundamental gate holds shut, so the earlier years would show no strategy, only the
-        benchmark.
-      </span>
+      {capped ? (
+        <span>
+          Started {run.start_date}, not {facts.requested_start_date}: strategies that read
+          fundamentals ({facts.concepts.join(', ')}) are backtested over the last three years only.
+        </span>
+      ) : (
+        <span>
+          Started {run.start_date}, not {facts.requested_start_date}: the fundamentals this strategy
+          reads ({facts.concepts.join(', ')}) begin {facts.fundamentals_start}. Before that every
+          fundamental gate holds shut, so the earlier years would show no strategy, only the
+          benchmark.
+        </span>
+      )}
     </p>
   );
 }
@@ -270,8 +272,7 @@ export function RunResultsView({ run }: { run: RunDetailV2 }) {
         const adjustment = run.execution?.price_adjustment ?? 'none';
         const splits = actions.filter((a) => a.action_type === 'split');
         const dividends = actions.filter((a) => a.action_type !== 'split');
-        const list = (xs: typeof actions) =>
-          xs.map((a) => `${a.symbol} ${a.ex_date}`).join(', ');
+        const list = (xs: typeof actions) => xs.map((a) => `${a.symbol} ${a.ex_date}`).join(', ');
         const info =
           'mt-3 flex gap-2 rounded-sm border border-border bg-muted/40 p-2 text-xs text-muted-foreground';
         if (adjustment !== 'none') {
@@ -364,7 +365,9 @@ export function RunResultsView({ run }: { run: RunDetailV2 }) {
           icon={AlertTriangle}
           tone="error"
           title={
-            run.error_category ? `Backtest failed · ${FAILURE_LABELS[run.error_category]}` : 'Backtest failed'
+            run.error_category
+              ? `Backtest failed · ${FAILURE_LABELS[run.error_category]}`
+              : 'Backtest failed'
           }
           detail={run.error ?? 'The run did not complete.'}
         />
@@ -439,9 +442,7 @@ export function RunResultsView({ run }: { run: RunDetailV2 }) {
                 {run.signals.map((signal, index) => (
                   <TableRow key={`${signal.symbol}-${signal.date}-${index}`}>
                     <TableCell className="font-mono text-xs">{signal.symbol}</TableCell>
-                    <TableCell className="font-mono text-xs tabular-nums">
-                      {signal.date}
-                    </TableCell>
+                    <TableCell className="font-mono text-xs tabular-nums">{signal.date}</TableCell>
                     <TableCell className="text-xs">{signal.direction}</TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">
                       {Object.entries(signal.trigger_values)
@@ -521,9 +522,8 @@ function StrategyProvenance({ run }: { run: RunDetailV2 }) {
       </ul>
       <p className="mt-2 text-xs text-muted-foreground">
         <span className="font-mono uppercase tracking-[0.12em]">{strategy.entry_logic}</span> to
-        enter,{' '}
-        <span className="font-mono uppercase tracking-[0.12em]">{strategy.exit_logic}</span> to
-        exit, agreement window{' '}
+        enter, <span className="font-mono uppercase tracking-[0.12em]">{strategy.exit_logic}</span>{' '}
+        to exit, agreement window{' '}
         <span className="font-mono tabular-nums">{strategy.combine_window_days}</span>
       </p>
       {execution ? (

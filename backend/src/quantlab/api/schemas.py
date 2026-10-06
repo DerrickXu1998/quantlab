@@ -165,9 +165,11 @@ class FactCoverage(BaseModel):
     instruments_missing_facts: list[str]
     #: The first date every concept had a filing for some requested name.
     fundamentals_start: str | None = None
-    #: The start as submitted, when it was before ``fundamentals_start`` and
-    #: the run was started there instead.
+    #: The start as submitted, when it was before ``fundamentals_start`` or
+    #: ``lookback_start`` and the run was started at the later of the two.
     requested_start_date: str | None = None
+    #: The earliest start the fundamentals lookback cap (three years) allows.
+    lookback_start: str | None = None
 
 
 class RunCoverage(BaseModel):

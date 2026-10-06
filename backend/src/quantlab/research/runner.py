@@ -72,6 +72,26 @@ LARGE_RUN_BARS = 300_000
 #: How long a large run waits for the slot before being refused (429).
 LARGE_RUN_WAIT_SECONDS = 30
 
+#: How far back a strategy that reads fundamentals may start, in years before
+#: today. A policy cap on top of where the data begins: older windows are
+#: limited to it, the way an early start is limited to the first filing.
+FUNDAMENTALS_LOOKBACK_YEARS = 3
+
+
+def _today() -> _date:
+    """Today, in one place so tests can pin it."""
+    return datetime.now(UTC).date()
+
+
+def fundamentals_lookback_start(today: _date | None = None) -> str:
+    """The earliest start a fundamentals run may have: today, three years back."""
+    today = today or _today()
+    try:
+        floor = today.replace(year=today.year - FUNDAMENTALS_LOOKBACK_YEARS)
+    except ValueError:  # 29 February, in a year that has none
+        floor = today.replace(year=today.year - FUNDAMENTALS_LOOKBACK_YEARS, day=28)
+    return floor.isoformat()
+
 
 def warmup_start_for(start: _date, lookback_bars: int, frequency: str) -> str:
     """Where to start loading so the first session of the window has its
@@ -118,8 +138,11 @@ class FactCoverage:
     #: The first date every concept had a filing for some requested name.
     fundamentals_start: str | None = None
     #: What the user asked to start from, when that was before
-    #: ``fundamentals_start`` and the run was started there instead.
+    #: ``fundamentals_start`` or ``lookback_start`` and the run was started at
+    #: the later of the two instead.
     requested_start_date: str | None = None
+    #: The earliest start the lookback cap allows (FUNDAMENTALS_LOOKBACK_YEARS).
+    lookback_start: str | None = None
 
 
 @dataclass(frozen=True)
@@ -294,8 +317,12 @@ class PreparedRun:
     estimated_bars: int
     #: Where the fundamentals the rules read begin; None for bars-only runs.
     fundamentals_start: str | None = None
-    #: The start as submitted, when it was moved up to ``fundamentals_start``.
+    #: The start as submitted, when it was moved up to ``fundamentals_start``
+    #: or ``lookback_start``.
     requested_start_date: str | None = None
+    #: The earliest start the fundamentals lookback cap allows; None for
+    #: bars-only runs.
+    lookback_start: str | None = None
 
     @property
     def large(self) -> bool:
@@ -415,13 +442,25 @@ def prepare_run(
     # result. Limited rather than refused: the user asked for a backtest, and
     # the part of the window the data can answer is still one. Done before the
     # size checks, which then measure the window that will actually run.
+    #
+    # It is also capped at FUNDAMENTALS_LOOKBACK_YEARS before today, whatever
+    # the data holds: the later of the two floors wins.
     requested_start_date = None
     fundamentals_start = None
+    lookback_start = None
     concepts = required_concepts(spec)
     if concepts:
+        lookback_start = fundamentals_lookback_start()
+        if end_date < lookback_start:
+            raise errors.InvalidWindowError(
+                f"strategies that read fundamentals can be backtested over the last "
+                f"{FUNDAMENTALS_LOOKBACK_YEARS} years only; end_date must be on or "
+                f"after {lookback_start}"
+            )
         fundamentals_start = backend.fundamentals_start(requested_symbols, concepts, end_date)
-        if fundamentals_start is not None and fundamentals_start > start_date:
-            requested_start_date, start_date = start_date, fundamentals_start
+        floor = max(lookback_start, fundamentals_start or lookback_start)
+        if floor > start_date:
+            requested_start_date, start_date = start_date, floor
             start = _parse(start_date, "start_date")
     window_days = (end - start).days + 1
     frequency = spec.execution.bar_frequency
@@ -474,6 +513,7 @@ def prepare_run(
         estimated_bars=estimate,
         fundamentals_start=fundamentals_start,
         requested_start_date=requested_start_date,
+        lookback_start=lookback_start,
     )
 
 
@@ -501,6 +541,7 @@ def execute_prepared(
         keep_bars=keep_bars,
         fundamentals_start=prepared.fundamentals_start,
         requested_start_date=prepared.requested_start_date,
+        lookback_start=prepared.lookback_start,
     )
 
 
@@ -518,6 +559,7 @@ def _execute(
     keep_bars: bool = False,
     fundamentals_start: str | None = None,
     requested_start_date: str | None = None,
+    lookback_start: str | None = None,
 ) -> RunResult:
     """Load, compose, execute and summarise a validated run."""
 
@@ -552,6 +594,7 @@ def _execute(
             fact_coverage,
             fundamentals_start=fundamentals_start,
             requested_start_date=requested_start_date,
+            lookback_start=lookback_start,
         )
     if fact_coverage is not None and all(
         missing == len(requested_symbols) for missing in fact_coverage.missing_by_concept.values()

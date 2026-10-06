@@ -61,7 +61,10 @@ export function SubmitBar({
   canSubmit: boolean;
   onSubmit: () => void;
   queued: RunV2 | null;
-  /** The start date that was submitted; the server may move it to where fundamentals begin. */
+  /**
+   * The start date that was submitted; for a fundamentals strategy the server
+   * may move it to where fundamentals begin or to three years back.
+   */
   queuedFrom: string | null;
   onShowRun: (runId: string) => void;
   onDismissQueued: () => void;
@@ -100,7 +103,11 @@ export function SubmitBar({
                 Saved
               </StatusBadge>
             ) : dirty ? (
-              <StatusBadge tone="idle" testId="draft-unsaved" title="Changes since the last save. Submitting does not need a save: the run records what is on screen.">
+              <StatusBadge
+                tone="idle"
+                testId="draft-unsaved"
+                title="Changes since the last save. Submitting does not need a save: the run records what is on screen."
+              >
                 Unsaved
               </StatusBadge>
             ) : null}
@@ -117,7 +124,13 @@ export function SubmitBar({
             {saving ? 'Saving…' : saved ? 'Save' : 'Save strategy'}
           </Button>
           {saved ? (
-            <Button type="button" size="sm" variant="outline" disabled={saving} onClick={onSaveAsCopy}>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={saving}
+              onClick={onSaveAsCopy}
+            >
               Save as copy
             </Button>
           ) : null}
@@ -154,7 +167,11 @@ export function SubmitBar({
       </div>
 
       {blockers.length > 0 || hasErrors || size.blocker || symbolsCount === 0 ? (
-        <ul role="alert" aria-label="What stops this run" className="space-y-1 text-xs text-destructive">
+        <ul
+          role="alert"
+          aria-label="What stops this run"
+          className="space-y-1 text-xs text-destructive"
+        >
           {blockers.length > 0 ? (
             <li>
               <ul data-testid="strategy-blockers" className="space-y-1">
@@ -169,7 +186,9 @@ export function SubmitBar({
               )
             : null}
           {size.blocker ? issue('universe', size.blocker, 'strategy-size-blocker') : null}
-          {symbolsCount === 0 ? issue('universe', 'Add at least one ticker to the universe.', 'strategy-no-symbols') : null}
+          {symbolsCount === 0
+            ? issue('universe', 'Add at least one ticker to the universe.', 'strategy-no-symbols')
+            : null}
         </ul>
       ) : null}
 
@@ -190,7 +209,12 @@ export function SubmitBar({
           data-testid="run-queued"
           className="flex flex-wrap items-center gap-2 border border-primary/40 bg-primary/5 px-2 py-1.5 text-xs"
         >
-          <CircleCheck size={16} strokeWidth={1.5} aria-hidden="true" className="shrink-0 text-primary" />
+          <CircleCheck
+            size={16}
+            strokeWidth={1.5}
+            aria-hidden="true"
+            className="shrink-0 text-primary"
+          />
           <span className="min-w-0 flex-1">
             Queued "{queued.name ?? queued.strategy?.name ?? queued.model_name}"
             {queued.queue_position ? ` — #${queued.queue_position} in line` : ''}. It runs in the
@@ -198,15 +222,21 @@ export function SubmitBar({
             {queuedFrom && queued.start_date > queuedFrom ? (
               <span data-testid="run-queued-start-moved">
                 {' '}
-                It starts {queued.start_date}, not {queuedFrom}: the fundamentals it reads begin
-                then.
+                It starts {queued.start_date}, not {queuedFrom}: a strategy that reads fundamentals
+                starts no earlier than three years back or where its fundamentals begin.
               </span>
             ) : null}
           </span>
           <Button type="button" size="sm" variant="outline" onClick={() => onShowRun(queued.id)}>
             View in Runs
           </Button>
-          <Button type="button" size="sm" variant="ghost" aria-label="Dismiss" onClick={onDismissQueued}>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            aria-label="Dismiss"
+            onClick={onDismissQueued}
+          >
             Dismiss
           </Button>
         </div>
