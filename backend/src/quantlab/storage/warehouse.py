@@ -933,6 +933,11 @@ def corporate_actions(wh: Warehouse, symbols: list[str], start: str, end: str) -
 # ---------------------------------------------------------------------------
 
 
+#: The fallback fundamentals source: read for a concept only where no other
+#: source has filed it (see :func:`load_facts_for`).
+TIINGO_PROVIDER = "tiingo"
+
+
 def load_facts_for(
     wh: Warehouse,
     symbols: list[str],
@@ -960,6 +965,13 @@ def load_facts_for(
     The ``filed_at <= end`` bound is not an optimisation. It is the rule: a run
     ending in 2020 must not see a restatement filed in 2024, even though the
     series is only ever read at dates inside the window.
+
+    **Tiingo is the fallback source.** Its statement fields carry the same
+    concepts as SEC's (``revenue``, ``net_income``...), so for each name and
+    concept one source is chosen: SEC wherever it has filed that concept by
+    ``end``, Tiingo otherwise. Two vendors' figures are never mixed in one
+    series, where the newest-filing rule would pick between them by date alone.
+    The choice uses only rows filed by ``end``, so it cannot look ahead either.
     """
     ids = _instrument_ids(wh, symbols)
     if not ids or not concepts:
@@ -970,7 +982,7 @@ def load_facts_for(
         rows = conn.execute(
             """
             SELECT instrument_id, concept, period_start, period_end, filed_at,
-                   value, tag, run_id
+                   value, tag, run_id, provider
               FROM fundamentals
              WHERE instrument_id = ANY(%s)
                AND concept = ANY(%s)
@@ -981,9 +993,15 @@ def load_facts_for(
             (list(by_id), sorted(set(concepts)), end),
         ).fetchall()
 
+    # (instrument, concept) pairs SEC (or any non-Tiingo source) has covered.
+    primary = {(int(row[0]), row[1]) for row in rows if row[8] != TIINGO_PROVIDER}
+
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
-        instrument_id, concept, period_start, period_end, filed_at, value, tag, run_id = row
+        (instrument_id, concept, period_start, period_end, filed_at, value, tag, run_id,
+         provider) = row
+        if provider == TIINGO_PROVIDER and (int(instrument_id), concept) in primary:
+            continue
         grouped.setdefault(by_id[int(instrument_id)], []).append(
             {
                 "concept": concept,
