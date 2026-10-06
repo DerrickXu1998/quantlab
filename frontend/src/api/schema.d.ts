@@ -903,10 +903,16 @@ export interface components {
             fundamentals_start?: string | null;
             /**
              * Format: date
-             * @description The start as submitted, when it was before fundamentals_start and the run was started at fundamentals_start instead. Null when the window was not moved.
+             * @description The start as submitted, when it was before fundamentals_start or lookback_start and the run was started at the later of the two instead. Null when the window was not moved.
              * @example 2015-01-01
              */
             requested_start_date?: string | null;
+            /**
+             * Format: date
+             * @description The earliest start allowed for a run reading fundamentals: three years before the day it was prepared.
+             * @example 2023-10-06
+             */
+            lookback_start?: string | null;
         };
         Run: {
             id: string;

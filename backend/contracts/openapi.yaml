@@ -1931,10 +1931,17 @@ components:
           type: [string, "null"]
           format: date
           description: >
-            The start as submitted, when it was before fundamentals_start and
-            the run was started at fundamentals_start instead. Null when the
-            window was not moved.
+            The start as submitted, when it was before fundamentals_start or
+            lookback_start and the run was started at the later of the two
+            instead. Null when the window was not moved.
           example: "2015-01-01"
+        lookback_start:
+          type: [string, "null"]
+          format: date
+          description: >
+            The earliest start allowed for a run reading fundamentals: three
+            years before the day it was prepared.
+          example: "2023-10-06"
 
     Run:
       type: object

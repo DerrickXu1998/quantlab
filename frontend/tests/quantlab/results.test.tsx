@@ -241,7 +241,11 @@ describe('run results, with execution criteria', () => {
 });
 
 describe('a run limited to where its fundamentals begin', () => {
-  const factCoverage = (extra: { fundamentals_start: string; requested_start_date: string | null }) => ({
+  const factCoverage = (extra: {
+    fundamentals_start: string;
+    requested_start_date: string | null;
+    lookback_start?: string | null;
+  }) => ({
     concepts: ['net_income', 'shares_outstanding'],
     instruments_with_facts: 1,
     missing_by_concept: { net_income: 0, shares_outstanding: 0 },
@@ -261,6 +265,24 @@ describe('a run limited to where its fundamentals begin', () => {
     const note = await screen.findByTestId('run-fundamentals-window');
     expect(note).toHaveTextContent('Started 2023-10-05, not 2015-01-01');
     expect(note).toHaveTextContent('net_income, shares_outstanding');
+  });
+
+  it('names the three-year cap when the cap moved the start', async () => {
+    const run = runWithStrategy();
+    run.start_date = '2023-10-06';
+    run.coverage = {
+      ...run.coverage,
+      facts: factCoverage({
+        fundamentals_start: '2009-06-30',
+        requested_start_date: '2015-01-01',
+        lookback_start: '2023-10-06',
+      }),
+    };
+    renderResults(run);
+
+    const note = await screen.findByTestId('run-fundamentals-window');
+    expect(note).toHaveTextContent('Started 2023-10-06, not 2015-01-01');
+    expect(note).toHaveTextContent('last three years only');
   });
 
   it('says nothing when the window was not moved', async () => {

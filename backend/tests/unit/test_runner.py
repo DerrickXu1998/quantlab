@@ -356,6 +356,8 @@ def test_partial_fact_coverage_is_reported_and_persisted(conn):
         # The demo-backed fake knows no fundamentals start, so nothing moved.
         "fundamentals_start": None,
         "requested_start_date": None,
+        # Three years before the pinned today (tests/conftest.py).
+        "lookback_start": "2023-10-06",
     }
 
 
@@ -446,6 +448,85 @@ def test_a_limited_run_records_both_dates_in_its_fact_coverage(conn):
     stored = store.get_run(result.id, None)
     assert stored["start_date"] == "2024-03-01"
     assert stored["coverage"]["facts"]["requested_start_date"] == "2024-01-01"
+
+
+# --- fundamentals look back three years at most -----------------------------
+#
+# Whatever the data holds, a run that reads fundamentals starts no earlier than
+# FUNDAMENTALS_LOOKBACK_YEARS before today (pinned to 2026-10-06 in conftest).
+
+
+def test_a_fundamental_run_starts_no_earlier_than_three_years_back(conn):
+    from quantlab.research.runner import prepare_run
+
+    # Data from 2009, as SEC EDGAR has: the cap, not the data, decides.
+    backend = _FactsBackend(conn, facts={}, fundamentals_start="2009-06-30")
+    prepared = prepare_run(
+        backend,
+        model_name="revenue-growth",
+        symbols=_symbols(conn),
+        start_date="2015-01-01",
+        end_date="2024-12-31",
+    )
+
+    assert prepared.start_date == "2023-10-06"
+    assert prepared.requested_start_date == "2015-01-01"
+    assert prepared.lookback_start == "2023-10-06"
+    assert prepared.request()["start_date"] == "2015-01-01"
+
+
+def test_the_later_floor_wins_when_fundamentals_begin_inside_the_cap(conn):
+    from quantlab.research.runner import prepare_run
+
+    backend = _FactsBackend(conn, facts={}, fundamentals_start="2024-03-01")
+    prepared = prepare_run(
+        backend,
+        model_name="revenue-growth",
+        symbols=_symbols(conn),
+        start_date="2015-01-01",
+        end_date="2024-12-31",
+    )
+
+    assert prepared.start_date == "2024-03-01"
+    assert prepared.requested_start_date == "2015-01-01"
+
+
+def test_a_fundamental_run_ending_before_the_cap_is_refused(conn):
+    from quantlab.research.runner import prepare_run
+
+    backend = _FactsBackend(conn, facts={}, fundamentals_start="2009-06-30")
+    with pytest.raises(errors.InvalidWindowError, match="last 3 years"):
+        prepare_run(
+            backend,
+            model_name="revenue-growth",
+            symbols=_symbols(conn),
+            start_date="2018-01-01",
+            end_date="2022-12-31",
+        )
+
+
+def test_a_bars_only_run_is_not_capped(conn):
+    from quantlab.research.runner import prepare_run
+
+    backend = _FactsBackend(conn, facts={}, fundamentals_start=None)
+    prepared = prepare_run(
+        backend,
+        model_name="sma-crossover",
+        symbols=_symbols(conn),
+        start_date="2015-01-01",
+        end_date="2024-12-31",
+    )
+
+    assert prepared.start_date == "2015-01-01"
+    assert prepared.lookback_start is None
+
+
+def test_the_lookback_start_survives_29_february():
+    import datetime as dt
+
+    from quantlab.research.runner import fundamentals_lookback_start
+
+    assert fundamentals_lookback_start(dt.date(2028, 2, 29)) == "2025-02-28"
 
 
 def test_the_demo_has_no_fundamentals_start():

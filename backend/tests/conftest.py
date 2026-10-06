@@ -51,3 +51,18 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "auth_required: run this test with authentication enforced"
     )
+
+
+@pytest.fixture(autouse=True)
+def _pinned_today(monkeypatch):
+    """Pin "today" for the fundamentals lookback cap (three years back).
+
+    Suites run fundamental strategies over fixed 2024 windows; without a pinned
+    date they would start being limited, then refused, as the calendar moves.
+    """
+    import datetime as dt
+
+    from quantlab.research import runner
+
+    monkeypatch.setattr(runner, "_today", lambda: dt.date(2026, 10, 6))
+
