@@ -177,6 +177,9 @@ services:
       # clean 503 when the broker is absent, never a startup failure.
       QUANTLAB_KAFKA_BROKERS: redpanda:9092
       QUANTLAB_KAFKA_TOPIC: quantlab.bars
+      # Live IBKR prices (roadmap 4a), published by live-ingest or, in
+      # development, scripts/live_fake_publish.py. Same 503-not-crash rule.
+      QUANTLAB_LIVE_TICKS_TOPIC: quantlab.live.ticks
       # Login is on unless the host says otherwise; `AUTH_BYPASS=1 make dev`
       # sets this to false for local UI work.
       QUANTLAB_AUTH_REQUIRED: ${QUANTLAB_AUTH_REQUIRED:-true}

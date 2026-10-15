@@ -1689,6 +1689,8 @@ export interface components {
              * @enum {string|null}
              */
             market?: "open" | "closed" | null;
+            /** @description Present and true only on frames from scripts/live_fake_publish.py, the development stand-in for the collector. Never set by live-ingest. */
+            fake?: boolean;
         };
     };
     responses: never;
