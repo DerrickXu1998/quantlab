@@ -35,6 +35,7 @@ tags:
   - name: replay
   - name: auth
   - name: strategies
+  - name: live
 
 paths:
   /health:
@@ -742,6 +743,119 @@ paths:
                 $ref: "#/components/schemas/Error"
         "503":
           description: The event bus is unconfigured or unreachable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /live/stream:
+    get:
+      tags: [live]
+      operationId: streamLive
+      summary: Live IBKR prices for a few symbols, as a server-sent event stream
+      security: [{ bearerAuth: [] }]
+      description: >
+        Tails the live ticks topic (`quantlab.live.ticks`, written by the
+        live-ingest collector from IBKR) from its newest offset and forwards
+        the frames for the requested symbols. Live prices are provisional and
+        for display: Tiingo's end-of-day load is the source of truth, and
+        nothing a backtest reads ever sees them.
+
+        Opening the stream asks for the symbols: it leases an IBKR market-data
+        line per symbol (live_subscriptions) and renews the lease while the
+        stream stays open, so closing the stream frees the lines a couple of
+        minutes later. Lines are scarce (~100 per account); a symbol the
+        collector could not fit is reported with a `status` frame of
+        `over_budget`, never filled with invented prices.
+
+        Frames are bare `data: {json}` lines, each with an `event` field (see
+        LiveEvent): `tick` about once a second per symbol while it trades,
+        `bar` when a minute closes, `status` when a symbol's line changes
+        state, `backfilled` once the session from the open has been stored
+        (refetch GET /live/{symbol}/session), and `heartbeat` every 5 s
+        whether or not anything ticked. The server closes the stream after an
+        hour; the client is expected to reopen it, which is safe because a
+        live tail carries no state to double-count.
+
+        A 503 means the live bus is unconfigured (QUANTLAB_KAFKA_BROKERS or
+        QUANTLAB_LIVE_TICKS_TOPIC unset) or unreachable -- never a startup
+        failure. A collector that is down is not a 503: the heartbeat reports
+        it, so the client can tell "feed offline" from "quiet market".
+      parameters:
+        - name: symbols
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Comma-separated canonical symbols, at most 16, e.g. `AAPL.US,MSFT.US`.
+      responses:
+        "200":
+          description: Server-sent event stream of live events
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: "One `data: {json}\\n\\n` frame per LiveEvent."
+        "400":
+          description: Missing symbols, or more than 16
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: A symbol the warehouse does not know
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: Too many concurrent streams for this user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: The live bus is unconfigured or unreachable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /live/{symbol}/session:
+    get:
+      tags: [live]
+      operationId: getLiveSession
+      summary: Today's live 1-minute bars for one symbol, from the open to now
+      security: [{ bearerAuth: [] }]
+      description: >
+        What a live chart opens with before the stream takes over: the
+        session's 1-minute bars as the collector stored them -- IBKR's own
+        minute bars from the open (backfilled when the symbol was first
+        subscribed), then the minutes it rolled from ticks since. Empty while
+        the backfill is still pending; the stream sends `backfilled` when it
+        lands. Outside trading hours this is the most recent session still
+        retained (live sessions are dropped once Tiingo has loaded them).
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The session's bars
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LiveSession"
+        "404":
+          description: Unknown symbol
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: The warehouse is not configured (demo dataset)
           content:
             application/json:
               schema:
@@ -3389,3 +3503,89 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Universe"
+
+    LiveLineStatus:
+      type: string
+      description: >
+        A symbol's IBKR market-data line. pending: asked for, not yet served;
+        active: streaming; over_budget: no line free (deployments take
+        precedence); unknown_symbol: IBKR has no matching contract; error:
+        IBKR refused (status_detail says why).
+      enum: [pending, active, over_budget, unknown_symbol, error]
+
+    LiveBar:
+      type: object
+      required: [ts, open, high, low, close, volume, kind]
+      properties:
+        ts:
+          type: string
+          format: date-time
+          description: Bar start, UTC.
+        open: { type: number }
+        high: { type: number }
+        low: { type: number }
+        close: { type: number }
+        volume: { type: integer }
+        kind:
+          type: string
+          enum: [backfill, rolled]
+          description: backfill = IBKR's minute bar; rolled = built by the collector from ticks.
+
+    LiveSession:
+      type: object
+      required: [symbol, session_date, status, bars]
+      properties:
+        symbol:
+          type: string
+        session_date:
+          type: [string, "null"]
+          format: date
+          description: New York trading date of the bars; null when none are stored.
+        status:
+          $ref: "#/components/schemas/LiveLineStatus"
+          description: This caller's line for the symbol, or pending if it has none yet.
+        bars:
+          type: array
+          items:
+            $ref: "#/components/schemas/LiveBar"
+
+    LiveEvent:
+      type: object
+      description: >
+        One frame of GET /live/stream. `event` says which fields are present:
+        tick (symbol, ts, last, bid, ask, volume), bar (symbol, bar),
+        status (symbol, status, detail), backfilled (symbol), heartbeat
+        (ts, collector, market).
+      required: [event]
+      properties:
+        event:
+          type: string
+          enum: [tick, bar, status, backfilled, heartbeat]
+        symbol:
+          type: string
+        ts:
+          type: string
+          format: date-time
+        last:
+          type: [number, "null"]
+        bid:
+          type: [number, "null"]
+        ask:
+          type: [number, "null"]
+        volume:
+          type: [integer, "null"]
+          description: Cumulative session volume as IBKR reports it.
+        bar:
+          $ref: "#/components/schemas/LiveBar"
+        status:
+          $ref: "#/components/schemas/LiveLineStatus"
+        detail:
+          type: string
+        collector:
+          type: string
+          enum: [up, down]
+          description: down when the collector's own heartbeat is more than 10 s old.
+        market:
+          type: [string, "null"]
+          enum: [open, closed, null]
+          description: Regular-hours session state per IBKR's trading hours; null while the collector is down.

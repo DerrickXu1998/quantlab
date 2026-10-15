@@ -306,6 +306,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/live/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Live IBKR prices for a few symbols, as a server-sent event stream
+         * @description Tails the live ticks topic (`quantlab.live.ticks`, written by the live-ingest collector from IBKR) from its newest offset and forwards the frames for the requested symbols. Live prices are provisional and for display: Tiingo's end-of-day load is the source of truth, and nothing a backtest reads ever sees them.
+         *     Opening the stream asks for the symbols: it leases an IBKR market-data line per symbol (live_subscriptions) and renews the lease while the stream stays open, so closing the stream frees the lines a couple of minutes later. Lines are scarce (~100 per account); a symbol the collector could not fit is reported with a `status` frame of `over_budget`, never filled with invented prices.
+         *     Frames are bare `data: {json}` lines, each with an `event` field (see LiveEvent): `tick` about once a second per symbol while it trades, `bar` when a minute closes, `status` when a symbol's line changes state, `backfilled` once the session from the open has been stored (refetch GET /live/{symbol}/session), and `heartbeat` every 5 s whether or not anything ticked. The server closes the stream after an hour; the client is expected to reopen it, which is safe because a live tail carries no state to double-count.
+         *     A 503 means the live bus is unconfigured (QUANTLAB_KAFKA_BROKERS or QUANTLAB_LIVE_TICKS_TOPIC unset) or unreachable -- never a startup failure. A collector that is down is not a 503: the heartbeat reports it, so the client can tell "feed offline" from "quiet market".
+         */
+        get: operations["streamLive"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/live/{symbol}/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Today's live 1-minute bars for one symbol, from the open to now
+         * @description What a live chart opens with before the stream takes over: the session's 1-minute bars as the collector stored them -- IBKR's own minute bars from the open (backfilled when the symbol was first subscribed), then the minutes it rolled from ticks since. Empty while the backfill is still pending; the stream sends `backfilled` when it lands. Outside trading hours this is the most recent session still retained (live sessions are dropped once Tiingo has loaded them).
+         */
+        get: operations["getLiveSession"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/rules": {
         parameters: {
             query?: never;
@@ -1588,6 +1631,65 @@ export interface components {
             total: number;
             items: components["schemas"]["Universe"][];
         };
+        /**
+         * @description A symbol's IBKR market-data line. pending: asked for, not yet served; active: streaming; over_budget: no line free (deployments take precedence); unknown_symbol: IBKR has no matching contract; error: IBKR refused (status_detail says why).
+         * @enum {string}
+         */
+        LiveLineStatus: "pending" | "active" | "over_budget" | "unknown_symbol" | "error";
+        LiveBar: {
+            /**
+             * Format: date-time
+             * @description Bar start, UTC.
+             */
+            ts: string;
+            open: number;
+            high: number;
+            low: number;
+            close: number;
+            volume: number;
+            /**
+             * @description backfill = IBKR's minute bar; rolled = built by the collector from ticks.
+             * @enum {string}
+             */
+            kind: "backfill" | "rolled";
+        };
+        LiveSession: {
+            symbol: string;
+            /**
+             * Format: date
+             * @description New York trading date of the bars; null when none are stored.
+             */
+            session_date: string | null;
+            /** @description This caller's line for the symbol, or pending if it has none yet. */
+            status: components["schemas"]["LiveLineStatus"];
+            bars: components["schemas"]["LiveBar"][];
+        };
+        /** @description One frame of GET /live/stream. `event` says which fields are present: tick (symbol, ts, last, bid, ask, volume), bar (symbol, bar), status (symbol, status, detail), backfilled (symbol), heartbeat (ts, collector, market). */
+        LiveEvent: {
+            /** @enum {string} */
+            event: "tick" | "bar" | "status" | "backfilled" | "heartbeat";
+            symbol?: string;
+            /** Format: date-time */
+            ts?: string;
+            last?: number | null;
+            bid?: number | null;
+            ask?: number | null;
+            /** @description Cumulative session volume as IBKR reports it. */
+            volume?: number | null;
+            bar?: components["schemas"]["LiveBar"];
+            status?: components["schemas"]["LiveLineStatus"];
+            detail?: string;
+            /**
+             * @description down when the collector's own heartbeat is more than 10 s old.
+             * @enum {string}
+             */
+            collector?: "up" | "down";
+            /**
+             * @description Regular-hours session state per IBKR's trading hours; null while the collector is down.
+             * @enum {string|null}
+             */
+            market?: "open" | "closed" | null;
+        };
     };
     responses: never;
     parameters: never;
@@ -2206,6 +2308,105 @@ export interface operations {
                 };
             };
             /** @description The event bus is unconfigured or unreachable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    streamLive: {
+        parameters: {
+            query: {
+                /** @description Comma-separated canonical symbols, at most 16, e.g. `AAPL.US,MSFT.US`. */
+                symbols: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Server-sent event stream of live events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            /** @description Missing symbols, or more than 16 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description A symbol the warehouse does not know */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Too many concurrent streams for this user */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The live bus is unconfigured or unreachable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getLiveSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                symbol: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session's bars */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveSession"];
+                };
+            };
+            /** @description Unknown symbol */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The warehouse is not configured (demo dataset) */
             503: {
                 headers: {
                     [name: string]: unknown;
