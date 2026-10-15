@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   getPrices,
   listInstruments,
@@ -8,8 +8,9 @@ import {
 } from '../../api/client';
 import type { ChartSignal } from '../../components/CandlestickChart';
 import { replaceRoute, useRoute } from '../../chrome/router';
-import { simulateTick, seedTick } from '../feed/simulateTick';
-import { MAX_TICKERS } from './marketModel';
+import { useLiveSymbol, useNow } from '../feed/LiveFeedProvider';
+import { liveCardState, type FeedView, type LiveCardState, type Quote, type SymbolView } from '../feed/liveFeed';
+import { liveCandles, MAX_TICKERS, type Candle } from './marketModel';
 
 type Load<T> = { status: 'loading' } | { status: 'ready'; data: T } | { status: 'error'; message: string };
 
@@ -120,64 +121,35 @@ export function useModelSignals(symbol: string, enabled: boolean): ChartSignal[]
   return signals;
 }
 
-export const SIM_TICK_MS = 1000;
-const SIM_WINDOW = 300;
-const SIM_BACKFILL = 60;
+/** How often a live chart re-reads the clock, for its staleness check. */
+const LIVE_CLOCK_MS = 1000;
 
-export interface SimPoint {
-  /** Unix seconds. */
-  time: number;
-  value: number;
+export interface LiveSeries {
+  /** 1-minute candles from the open, the newest one forming tick by tick. */
+  candles: Candle[];
+  quote: Quote | null;
+  state: LiveCardState;
+  feed: FeedView;
+  view: SymbolView | undefined;
 }
 
 /**
- * A per-chart random walk seeded at the symbol's real last close, one point per
- * second. It exists so the page can show what an intraday view looks like; it
- * is not a quote, and every surface that draws it says so.
+ * Today's live prices for one symbol, while `enabled`: the session's minutes
+ * from the open (GET /live/{symbol}/session), then about a tick a second over
+ * the tab's one live stream. IBKR's prices, provisional; every surface that
+ * draws them says so.
  */
-export function useSimulatedSeries(
-  symbol: string,
-  seed: number | null,
-  running: boolean,
-  rng: () => number = Math.random,
-): SimPoint[] {
-  const [points, setPoints] = useState<SimPoint[]>([]);
-  const tickRef = useRef<ReturnType<typeof seedTick> | null>(null);
-
-  useEffect(() => {
-    if (!running || seed === null) {
-      setPoints([]);
-      tickRef.current = null;
-      return;
-    }
-    // A minute of backfill so the chart opens with a line rather than a dot.
-    const now = Math.floor(Date.now() / 1000);
-    let tick = seedTick(symbol, seed);
-    const initial: SimPoint[] = [];
-    for (let i = SIM_BACKFILL; i > 0; i -= 1) {
-      initial.push({ time: now - i, value: tick.price });
-      tick = simulateTick(tick, rng);
-    }
-    tickRef.current = tick;
-    setPoints(initial);
-
-    const timer = window.setInterval(() => {
-      if (typeof document !== 'undefined' && document.hidden) return;
-      const current = tickRef.current;
-      if (!current) return;
-      const next = simulateTick(current, rng);
-      tickRef.current = next;
-      setPoints((existing) => {
-        const last = existing[existing.length - 1];
-        const time = Math.max(Math.floor(Date.now() / 1000), (last?.time ?? 0) + 1);
-        return [...existing, { time, value: next.price }].slice(-SIM_WINDOW);
-      });
-    }, SIM_TICK_MS);
-
-    return () => window.clearInterval(timer);
-  }, [symbol, seed, running, rng]);
-
-  return points;
+export function useLiveSeries(symbol: string, enabled: boolean): LiveSeries {
+  const { feed, view } = useLiveSymbol(symbol, enabled);
+  const now = useNow(LIVE_CLOCK_MS, enabled);
+  const candles = useMemo(() => (view ? liveCandles(view.bars, view.forming) : []), [view]);
+  return {
+    candles,
+    quote: view?.quote ?? null,
+    state: liveCardState(feed, view, now),
+    feed,
+    view,
+  };
 }
 
 /**

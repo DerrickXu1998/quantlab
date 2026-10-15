@@ -25,15 +25,16 @@ import { useTheme } from '../../theme/ThemeProvider';
 import { RSI_PERIOD } from '../data/indicators';
 import {
   INTERVAL_NOUN,
+  nyClock,
   STUDIES,
   tOffset,
   weekday,
+  type Candle,
   type DataMode,
   type Interval,
   type StudyId,
   type Studies,
 } from './marketModel';
-import type { SimPoint } from './useMarketData';
 
 /**
  * How each overlay is drawn. The palette has one accent and one loss colour,
@@ -139,9 +140,9 @@ export interface MarketChartProps {
   symbol: string;
   /** Historical bars, already aggregated to `interval` and cut to the range. */
   bars?: PriceBar[];
-  /** The simulated walk, one point per second. */
-  sim?: SimPoint[];
-  /** Studies aligned index-for-index with `bars` or `sim`. */
+  /** Live 1-minute candles from the open; the last may be forming. */
+  candles?: Candle[];
+  /** Studies aligned index-for-index with `bars` or `candles`. */
   studies: Studies;
   active: ReadonlySet<StudyId>;
   signals?: ChartSignal[];
@@ -156,15 +157,18 @@ function fmt(value: number | null | undefined, digits = 2): string {
   return value === null || value === undefined || !Number.isFinite(value) ? '—' : value.toFixed(digits);
 }
 
-function clockTime(seconds: number): string {
-  return new Date(seconds * 1000).toISOString().slice(11, 19);
+const NO_CANDLES: Candle[] = [];
+
+/** Axis and crosshair times on the exchange's clock, not the viewer's. */
+function nyTime(time: Time): string {
+  return typeof time === 'number' ? nyClock(time) : String(time);
 }
 
 export function MarketChart({
   mode,
   symbol,
   bars = [],
-  sim = [],
+  candles = NO_CANDLES,
   studies,
   active,
   signals = NO_SIGNALS,
@@ -180,15 +184,15 @@ export function MarketChart({
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
 
   const historical = mode === 'historical';
-  const length = historical ? bars.length : sim.length;
+  const length = historical ? bars.length : candles.length;
   const hasData = length > 0;
 
   const times = useMemo<Time[]>(
     () =>
       historical
         ? bars.map((bar) => bar.date as Time)
-        : sim.map((point) => point.time as UTCTimestamp),
-    [historical, bars, sim],
+        : candles.map((candle) => candle.time as UTCTimestamp),
+    [historical, bars, candles],
   );
   const indexOf = useMemo(() => {
     const map = new Map<string, number>();
@@ -219,46 +223,41 @@ export function MarketChart({
         fontSize: 11,
         panes: { separatorColor: palette.border },
       },
-      localization: { dateFormat: 'yyyy-MM-dd' },
+      localization: historical
+        ? { dateFormat: 'yyyy-MM-dd' }
+        : { dateFormat: 'yyyy-MM-dd', timeFormatter: (time: Time) => `${nyTime(time)} ET` },
       grid: { vertLines: { color: palette.grid }, horzLines: { color: palette.grid } },
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { borderColor: palette.border },
       timeScale: {
         borderColor: palette.border,
         timeVisible: !historical,
-        secondsVisible: !historical,
+        secondsVisible: false,
         rightOffset: 2,
+        ...(historical ? {} : { tickMarkFormatter: (time: Time) => nyTime(time) }),
       },
     });
 
     const series = new Map<string, ISeriesApi<SeriesType>>();
-    const main = historical
-      ? chart.addSeries(CandlestickSeries, {
-          upColor: palette.up,
-          downColor: palette.down,
-          wickUpColor: palette.up,
-          wickDownColor: palette.down,
-          borderVisible: false,
-          title: symbol,
-        })
-      : chart.addSeries(LineSeries, {
-          color: palette.primary,
-          lineWidth: 2,
-          title: `${symbol} (sim)`,
-        });
+    const main = chart.addSeries(CandlestickSeries, {
+      upColor: palette.up,
+      downColor: palette.down,
+      wickUpColor: palette.up,
+      wickDownColor: palette.down,
+      borderVisible: false,
+      title: historical ? symbol : `${symbol} · live`,
+    });
     series.set('main', main);
 
-    if (historical) {
-      const volume = chart.addSeries(HistogramSeries, {
-        color: palette.volume,
-        priceFormat: { type: 'volume' },
-        priceScaleId: 'volume',
-        lastValueVisible: false,
-        priceLineVisible: false,
-      });
-      volume.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
-      series.set('volume', volume);
-    }
+    const volume = chart.addSeries(HistogramSeries, {
+      color: palette.volume,
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'volume',
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+    volume.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+    series.set('volume', volume);
 
     if (active.has('sma20')) series.set('sma20', chart.addSeries(LineSeries, lineOptions(palette, LOOK.sma20)));
     if (active.has('sma50')) series.set('sma50', chart.addSeries(LineSeries, lineOptions(palette, LOOK.sma50)));
@@ -268,7 +267,7 @@ export function MarketChart({
       series.set('bbMid', chart.addSeries(LineSeries, lineOptions(palette, LOOK.bbMid)));
       series.set('bbLower', chart.addSeries(LineSeries, lineOptions(palette, LOOK.bbBand)));
     }
-    if (historical && active.has('vwap')) {
+    if (active.has('vwap')) {
       series.set('vwap', chart.addSeries(LineSeries, lineOptions(palette, LOOK.vwap)));
     }
 
@@ -347,7 +346,18 @@ export function MarketChart({
         bars.map((bar) => ({ time: bar.date as Time, value: bar.volume, color: palette.volume })),
       );
     } else {
-      main.setData(sim.map((point) => ({ time: point.time as UTCTimestamp, value: point.value })));
+      main.setData(
+        candles.map((candle) => ({
+          time: candle.time as UTCTimestamp,
+          open: candle.open,
+          high: candle.high,
+          low: candle.low,
+          close: candle.close,
+        })),
+      );
+      series.get('volume')?.setData(
+        candles.map((candle) => ({ time: candle.time as UTCTimestamp, value: candle.volume, color: palette.volume })),
+      );
     }
 
     series.get('sma20')?.setData(toLine(times, studies.sma20));
@@ -404,12 +414,12 @@ export function MarketChart({
       markers.setMarkers(list);
     }
 
-    // Fit once per view; a ticking simulation must not snap the user's zoom back.
+    // Fit once per view; a ticking live chart must not snap the user's zoom back.
     if (fittedRef.current !== fitKey) {
       chartRef.current?.timeScale().fitContent();
       fittedRef.current = fitKey;
     }
-  }, [historical, bars, sim, studies, times, signals, active, fitKey, theme, structure]);
+  }, [historical, bars, candles, studies, times, signals, active, fitKey, theme, structure]);
 
   const index = hoverIndex ?? length - 1;
   const hovering = hoverIndex !== null;
@@ -433,9 +443,15 @@ export function MarketChart({
 
   const bar = historical ? bars[index] : undefined;
   const prior = historical ? bars[index - 1] : undefined;
-  const point = !historical ? sim[index] : undefined;
+  const candle = !historical ? candles[index] : undefined;
+  // A live candle is measured against the session's open, the day's anchor.
+  const sessionOpen = candles[0]?.open;
   const change =
-    bar && prior ? bar.close / prior.close - 1 : point && sim[0] ? point.value / sim[0].value - 1 : null;
+    bar && prior
+      ? bar.close / prior.close - 1
+      : candle && sessionOpen
+        ? candle.close / sessionOpen - 1
+        : null;
 
   const legend: { key: string; label: string; look: LineLook; value: string }[] = [];
   if (active.has('sma20')) legend.push({ key: 'sma20', label: 'SMA 20', look: LOOK.sma20, value: fmt(studies.sma20?.[index]) });
@@ -445,7 +461,7 @@ export function MarketChart({
     const band = studies.bollinger?.[index];
     legend.push({ key: 'bb', label: 'BB', look: LOOK.bbBand, value: `${fmt(band?.lower)} – ${fmt(band?.upper)}` });
   }
-  if (historical && active.has('vwap')) legend.push({ key: 'vwap', label: 'VWAP', look: LOOK.vwap, value: fmt(studies.vwap?.[index]) });
+  if (active.has('vwap')) legend.push({ key: 'vwap', label: 'VWAP', look: LOOK.vwap, value: fmt(studies.vwap?.[index]) });
   if (showRsi) legend.push({ key: 'rsi', label: `RSI ${RSI_PERIOD}`, look: LOOK.rsi, value: fmt(studies.rsi?.[index], 1) });
   if (showMacd) {
     legend.push({
@@ -477,12 +493,12 @@ export function MarketChart({
               </span>
               <span>{INTERVAL_NOUN[interval]} bar</span>
             </>
-          ) : point ? (
+          ) : candle ? (
             <>
               <span data-testid="readout-date" className="text-foreground">
-                {clockTime(point.time)} UTC
+                {nyClock(candle.time)} ET
               </span>
-              <span>1 s tick · simulated</span>
+              <span>1 min bar{candle.forming ? ' · forming' : ''} · live</span>
             </>
           ) : null}
           {hovering ? null : <span className="uppercase tracking-[0.12em]">latest</span>}
@@ -498,12 +514,16 @@ export function MarketChart({
             </span>
             <span className="text-muted-foreground">Vol {bar.volume.toLocaleString()}</span>
           </div>
-        ) : point ? (
+        ) : candle ? (
           <div className="mt-0.5 flex flex-wrap gap-x-2">
-            <span>Px {fmt(point.value)}</span>
+            <span>O {fmt(candle.open)}</span>
+            <span>H {fmt(candle.high)}</span>
+            <span>L {fmt(candle.low)}</span>
+            <span>C {fmt(candle.close)}</span>
             <span className={change !== null && change < 0 ? 'text-destructive' : 'text-primary'}>
-              {change === null ? '' : `${change >= 0 ? '+' : ''}${(change * 100).toFixed(2)}% vs seed`}
+              {change === null ? '' : `${change >= 0 ? '+' : ''}${(change * 100).toFixed(2)}% vs open`}
             </span>
+            <span className="text-muted-foreground">Vol {candle.volume.toLocaleString()}</span>
           </div>
         ) : null}
         {legend.length > 0 ? (

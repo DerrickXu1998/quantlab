@@ -37,6 +37,10 @@ export type Universe = components['schemas']['Universe'];
 export type UniverseList = components['schemas']['UniverseList'];
 export type UniversePublishRequest = components['schemas']['UniversePublishRequest'];
 export type UniverseMembers = components['schemas']['UniverseMembers'];
+export type LiveBar = components['schemas']['LiveBar'];
+export type LiveSession = components['schemas']['LiveSession'];
+export type LiveLineStatus = components['schemas']['LiveLineStatus'];
+export type LiveEvent = components['schemas']['LiveEvent'];
 
 export type SignalQuery = NonNullable<paths['/signals']['get']['parameters']['query']>;
 export type PriceQuery = NonNullable<
@@ -133,6 +137,11 @@ export function listInstruments(): Promise<InstrumentList> {
 export function getPrices(symbol: string, start?: string, end?: string): Promise<PriceBarList> {
   const query: PriceQuery = { start_date: start, end_date: end };
   return request<PriceBarList>(`/instruments/${encodeURIComponent(symbol)}/prices`, query);
+}
+
+/** Today's live 1-minute bars for one symbol (IBKR, provisional). */
+export function getLiveSession(symbol: string): Promise<LiveSession> {
+  return request<LiveSession>(`/live/${encodeURIComponent(symbol)}/session`);
 }
 
 export function listSignals(filters: SignalQuery = {}): Promise<SignalList> {
