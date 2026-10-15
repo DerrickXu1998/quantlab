@@ -94,7 +94,7 @@ can import the other.
 
 ## 2. Runtime topology
 
-Eight compose services across four profiles. The base stack is four containers; everything else
+Ten compose services across five profiles. The base stack is four containers; everything else
 is opt-in, which is what keeps the zero-setup demo honest.
 
 | Service | Profile | Image | Ports | Role |
@@ -105,9 +105,12 @@ is opt-in, which is what keeps the zero-setup demo honest.
 | `frontend` | base | `./frontend` | 8080 | nginx over the built bundle |
 | `migrate` | base | `quantlab-migrate` | — | applies the schema (src/quantlab/store), then exits |
 | `seed` | `demo` | `./backend` | — | writes the synthetic SQLite demo |
-| `redpanda` | `streaming` | `redpanda:v24.3.18` | 19092 | Kafka API for streamed replay |
+| `redpanda` | `streaming`, `live` | `redpanda:v24.3.18` | 19092 | Kafka API for streamed replay and live ticks |
+| `ib-gateway` | `live` | `gnzsnz/ib-gateway:10.37` | — | IBKR login (read-only API, paper first) |
+| `live-ingest` | `live` | `./live-ingest` | — | IBKR collector: leases → lines → ticks and today's minutes |
 
-Volumes: `quantlab-chdata`, `quantlab-pgdata`, `quantlab-cache`, `quantlab-data`, `quantlab-kafka`.
+Volumes: `quantlab-chdata`, `quantlab-pgdata`, `quantlab-cache`, `quantlab-data`, `quantlab-kafka`,
+`quantlab-ibgateway`.
 
 The ingest image carries pandas, requests and yfinance. The backend image deliberately does
 **not** — it reads the warehouse, it never fetches from a provider.
@@ -212,6 +215,31 @@ are warm-up: they feed lookback and emit nothing.
 
 Without `QUANTLAB_KAFKA_BROKERS` the live endpoint answers a clean 503 and every other route is
 unaffected; `kafka-python` is imported lazily so the API boots without a bus.
+
+### Live market data (roadmap 4a)
+
+Not a research path: today's IBKR prices, for the Market tab to watch. Provisional and
+display-only — Tiingo's end-of-day load is the record, and nothing a backtest reads ever sees them.
+
+```
+Market tab ─ GET /live/stream?symbols=… ─▶ backend ─ lease ─▶ Postgres live_subscriptions
+                                              ▲                        │ polled every 2 s
+                                              │ LiveHub (one consumer)  ▼
+                                    redpanda quantlab.live.ticks ◀─ live-ingest ◀─ IB Gateway
+           GET /live/{symbol}/session ─▶ ClickHouse live.bars_1m ◀────┘ (backfill + rolled minutes)
+```
+
+- **Leases, not settings.** A stream leases a market-data line per symbol and renews it every 30 s;
+  a closed tab frees its lines two minutes later. IBKR gives ~100 lines; deployed strategies
+  outrank charts (`live-ingest/src/quantlab_live/plan.py`). A symbol without a line says so —
+  it is never simulated.
+- **Kept apart.** `live.*` is its own ClickHouse database with a 7-day TTL;
+  `backend/src/quantlab/storage/live.py` is the only module that reads it, and
+  `tests/unit/test_live_isolation.py` fails if research, replay or execution code ever does.
+- **Slower, never dead.** The hub and the collector reconnect with backoff forever; a stale or
+  logged-out collector shows in the stream's heartbeat (`collector: down`), not as a 503.
+- **Without IBKR:** `scripts/live_fake_publish.py` stands in for the collector. Its frames say
+  `fake: true` and the Market tab tags them SIMULATED.
 
 ---
 

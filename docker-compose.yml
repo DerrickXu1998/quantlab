@@ -109,11 +109,12 @@ services:
   # stack is unchanged. The publisher (quantlab-data-pipeline:
   # `make quantlab-data ARGS="replay-publish ..."`)
   # turns warehouse history into a chronological bar stream on the topic; the
-  # backend consumes it for GET /api/v1/replay/live/stream.
+  # backend consumes it for GET /api/v1/replay/live/stream. The `live` profile
+  # starts it too: live IBKR prices travel on quantlab.live.ticks.
   # ---------------------------------------------------------------------------
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:v24.3.18
-    profiles: ["streaming"]
+    profiles: ["streaming", "live"]
     command:
       - redpanda
       - start
@@ -207,6 +208,57 @@ services:
       retries: 12
       start_period: 10s
 
+  # ---------------------------------------------------------------------------
+  # Live market data (roadmap 4a). `make live-up` (profile `live`). IB Gateway
+  # holds the IBKR login; IBC inside the image handles the daily restart and
+  # re-login. READ_ONLY_API: nothing in quantlab can place an order through it.
+  # Paper first: pacing, line limits and reconnects are where this breaks, and
+  # finding that out should be free. A paper account sees real-time prices
+  # only if "share market data with paper account" is on in Client Portal.
+  # ---------------------------------------------------------------------------
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:10.37@sha256:b248e4dad68cc1de8dd1905ea8598089e92307dfec57f59e08a28182bbb002d5
+    profiles: ["live"]
+    environment:
+      TWS_USERID: ${IBKR_USERNAME:-}
+      TWS_PASSWORD: ${IBKR_PASSWORD:-}
+      TRADING_MODE: ${IBKR_TRADING_MODE:-paper}
+      READ_ONLY_API: "yes"
+      TWOFA_TIMEOUT_ACTION: restart
+      RELOGIN_AFTER_TWOFA_TIMEOUT: "yes"
+      AUTO_RESTART_TIME: "11:59 PM"
+      TIME_ZONE: America/New_York
+    # No ports: only live-ingest talks to it, on the compose network (4004 is
+    # the image's relay to the paper API).
+    volumes:
+      - quantlab-ibgateway:/home/ibgateway/Jts
+    restart: unless-stopped
+
+  live-ingest:
+    build: ./live-ingest
+    profiles: ["live"]
+    environment:
+      QUANTLAB_DB_URL: ${QUANTLAB_DB_URL:-postgresql://quantlab:quantlab@postgres:5432/quantlab}
+      QUANTLAB_CH_URL: ${QUANTLAB_CH_URL:-clickhouse://quantlab:quantlab@clickhouse:8123/quantlab}
+      QUANTLAB_CH_PASSWORD: ${QUANTLAB_CH_PASSWORD:-}
+      QUANTLAB_KAFKA_BROKERS: redpanda:9092
+      QUANTLAB_LIVE_TICKS_TOPIC: quantlab.live.ticks
+      IBKR_HOST: ib-gateway
+      IBKR_PORT: ${IBKR_PORT:-4004}
+      QUANTLAB_LIVE_MAX_LINES: ${QUANTLAB_LIVE_MAX_LINES:-90}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      ib-gateway:
+        condition: service_started
+    restart: unless-stopped
+
   frontend:
     build: ./frontend
     ports:
@@ -220,3 +272,4 @@ volumes:
   quantlab-pgdata:   # Postgres catalog
   quantlab-data:     # synthetic demo SQLite
   quantlab-kafka:    # redpanda log segments (streaming profile)
+  quantlab-ibgateway: # IB Gateway settings (live profile)
