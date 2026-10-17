@@ -3589,3 +3589,8 @@ components:
           type: [string, "null"]
           enum: [open, closed, null]
           description: Regular-hours session state per IBKR's trading hours; null while the collector is down.
+        fake:
+          type: boolean
+          description: >
+            Present and true only on frames from scripts/live_fake_publish.py, the
+            development stand-in for the collector. Never set by live-ingest.

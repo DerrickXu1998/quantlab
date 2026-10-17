@@ -471,6 +471,7 @@ every deploy; `BACKEND_URL` and `EXPECT_DATASET` make it work against any enviro
 | `QUANTLAB_POOL_TIMEOUT` | Seconds a request waits for a connection (default 10.0) |
 | `QUANTLAB_KAFKA_BROKERS` | Live replay bus. Unset → live endpoint 503s, nothing else changes |
 | `QUANTLAB_KAFKA_TOPIC` | Default `quantlab.bars` |
+| `QUANTLAB_LIVE_TICKS_TOPIC` | Live IBKR ticks for `GET /live/stream` (`quantlab.live.ticks`). Unset → the live endpoints 503 |
 | `QUANTLAB_OFFLINE=1` | Any cache miss raises instead of hitting the network. The test suite runs under this |
 | `QUANTLAB_PLUGIN_PATH` | Extra plugin directories |
 | `OPENFIGI_API_KEY`, `FRED_API_KEY`, `COMPANIES_HOUSE_API_KEY` | Provider keys |
