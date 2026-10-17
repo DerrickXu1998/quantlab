@@ -31,7 +31,7 @@ def test_every_migration_is_numbered_and_in_order():
 
 
 def test_the_catalog_and_bars_schemas_are_all_here():
-    assert _versions(store.MIGRATIONS_DIR)[:9] == [
+    assert _versions(store.MIGRATIONS_DIR)[:10] == [
         "001_catalog",
         "002_signals",
         "003_experiments",
@@ -41,12 +41,14 @@ def test_the_catalog_and_bars_schemas_are_all_here():
         "007_run_fact_coverage",
         "008_run_queue",
         "009_run_results_stored",
+        "010_live_subscriptions",
     ]
     # 100 and 101 were written in quantlab-data-pipeline and are owned here
     # now, byte for byte, so warehouses that already applied them agree.
     assert _versions(store.CH_MIGRATIONS_DIR) == [
         "001_bars",
         "002_bars_force_merge",
+        "003_live",
         "100_pipeline_frequency_views",
         "101_minute_type",
     ]
