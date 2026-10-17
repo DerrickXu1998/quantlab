@@ -1,20 +1,24 @@
-import { LogOut, UserRound } from 'lucide-react';
+import { LogOut, Settings, UserRound } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { useDataset } from '../api/DatasetProvider';
 import { Button } from '../components/ui/button';
+import { SettingsDialog } from '../settings/SettingsDialog';
 import { useOptionalAuth } from './AuthProvider';
 
 /**
- * Who you are, and the way out.
+ * Who you are, your settings, and the way out.
  *
- * Renders nothing at all when there is no session — with
- * `QUANTLAB_AUTH_REQUIRED=false` there is no account to show, and a menu
- * offering to sign out of a session that does not exist would be a control
- * that lies about the system it is attached to.
+ * With a session it names the account and offers Settings and Sign out. With
+ * sign-in off (`QUANTLAB_AUTH_REQUIRED=false`) there is still one built-in
+ * account whose settings can be changed, so the menu shows that -- but never
+ * a Sign out for a session that does not exist.
  */
 export function UserMenu() {
   const auth = useOptionalAuth();
+  const dataset = useDataset();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const container = useRef<HTMLDivElement>(null);
 
   // Closes on Escape and on a click elsewhere: the two gestures every menu is
@@ -35,7 +39,10 @@ export function UserMenu() {
     };
   }, [open]);
 
-  if (!auth || auth.status !== 'authenticated' || !auth.user) return null;
+  const signedIn = auth?.status === 'authenticated' && auth.user ? auth.user : null;
+  const signInOff = dataset.status === 'ready' && dataset.health.auth_required === false;
+  if (!signedIn && !signInOff) return null;
+  const label = signedIn ? signedIn.email : 'Local account';
 
   return (
     <div ref={container} className="relative" data-testid="user-menu">
@@ -47,13 +54,13 @@ export function UserMenu() {
         aria-expanded={open}
         // The email is hidden below 1,440px so the header's full row fits a
         // 1,280px laptop, so the name has to come from here.
-        aria-label={`Account: ${auth.user.email}`}
-        title={auth.user.email}
+        aria-label={`Account: ${label}`}
+        title={label}
         onClick={() => setOpen((current) => !current)}
       >
         <UserRound size={16} strokeWidth={1.5} aria-hidden="true" />
         <span className="hidden max-w-[16ch] truncate normal-case tracking-normal min-[1440px]:inline">
-          {auth.user.email}
+          {label}
         </span>
       </Button>
 
@@ -63,29 +70,52 @@ export function UserMenu() {
           aria-label="Account"
           className="absolute right-0 top-full z-20 mt-1 w-56 border border-border bg-card p-2 shadow-none"
         >
-          <p className="break-all px-1 pb-2 text-xs text-muted-foreground">
-            Signed in as <span className="font-mono text-foreground">{auth.user.email}</span>. Runs
-            and strategies are private to this account.
-          </p>
+          {signedIn ? (
+            <p className="break-all px-1 pb-2 text-xs text-muted-foreground">
+              Signed in as <span className="font-mono text-foreground">{signedIn.email}</span>. Runs
+              and strategies are private to this account.
+            </p>
+          ) : (
+            <p className="px-1 pb-2 text-xs text-muted-foreground">
+              Sign-in is off on this server: everyone shares the local account.
+            </p>
+          )}
           <Button
             type="button"
             role="menuitem"
-            variant="outline"
+            variant="ghost"
             size="sm"
-            className="w-full"
-            disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              await auth.logout();
-              setBusy(false);
+            className="mb-1 w-full justify-start"
+            onClick={() => {
               setOpen(false);
+              setSettingsOpen(true);
             }}
           >
-            <LogOut size={16} strokeWidth={1.5} aria-hidden="true" />
-            {busy ? 'Signing out…' : 'Sign out'}
+            <Settings size={16} strokeWidth={1.5} aria-hidden="true" />
+            Settings
           </Button>
+          {signedIn && auth ? (
+            <Button
+              type="button"
+              role="menuitem"
+              variant="outline"
+              size="sm"
+              className="w-full"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                await auth.logout();
+                setBusy(false);
+                setOpen(false);
+              }}
+            >
+              <LogOut size={16} strokeWidth={1.5} aria-hidden="true" />
+              {busy ? 'Signing out…' : 'Sign out'}
+            </Button>
+          ) : null}
         </div>
       ) : null}
+      {settingsOpen ? <SettingsDialog onClose={() => setSettingsOpen(false)} /> : null}
     </div>
   );
 }

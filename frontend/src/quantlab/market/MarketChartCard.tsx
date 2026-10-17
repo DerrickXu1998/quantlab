@@ -1,11 +1,12 @@
-import { Activity, ServerCrash, X } from 'lucide-react';
+import { Activity, Moon, PlugZap, ServerCrash, X } from 'lucide-react';
 import { useMemo, type ReactNode } from 'react';
 import type { Instrument } from '../../api/client';
 import { navigate } from '../../chrome/router';
 import { Button } from '../../components/ui/button';
-import { StatusBadge } from '../../components/ui/status-badge';
+import { StatusBadge, type StatusTone } from '../../components/ui/status-badge';
 import { EmptyState } from '../chrome/EmptyState';
 import { Panel } from '../chrome/Panel';
+import type { LiveCardState } from '../feed/liveFeed';
 import { MarketChart } from './MarketChart';
 import {
   anchoredVwap,
@@ -14,6 +15,7 @@ import {
   formatAge,
   providerMix,
   INTERVAL_NOUN,
+  nyClock,
   resample,
   sliceRange,
   tailStudies,
@@ -23,14 +25,27 @@ import {
   type RangeId,
   type StudyId,
 } from './marketModel';
-import { SIM_TICK_MS, useDailyBars, useModelSignals, useSimulatedSeries } from './useMarketData';
+import { useDailyBars, useLiveSeries, useModelSignals } from './useMarketData';
 
 export const HISTORICAL_NOTE =
   'Historical: end-of-day OHLCV bars ingested from the market data provider named under Source, stored as delivered. Nothing on this chart is simulated.';
 export const SYNTHETIC_NOTE =
   'Synthetic: these bars were generated for testing, not ingested from a market data provider. They are not real prices.';
-export const SIM_NOTE =
-  'Simulated: a random walk seeded at the last stored close, one point per second. QuantLab has no live feed; these are not market prices.';
+export const LIVE_NOTE =
+  "Live: today's IBKR prices, 1-minute candles from the open with the newest one forming tick by tick (about one tick a second). Provisional and for display only: Tiingo's end-of-day load is the record, and no backtest reads these.";
+export const FAKE_NOTE =
+  'Fake feed: these frames come from scripts/live_fake_publish.py, the development stand-in for the IBKR collector. They are not market prices.';
+
+/** How each live state is badged on the card. */
+const LIVE_BADGE: Record<LiveCardState['kind'], { tone: StatusTone; label: string }> = {
+  live: { tone: 'good', label: 'Live · IBKR' },
+  waiting: { tone: 'active', label: 'Waiting for ticks' },
+  connecting: { tone: 'active', label: 'Connecting' },
+  stale: { tone: 'bad', label: 'Stale' },
+  closed: { tone: 'idle', label: 'Market closed' },
+  offline: { tone: 'bad', label: 'Feed offline' },
+  not_subscribed: { tone: 'bad', label: 'Not subscribed' },
+};
 
 function Fact({ label, children, testId }: { label: string; children: ReactNode; testId?: string }) {
   return (
@@ -41,6 +56,12 @@ function Fact({ label, children, testId }: { label: string; children: ReactNode;
   );
 }
 
+function ageOf(tickAt: number | null, now: number): string {
+  if (tickAt === null) return '—';
+  const seconds = Math.max(0, Math.round((now - tickAt) / 1000));
+  return seconds < 60 ? `${seconds} s ago` : `${Math.round(seconds / 60)} min ago`;
+}
+
 export function MarketChartCard({
   symbol,
   instrument,
@@ -49,7 +70,6 @@ export function MarketChartCard({
   range,
   active,
   onRemove,
-  rng,
 }: {
   symbol: string;
   instrument?: Instrument;
@@ -58,16 +78,14 @@ export function MarketChartCard({
   range: RangeId;
   active: ReadonlySet<StudyId>;
   onRemove: () => void;
-  /** Injected for tests: a fixed walk. */
-  rng?: () => number;
 }) {
-  const daily = useDailyBars(symbol);
   const historical = mode === 'historical';
+  const daily = useDailyBars(symbol);
   const allDaily = daily.status === 'ready' ? daily.data : null;
   const lastDaily = allDaily?.[allDaily.length - 1] ?? null;
 
   const signals = useModelSignals(symbol, historical && active.has('signals'));
-  const sim = useSimulatedSeries(symbol, lastDaily?.close ?? null, !historical, rng);
+  const live = useLiveSeries(symbol, !historical);
 
   const view = useMemo(() => {
     if (!historical || !allDaily) return null;
@@ -90,16 +108,22 @@ export function MarketChartCard({
     [allDaily, range],
   );
 
-  const simStudies = useMemo(
-    () => (historical ? {} : computeStudies(sim.map((point) => point.value), active)),
-    [historical, sim, active],
-  );
+  const liveStudies = useMemo(() => {
+    if (historical) return {};
+    const studies = computeStudies(live.candles.map((candle) => candle.close), active);
+    // Anchored at the open: the session VWAP intraday traders mean by VWAP.
+    if (active.has('vwap')) studies.vwap = anchoredVwap(live.candles);
+    return studies;
+  }, [historical, live.candles, active]);
 
   // Many warehouse names are the symbol again; "AAPL.US · AAPL.US" says nothing.
   const title =
     instrument && instrument.name && instrument.name !== symbol ? `${symbol} · ${instrument.name}` : symbol;
   const first = view?.bars[0];
   const last = view?.bars[view.bars.length - 1];
+  const fake = !historical && live.feed.fake;
+  const badge = LIVE_BADGE[live.state.kind];
+  const now = Date.now();
 
   return (
     <Panel
@@ -107,7 +131,7 @@ export function MarketChartCard({
       title={title}
       className="min-h-[360px]"
       bodyClassName="p-0"
-      simulated={historical ? undefined : SIM_NOTE}
+      simulated={fake ? FAKE_NOTE : undefined}
       actions={
         <>
           {historical && mix?.synthetic ? (
@@ -119,8 +143,14 @@ export function MarketChartCard({
               Historical · EOD
             </StatusBadge>
           ) : (
-            <StatusBadge tone="simulated" title={SIM_NOTE} testId="provenance-simulated">
-              Not live
+            <StatusBadge
+              tone={badge.tone}
+              title={'detail' in live.state ? live.state.detail : LIVE_NOTE}
+              testId="provenance-live"
+            >
+              <span data-state={live.state.kind}>
+                {fake && live.state.kind === 'live' ? 'Live · FAKE feed' : badge.label}
+              </span>
             </StatusBadge>
           )}
           <Button
@@ -186,52 +216,110 @@ export function MarketChartCard({
         ) : (
           <>
             <Fact label="Source" testId="fact-source">
-              <span className="uppercase">Simulated walk — not market data</span>
+              <span title={fake ? FAKE_NOTE : LIVE_NOTE}>
+                {fake ? 'FAKE feed (dev) — not market data' : 'IBKR · live · provisional'}
+              </span>
             </Fact>
-            <Fact label="Tick" testId="fact-bar">{SIM_TICK_MS / 1000} s</Fact>
-            <Fact label="Seed" testId="fact-seed">
-              {lastDaily ? `close ${lastDaily.date} = ${lastDaily.close.toFixed(2)}` : '—'}
+            <Fact label="Bar" testId="fact-bar">1 min, updates each tick</Fact>
+            <Fact label="Session" testId="fact-session">
+              {live.view?.sessionDate ?? '—'}
             </Fact>
-            <Fact label="Points" testId="fact-count">{sim.length}</Fact>
-            <Fact label="Clock">UTC</Fact>
+            <Fact label="Last" testId="fact-last">
+              {live.quote?.last != null ? live.quote.last.toFixed(2) : '—'}
+              {live.quote?.bid != null && live.quote?.ask != null
+                ? ` (${live.quote.bid.toFixed(2)} × ${live.quote.ask.toFixed(2)})`
+                : ''}
+            </Fact>
+            <Fact label="Tick" testId="fact-tick">{ageOf(live.view?.tickAt ?? null, now)}</Fact>
+            <Fact label="Line" testId="fact-line">{live.view?.status ?? 'pending'}</Fact>
+            <Fact label="Clock">
+              {live.candles.length > 0 ? `ET · from ${nyClock(live.candles[0].time)}` : 'ET'}
+            </Fact>
           </>
         )}
       </dl>
 
-      {daily.status === 'error' ? (
-        <EmptyState
-          icon={ServerCrash}
-          tone="error"
-          title={`No history for ${symbol}`}
-          detail={daily.message}
-          testId="chart-error"
-        />
-      ) : daily.status === 'loading' || (!historical && sim.length === 0 && lastDaily) ? (
-        <EmptyState icon={Activity} title={`Loading ${symbol}…`} role="status" testId="chart-loading" />
-      ) : !lastDaily ? (
-        <EmptyState icon={Activity} title={`${symbol} has no stored bars`} testId="chart-empty" />
-      ) : historical && view ? (
+      {historical ? (
+        daily.status === 'error' ? (
+          <EmptyState
+            icon={ServerCrash}
+            tone="error"
+            title={`No history for ${symbol}`}
+            detail={daily.message}
+            testId="chart-error"
+          />
+        ) : daily.status === 'loading' ? (
+          <EmptyState icon={Activity} title={`Loading ${symbol}…`} role="status" testId="chart-loading" />
+        ) : !lastDaily || !view ? (
+          <EmptyState icon={Activity} title={`${symbol} has no stored bars`} testId="chart-empty" />
+        ) : (
+          <MarketChart
+            mode="historical"
+            symbol={symbol}
+            bars={view.bars}
+            studies={view.studies}
+            active={active}
+            signals={signals}
+            interval={interval}
+            fitKey={`${symbol}|${interval}|${range}`}
+          />
+        )
+      ) : live.candles.length > 0 ? (
         <MarketChart
-          mode="historical"
+          mode="live"
           symbol={symbol}
-          bars={view.bars}
-          studies={view.studies}
+          candles={live.candles}
+          studies={liveStudies}
           active={active}
-          signals={signals}
           interval={interval}
-          fitKey={`${symbol}|${interval}|${range}`}
+          fitKey={`${symbol}|live|${live.view?.sessionDate ?? ''}`}
         />
       ) : (
-        <MarketChart
-          mode="simulated"
-          symbol={symbol}
-          sim={sim}
-          studies={simStudies}
-          active={active}
-          interval={interval}
-          fitKey={`${symbol}|sim`}
-        />
+        <LiveEmpty symbol={symbol} state={live.state} sessionError={live.view?.sessionError ?? null} />
       )}
     </Panel>
   );
+}
+
+/** A live chart with nothing to draw yet: say which of the reasons it is. */
+function LiveEmpty({
+  symbol,
+  state,
+  sessionError,
+}: {
+  symbol: string;
+  state: LiveCardState;
+  sessionError: string | null;
+}) {
+  switch (state.kind) {
+    case 'offline':
+      return (
+        <EmptyState icon={PlugZap} tone="error" title="Live feed offline" detail={state.detail} testId="live-offline" />
+      );
+    case 'not_subscribed':
+      return (
+        <EmptyState icon={PlugZap} tone="error" title={`${symbol} is not subscribed`} detail={state.detail} testId="live-not-subscribed" />
+      );
+    case 'closed':
+      return (
+        <EmptyState
+          icon={Moon}
+          title="Market closed"
+          detail="No live session is stored for this symbol. Historical shows the record."
+          testId="live-closed"
+        />
+      );
+    case 'stale':
+      return <EmptyState icon={Activity} tone="error" title="Live feed stale" detail={state.detail} testId="live-stale" />;
+    default:
+      return (
+        <EmptyState
+          icon={Activity}
+          title={`Waiting for ${symbol}'s session…`}
+          detail={sessionError ?? 'Backfilling the session from the open, then about one tick a second.'}
+          role="status"
+          testId="live-waiting"
+        />
+      );
+  }
 }

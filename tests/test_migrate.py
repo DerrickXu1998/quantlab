@@ -49,6 +49,7 @@ def test_the_catalog_and_bars_schemas_are_all_here():
         "001_bars",
         "002_bars_force_merge",
         "003_live",
+        "004_live_bars_owner",
         "100_pipeline_frequency_views",
         "101_minute_type",
     ]

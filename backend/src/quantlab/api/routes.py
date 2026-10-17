@@ -8,31 +8,39 @@ synthetic SQLite demo, chosen once at startup.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 import time
 from dataclasses import asdict
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Annotated, Literal, get_args
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
+from starlette.concurrency import run_in_threadpool
 
 from quantlab import auth as auth_lib
+from quantlab import settings as user_settings_model
 from quantlab.api import schemas, security
 from quantlab.api.security import CurrentUser, owner_scope
 from quantlab.execution import adjustments, minutes
+from quantlab.logging import get_logger
 from quantlab.replay import engine as replay_engine
 from quantlab.research import errors as research_errors
 from quantlab.research import jobs, performance, runner, studies
 from quantlab.signals import registry as signal_registry
 from quantlab.signals import templates as signal_templates
 from quantlab.storage import facts as fact_defs
+from quantlab.storage import live as live_store
 from quantlab.strategy import StrategySpec, StrategyValidationError, templates
 from quantlab.streaming import bus as streaming_bus
 from quantlab.streaming import live as streaming_live
+from quantlab.streaming import live_hub, live_manager
 
 router = APIRouter()
+logger = get_logger(__name__)
 
 # Real tickers are not bare uppercase words: quantlab's canonical ids carry an
 # exchange suffix (AAPL.US, HSBA.LON) and some venues use digits or hyphens
@@ -1305,6 +1313,382 @@ def stream_live_replay(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# --- Live market data (roadmap 4a) -------------------------------------------
+#
+# IBKR prices for the Market tab, published by the live-ingest collector. Live
+# data is provisional and display-only: it is read from `live.*` through
+# storage.live and never reaches a backtest. Thin handlers: resolve symbols,
+# lease their lines, forward what the hub hands over.
+
+#: Symbols one live stream may watch: the Market tab's charts plus the shell's
+#: watchlist, with room to spare. Lines are scarce (~100 an account).
+_LIVE_MAX_SYMBOLS = 16
+#: How often a live stream says it is alive, re-reads its lines' status, and
+#: (every _LIVE_RENEW_SECONDS) renews their leases.
+_LIVE_HEARTBEAT_SECONDS = 5.0
+_LIVE_RENEW_SECONDS = 30.0
+#: A live stream ends after this; the client reopens it. Nothing to resume.
+_LIVE_STREAM_SECONDS = 60 * 60
+#: How long a first stream waits for the hub's first broker connection.
+_LIVE_CONNECT_WAIT_SECONDS = 5.0
+
+_LIVE_HUB_LOCK = threading.Lock()
+
+
+def _live_hub(request: Request) -> live_hub.LiveHub:
+    # Started on first use rather than at startup: an API that never serves a
+    # live stream (tests, the demo, a stack without the live profile) never
+    # opens a consumer. Per app, on its state, like the stream slots.
+    hub = getattr(request.app.state, "live_hub", None)
+    if hub is None:
+        with _LIVE_HUB_LOCK:
+            hub = getattr(request.app.state, "live_hub", None)
+            if hub is None:
+                hub = live_hub.LiveHub(streaming_bus.brokers(), live_hub.topic())
+                hub.start()
+                request.app.state.live_hub = hub
+    return hub
+
+
+def _live_warehouse(request: Request):
+    wh = getattr(backend(request), "wh", None)
+    if wh is None:
+        raise HTTPException(
+            status_code=503,
+            detail="live data needs the warehouse; the demo dataset has no live feed",
+        )
+    return wh
+
+
+def _sse(payload: dict) -> str:
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+@router.get("/live/stream", tags=["live"], operation_id="streamLive")
+async def stream_live(
+    request: Request,
+    user: CurrentUser,
+    symbols: Annotated[str, Query(description="Comma-separated canonical symbols")] = "",
+) -> StreamingResponse:
+    if not live_hub.configured():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "live data is not configured: QUANTLAB_KAFKA_BROKERS or "
+                f"{live_hub.TOPIC_ENV} is unset (start the stack with the 'live' profile)"
+            ),
+        )
+    symbol_list = sorted({s.strip() for s in symbols.split(",") if s.strip()})
+    if not symbol_list:
+        raise HTTPException(status_code=400, detail="symbols must name at least one instrument")
+    if len(symbol_list) > _LIVE_MAX_SYMBOLS:
+        raise HTTPException(
+            status_code=400, detail=f"at most {_LIVE_MAX_SYMBOLS} symbols per live stream"
+        )
+    wh = _live_warehouse(request)
+    store = backend(request)
+    unknown = await run_in_threadpool(store.validate_symbols, symbol_list)
+    if unknown:
+        raise HTTPException(status_code=404, detail=f"unknown symbol(s): {', '.join(unknown)}")
+    ids: dict[str, int] = await run_in_threadpool(store.instrument_ids, symbol_list)
+
+    hub = _live_hub(request)
+    await run_in_threadpool(hub.wait_attempted, _LIVE_CONNECT_WAIT_SECONDS)
+    if not hub.bus_ok:
+        raise HTTPException(
+            status_code=503, detail=f"live bus unreachable: {hub.bus_error or 'connecting'}"
+        )
+
+    slots = _acquire_stream_slot(request, user)
+    instrument_ids = list(ids.values())
+    try:
+        await run_in_threadpool(live_store.renew_market_leases, wh, user.id, instrument_ids)
+    except Exception:
+        slots.release(user.id)
+        raise
+    # The caller's own frames only: each user's prices come from their own
+    # IBKR login, licensed to them alone.
+    subscription = hub.subscribe(user.id, symbol_list)
+
+    async def frames():
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _LIVE_STREAM_SECONDS
+        next_beat = loop.time()
+        next_renew = loop.time() + _LIVE_RENEW_SECONDS
+        known: dict[str, live_store.LineStatus] = {}
+        try:
+            while loop.time() < deadline:
+                now = loop.time()
+                if now >= next_renew:
+                    next_renew = now + _LIVE_RENEW_SECONDS
+                    try:
+                        await run_in_threadpool(
+                            live_store.renew_market_leases, wh, user.id, instrument_ids
+                        )
+                    except Exception:
+                        # A catalog blip costs one renewal, not the stream: the
+                        # lease outlives several missed renewals.
+                        logger.warning("live lease renewal failed", exc_info=True)
+                if now >= next_beat:
+                    next_beat = now + _LIVE_HEARTBEAT_SECONDS
+                    try:
+                        statuses = await run_in_threadpool(
+                            live_store.line_statuses, wh, user.id, instrument_ids
+                        )
+                    except Exception:
+                        logger.warning("live line status read failed", exc_info=True)
+                        statuses = {}
+                    for symbol, line in live_store.statuses_by_symbol(ids, statuses).items():
+                        if statuses and known.get(symbol) != line:
+                            known[symbol] = line
+                            yield _sse(
+                                {"event": "status", "symbol": symbol,
+                                 "status": line.status, "detail": line.detail}
+                            )
+                    collector, market = hub.collector_state(user.id)
+                    yield _sse(
+                        {"event": "heartbeat", "ts": _utc_now_iso(),
+                         "collector": collector, "market": market}
+                    )
+                for message in await subscription.next_batch(
+                    max(0.05, next_beat - loop.time())
+                ):
+                    yield _sse(message)
+        finally:
+            hub.unsubscribe(subscription)
+            slots.release(user.id)
+
+    return StreamingResponse(
+        frames(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get("/live/{symbol}/session", tags=["live"], operation_id="getLiveSession")
+def get_live_session(
+    request: Request,
+    user: CurrentUser,
+    symbol: Annotated[str, Path(pattern=SYMBOL_PATTERN)],
+) -> dict:
+    wh = _live_warehouse(request)
+    ids = backend(request).instrument_ids([symbol])
+    if symbol not in ids:
+        raise HTTPException(status_code=404, detail=f"unknown symbol: {symbol}")
+    instrument_id = ids[symbol]
+    session_date, bars = live_store.session_bars(wh, user.id, instrument_id)
+    line = live_store.line_statuses(wh, user.id, [instrument_id])[instrument_id]
+    return {"symbol": symbol, "session_date": session_date, "status": line.status, "bars": bars}
+
+
+# --- Live connections: each user's own IBKR login ----------------------------
+#
+# No shared login: one account's market data is licensed to that account's
+# holder. A user connects their own IBKR account; the gateway manager runs a
+# gateway logged in as them. The password goes to the manager and on to that
+# gateway -- quantlab stores it nowhere, and no response carries it.
+
+#: Connection attempts one user may make per window. IBKR locks an account
+#: after repeated failed logins; this keeps quantlab from being the cause.
+_LIVE_CONNECT_ATTEMPTS = 3
+_LIVE_CONNECT_WINDOW_SECONDS = 600.0
+_LIVE_CONNECT_LOCK = threading.Lock()
+
+
+def _connect_attempts(request: Request) -> dict[str, list[float]]:
+    attempts = getattr(request.app.state, "_live_connect_attempts", None)
+    if attempts is None:
+        attempts = request.app.state._live_connect_attempts = {}
+    return attempts
+
+
+def _note_connect_attempt(request: Request, user_id: str) -> None:
+    now = time.monotonic()
+    with _LIVE_CONNECT_LOCK:
+        attempts = _connect_attempts(request)
+        recent = [t for t in attempts.get(user_id, []) if now - t < _LIVE_CONNECT_WINDOW_SECONDS]
+        if len(recent) >= _LIVE_CONNECT_ATTEMPTS:
+            wait = int(_LIVE_CONNECT_WINDOW_SECONDS - (now - recent[0])) + 1
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"{_LIVE_CONNECT_ATTEMPTS} connection attempts in "
+                    f"{int(_LIVE_CONNECT_WINDOW_SECONDS // 60)} minutes; wait before trying "
+                    "again (IBKR locks accounts after repeated failed logins)"
+                ),
+                headers={"Retry-After": str(wait)},
+            )
+        recent.append(now)
+        attempts[user_id] = recent
+
+
+def _manager_call(fn, *args) -> dict:
+    try:
+        return fn(*args)
+    except live_manager.ManagerUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+
+@router.get("/live/connection", tags=["live"], operation_id="getLiveConnection")
+def get_live_connection(user: CurrentUser) -> dict:
+    return _manager_call(live_manager.status, user.id)
+
+
+@router.post(
+    "/live/connection", tags=["live"], operation_id="connectLive", status_code=202
+)
+def connect_live(
+    request: Request, body: schemas.LiveConnectRequest, user: CurrentUser
+) -> dict:
+    return _connect_ibkr(request, user, body)
+
+
+def _connect_ibkr(request: Request, user, body: schemas.LiveConnectRequest) -> dict:
+    """Remember the login (never the password) and hand it to the user's gateway.
+
+    The one path for both POST /live/connection and the settings page's
+    credential upload, so the rate limit and the "password goes nowhere but
+    the gateway" rule cannot drift apart.
+    """
+    if not live_manager.configured():
+        raise HTTPException(status_code=503, detail="live connections are not configured")
+    _note_connect_attempt(request, user.id)
+    _save_settings(
+        request,
+        user,
+        {"ibkr": {"username": body.username, "trading_mode": body.trading_mode}},
+    )
+    return _manager_call(
+        live_manager.connect,
+        user.id,
+        body.username,
+        body.password.get_secret_value(),
+        body.trading_mode,
+    )
+
+
+@router.delete("/live/connection", tags=["live"], operation_id="disconnectLive")
+def disconnect_live(user: CurrentUser) -> dict:
+    return _manager_call(live_manager.disconnect, user.id)
+
+
+# --- User settings --------------------------------------------------------------
+#
+# Everything a person configures for themselves, kept with their account:
+# theme, Market defaults and saved lists, and the IBKR login for live prices.
+# One document per user (quantlab.settings validates it); changes are JSON
+# merge patches. The IBKR password is uploaded through its own endpoint and
+# goes to the user's gateway only -- the document never holds it.
+
+
+def _settings_store(request: Request):
+    return request.app.state.user_settings
+
+
+def _load_settings(request: Request, user) -> tuple[dict, str | None]:
+    stored, updated_at = _settings_store(request).get(user.id)
+    return user_settings_model.load(stored), updated_at
+
+
+def _save_settings(request: Request, user, patch: dict) -> tuple[dict, str]:
+    current, _ = _load_settings(request, user)
+    try:
+        merged = user_settings_model.apply(current, patch)
+    except ValidationError as exc:
+        detail = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
+            for error in exc.errors()
+        )
+        raise HTTPException(status_code=422, detail=detail) from None
+    return merged, _settings_store(request).put(user.id, merged)
+
+
+def _has_password_key(value) -> bool:
+    if isinstance(value, dict):
+        return any("password" in str(k).lower() or _has_password_key(v) for k, v in value.items())
+    if isinstance(value, list):
+        return any(_has_password_key(v) for v in value)
+    return False
+
+
+def _ibkr_connection(user) -> dict | None:
+    """The user's live connection, or None when live data is not set up here."""
+    if not live_manager.configured():
+        return None
+    try:
+        return live_manager.status(user.id)
+    except live_manager.ManagerUnavailable:
+        return None
+
+
+def _settings_document(user, settings: dict, updated_at: str | None) -> dict:
+    return {
+        "account": {
+            "id": user.id,
+            # Single-user mode's built-in account has no email to show.
+            "email": None if user.id == auth_lib.LOCAL_USER.id else user.email,
+            "auth_required": auth_lib.auth_required(),
+        },
+        "settings": settings,
+        "updated_at": updated_at,
+        "ibkr_connection": _ibkr_connection(user),
+    }
+
+
+@router.get("/me/settings", tags=["auth"], operation_id="getUserSettings")
+def get_user_settings(request: Request, user: CurrentUser) -> dict:
+    settings, updated_at = _load_settings(request, user)
+    return _settings_document(user, settings, updated_at)
+
+
+@router.patch("/me/settings", tags=["auth"], operation_id="updateUserSettings")
+def update_user_settings(request: Request, patch: dict, user: CurrentUser) -> dict:
+    if _has_password_key(patch):
+        # The one thing this document must never hold. Uploading an IBKR
+        # password has its own endpoint, which stores nothing.
+        raise HTTPException(
+            status_code=422,
+            detail="settings never hold a password; use PUT /me/settings/ibkr/credentials",
+        )
+    settings, updated_at = _save_settings(request, user, patch)
+    return _settings_document(user, settings, updated_at)
+
+
+@router.put(
+    "/me/settings/ibkr/credentials",
+    tags=["auth"],
+    operation_id="putIbkrCredentials",
+    status_code=202,
+)
+def put_ibkr_credentials(
+    request: Request, body: schemas.LiveConnectRequest, user: CurrentUser
+) -> dict:
+    connection = _connect_ibkr(request, user, body)
+    settings, updated_at = _load_settings(request, user)
+    document = _settings_document(user, settings, updated_at)
+    document["ibkr_connection"] = connection
+    return document
+
+
+@router.delete(
+    "/me/settings/ibkr/credentials", tags=["auth"], operation_id="deleteIbkrCredentials"
+)
+def delete_ibkr_credentials(request: Request, user: CurrentUser, forget: bool = False) -> dict:
+    """Disconnect the user's gateway (its login goes with it); ``forget`` also
+    clears the remembered IBKR username."""
+    if live_manager.configured():
+        _manager_call(live_manager.disconnect, user.id)
+    if forget:
+        settings, updated_at = _save_settings(request, user, {"ibkr": None})
+    else:
+        settings, updated_at = _load_settings(request, user)
+    return _settings_document(user, settings, updated_at)
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 # --- Identity ---------------------------------------------------------------

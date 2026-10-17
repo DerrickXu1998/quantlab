@@ -37,6 +37,19 @@ export type Universe = components['schemas']['Universe'];
 export type UniverseList = components['schemas']['UniverseList'];
 export type UniversePublishRequest = components['schemas']['UniversePublishRequest'];
 export type UniverseMembers = components['schemas']['UniverseMembers'];
+export type LiveBar = components['schemas']['LiveBar'];
+export type LiveSession = components['schemas']['LiveSession'];
+export type LiveLineStatus = components['schemas']['LiveLineStatus'];
+export type LiveEvent = components['schemas']['LiveEvent'];
+export type LiveConnection = components['schemas']['LiveConnection'];
+export type UserSettings = components['schemas']['UserSettings'];
+export type UserSettingsDocument = components['schemas']['UserSettingsDocument'];
+
+/** A JSON merge patch over UserSettings: nested and partial; null resets a key. */
+export type UserSettingsPatch = {
+  [Section in keyof UserSettings]?: { [Key in keyof UserSettings[Section]]?: UserSettings[Section][Key] | null } | null;
+};
+export type LiveConnectRequest = components['schemas']['LiveConnectRequest'];
 
 export type SignalQuery = NonNullable<paths['/signals']['get']['parameters']['query']>;
 export type PriceQuery = NonNullable<
@@ -133,6 +146,53 @@ export function listInstruments(): Promise<InstrumentList> {
 export function getPrices(symbol: string, start?: string, end?: string): Promise<PriceBarList> {
   const query: PriceQuery = { start_date: start, end_date: end };
   return request<PriceBarList>(`/instruments/${encodeURIComponent(symbol)}/prices`, query);
+}
+
+/** Everything the user configures for themselves, kept with their account. */
+export function getUserSettings(): Promise<UserSettingsDocument> {
+  return request<UserSettingsDocument>('/me/settings');
+}
+
+export function updateUserSettings(patch: UserSettingsPatch): Promise<UserSettingsDocument> {
+  return send<UserSettingsDocument>('/me/settings', 'PATCH', patch);
+}
+
+/**
+ * Upload the user's IBKR login: the username and account type are remembered
+ * in their settings; the password goes to their own gateway and is stored
+ * nowhere.
+ */
+export function putIbkrCredentials(body: LiveConnectRequest): Promise<UserSettingsDocument> {
+  return send<UserSettingsDocument>('/me/settings/ibkr/credentials', 'PUT', body);
+}
+
+export function deleteIbkrCredentials(forget = false): Promise<UserSettingsDocument> {
+  return send<UserSettingsDocument>(
+    `/me/settings/ibkr/credentials${forget ? '?forget=true' : ''}`,
+    'DELETE',
+  );
+}
+
+/** This user's own IBKR connection (live prices come from their login only). */
+export function getLiveConnection(): Promise<LiveConnection> {
+  return request<LiveConnection>('/live/connection');
+}
+
+/**
+ * Connect the user's own IBKR account. The password goes to their gateway
+ * and is stored nowhere; nothing ever sends it back.
+ */
+export function connectLive(body: LiveConnectRequest): Promise<LiveConnection> {
+  return send<LiveConnection>('/live/connection', 'POST', body);
+}
+
+export function disconnectLive(): Promise<LiveConnection> {
+  return send<LiveConnection>('/live/connection', 'DELETE');
+}
+
+/** Today's live 1-minute bars for one symbol (IBKR, provisional). */
+export function getLiveSession(symbol: string): Promise<LiveSession> {
+  return request<LiveSession>(`/live/${encodeURIComponent(symbol)}/session`);
 }
 
 export function listSignals(filters: SignalQuery = {}): Promise<SignalList> {

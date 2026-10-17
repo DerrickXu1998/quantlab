@@ -94,7 +94,7 @@ can import the other.
 
 ## 2. Runtime topology
 
-Eight compose services across four profiles. The base stack is four containers; everything else
+Nine compose services across five profiles, plus one gateway container per connected live user. The base stack is four containers; everything else
 is opt-in, which is what keeps the zero-setup demo honest.
 
 | Service | Profile | Image | Ports | Role |
@@ -105,9 +105,12 @@ is opt-in, which is what keeps the zero-setup demo honest.
 | `frontend` | base | `./frontend` | 8080 | nginx over the built bundle |
 | `migrate` | base | `quantlab-migrate` | — | applies the schema (src/quantlab/store), then exits |
 | `seed` | `demo` | `./backend` | — | writes the synthetic SQLite demo |
-| `redpanda` | `streaming` | `redpanda:v24.3.18` | 19092 | Kafka API for streamed replay |
+| `redpanda` | `streaming`, `live` | `redpanda:v24.3.18` | 19092 | Kafka API for streamed replay and live ticks |
+| `live-manager` | `live` | `./live-ingest` | — | starts one IB Gateway per connected user (their own login) and runs a collector for each |
+| `quantlab-ibgw-*` | (started by `live-manager`) | `gnzsnz/ib-gateway:10.37` | — | one user's IBKR login, read-only API, on the isolated `quantlab-live` network |
 
-Volumes: `quantlab-chdata`, `quantlab-pgdata`, `quantlab-cache`, `quantlab-data`, `quantlab-kafka`.
+Volumes: `quantlab-chdata`, `quantlab-pgdata`, `quantlab-cache`, `quantlab-data`, `quantlab-kafka`,
+`quantlab-ibgateway`.
 
 The ingest image carries pandas, requests and yfinance. The backend image deliberately does
 **not** — it reads the warehouse, it never fetches from a provider.
@@ -174,7 +177,8 @@ The demo path is guarded by test: `backend/tests/unit/test_demo_fallback.py` mak
 `GET /health` · `GET /instruments` · `GET /instruments/{symbol}/prices` · `GET /signals` ·
 `GET /models` · `POST /runs` · `GET /runs` · `GET /runs/{id}` · `PATCH /runs/{id}` ·
 `DELETE /runs/{id}` · `GET /runs/{id}/performance` · `GET /runs/{id}/replay/stream` ·
-`GET /runs/{id}/replay/summary` · `GET /replay/live/stream`
+`GET /runs/{id}/replay/summary` · `GET /replay/live/stream` · `GET /live/stream` · `GET /live/{symbol}/session` ·
+`GET|POST|DELETE /live/connection` · `GET|PATCH /me/settings` · `PUT|DELETE /me/settings/ibkr/credentials`
 
 The contract is authored once at
 `quantlab_specs/specs/006-warehouse-experiments/contracts/openapi.yaml`. `backend/contracts/`
@@ -212,6 +216,46 @@ are warm-up: they feed lookback and emit nothing.
 
 Without `QUANTLAB_KAFKA_BROKERS` the live endpoint answers a clean 503 and every other route is
 unaffected; `kafka-python` is imported lazily so the API boots without a bus.
+
+### Live market data (roadmap 4a)
+
+Not a research path: today's IBKR prices, for the Market tab to watch. Provisional and
+display-only — Tiingo's end-of-day load is the record, and nothing a backtest reads ever sees them.
+
+```
+Market tab ─ POST /live/connection (user's own IBKR login) ─▶ backend ─ token ─▶ live-manager
+                                                                                  │ docker: one
+                                                                                  ▼ gateway per user
+Market tab ─ GET /live/stream?symbols=… ─▶ backend ─ lease ─▶ Postgres   quantlab-ibgw-<user>
+                                              ▲ LiveHub: a user's       │ their leases   │
+                                              │ own frames only         ▼                ▼
+                                    redpanda quantlab.live.ticks ◀─ that user's collector
+           GET /live/{symbol}/session ─▶ ClickHouse live.bars_1m (owner, instrument, minute)
+```
+
+- **No shared login.** An account's market data is licensed to its holder, so every user connects
+  their own IBKR account from the Market tab. `live-manager` starts a gateway logged in as them
+  (read-only API), runs their collector, and caps running gateways at
+  `QUANTLAB_LIVE_MAX_GATEWAYS` (2; each is a ~1 GB JVM) with a queue behind it. Every frame and
+  every `live.bars_1m` row carries its owner; the hub and the session read serve a user their own
+  only. The password goes to that user's gateway and nowhere else — never a database, a log or a
+  response — so it is entered again after a disconnect or IBKR's weekly re-login. A failed login
+  is never retried automatically (IBKR locks accounts), and connection attempts are rate limited.
+  Idle gateways stop after 15 minutes.
+- **Privilege.** `live-manager` holds the Docker socket and is therefore the most privileged
+  service: nothing is published, the backend authenticates with `QUANTLAB_LIVE_MANAGER_TOKEN`,
+  and the gateways sit on `quantlab-live`, a network that reaches the manager and no database.
+- **Leases, not settings.** A stream leases a market-data line per symbol and renews it every 30 s;
+  a closed tab frees its lines two minutes later. Each account has ~100 lines; deployed strategies
+  outrank charts (`live-ingest/src/quantlab_live/plan.py`). A symbol without a line says so —
+  it is never simulated.
+- **Kept apart.** `live.*` is its own ClickHouse database with a 7-day TTL;
+  `backend/src/quantlab/storage/live.py` is the only module that reads it, and
+  `tests/unit/test_live_isolation.py` fails if research, replay or execution code ever does.
+- **Slower, never dead.** The hub and the collector reconnect with backoff forever; a stale or
+  logged-out collector shows in the stream's heartbeat (`collector: down`), not as a 503.
+- **Without IBKR:** `scripts/live_fake_publish.py` stands in for the collector. Its frames say
+  `fake: true` and the Market tab tags them SIMULATED.
 
 ---
 
@@ -471,6 +515,7 @@ every deploy; `BACKEND_URL` and `EXPECT_DATASET` make it work against any enviro
 | `QUANTLAB_POOL_TIMEOUT` | Seconds a request waits for a connection (default 10.0) |
 | `QUANTLAB_KAFKA_BROKERS` | Live replay bus. Unset → live endpoint 503s, nothing else changes |
 | `QUANTLAB_KAFKA_TOPIC` | Default `quantlab.bars` |
+| `QUANTLAB_LIVE_TICKS_TOPIC` | Live IBKR ticks for `GET /live/stream` (`quantlab.live.ticks`). Unset → the live endpoints 503 |
 | `QUANTLAB_OFFLINE=1` | Any cache miss raises instead of hitting the network. The test suite runs under this |
 | `QUANTLAB_PLUGIN_PATH` | Extra plugin directories |
 | `OPENFIGI_API_KEY`, `FRED_API_KEY`, `COMPANIES_HOUSE_API_KEY` | Provider keys |

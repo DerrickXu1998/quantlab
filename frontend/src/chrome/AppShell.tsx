@@ -19,6 +19,7 @@ import { ResearchPage } from '../pages/ResearchPage';
 import { GrainOverlay } from '../quantlab/chrome/GrainOverlay';
 import { useWatchlist } from '../quantlab/data/useWatchlist';
 import { FeedProvider, useFeedStatus } from '../quantlab/feed/FeedProvider';
+import { LiveFeedProvider } from '../quantlab/feed/LiveFeedProvider';
 import { TickerTape } from '../quantlab/panels/TickerTape';
 import { ExecutionView } from '../quantlab/views/ExecutionView';
 import { MarketView } from '../quantlab/views/MarketView';
@@ -113,6 +114,7 @@ export function AppShell() {
 
       {/* Above the grain, which is the whole point of the grain. */}
       <div className="relative z-10 flex min-h-0 flex-1 flex-col">
+        <LiveFeedProvider>
         <FeedProvider seeds={seeds}>
           {/* The header is the whole app's width floor, so it is where the
               phone layout is won or lost: at 390px the desktop row measured
@@ -251,6 +253,7 @@ export function AppShell() {
             </div>
           </footer>
         </FeedProvider>
+        </LiveFeedProvider>
       </div>
     </div>
   );

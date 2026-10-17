@@ -329,6 +329,82 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/me/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The caller's settings, with their account and IBKR connection
+         * @description Everything a user configures for themselves, kept with their account rather than in one browser: the theme, the Market tab's default data mode and saved ticker lists, and the IBKR login (username and account type) used for live prices. Defaults fill anything never set. `ibkr_connection` is the caller's live gateway (see GET /live/connection), or null where live data is not set up.
+         */
+        get: operations["getUserSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change some of the caller's settings (JSON merge patch)
+         * @description RFC 7386 merge patch: objects merge, anything else (lists included) replaces, and `null` puts a key back to its default. Unknown keys are refused, as is any password: the IBKR password has its own endpoint and is never stored.
+         */
+        patch: operations["updateUserSettings"];
+        trace?: never;
+    };
+    "/me/settings/ibkr/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Upload the caller's IBKR login and connect their own gateway
+         * @description Remembers the username and account type in the caller's settings and hands the login to a gateway that runs only for them (see POST /live/connection, which this shares its rules with: rate limited, a failed login never retried). The password is never stored -- not in the settings, a log or any response -- so it is uploaded again after a disconnect or IBKR's weekly re-login.
+         */
+        put: operations["putIbkrCredentials"];
+        post?: never;
+        /**
+         * Disconnect the caller's IBKR gateway
+         * @description Stops the caller's gateway, and its login with it. With `forget=true` the remembered IBKR username is cleared too.
+         */
+        delete: operations["deleteIbkrCredentials"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/live/connection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * This user's own IBKR connection for live prices
+         * @description Live prices come from each user's own IBKR login, never a shared one: one account's market data is licensed to that account's holder. This reports the caller's gateway: `none` (never connected, or disconnected), `queued` (all gateway slots are taken; `queue_position` says where), `starting` / `logging_in` (approve the IB Key prompt on your phone if one appears), `connected`, or `failed` (`detail` says why; nothing retries a failed login on its own, so an account is never locked out by repeated attempts).
+         */
+        get: operations["getLiveConnection"];
+        put?: never;
+        /**
+         * Connect the caller's own IBKR account for live prices
+         * @description Starts (or queues) a gateway logged in as the given IBKR user. The password is handed to that gateway and is never stored by quantlab nor returned by any endpoint; after a disconnect, or IBKR's weekly re-authentication, it must be entered again. Use a secondary IBKR user with trading disabled where possible -- the gateway runs with a read-only API either way. Attempts are rate limited per user, since IBKR locks an account after repeated failed logins.
+         */
+        post: operations["connectLive"];
+        /**
+         * Disconnect the caller's IBKR gateway
+         * @description Stops the caller's gateway (or leaves the queue); its login goes with it.
+         */
+        delete: operations["disconnectLive"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/live/{symbol}/session": {
         parameters: {
             query?: never;
@@ -1689,6 +1765,76 @@ export interface components {
              * @enum {string|null}
              */
             market?: "open" | "closed" | null;
+            /** @description Present and true only on frames from scripts/live_fake_publish.py, the development stand-in for the collector. Never set by live-ingest. */
+            fake?: boolean;
+        };
+        LiveConnection: {
+            /** @enum {string} */
+            state: "none" | "queued" | "starting" | "logging_in" | "connected" | "failed";
+            /** @description Why a connection failed, or what it is waiting for. */
+            detail?: string;
+            /** @description 1-based place in the queue while `queued`. */
+            queue_position?: number | null;
+            /** @description The IBKR user this gateway logs in as (never the password). */
+            ib_username?: string | null;
+            /** @enum {string|null} */
+            trading_mode?: "paper" | "live" | null;
+        };
+        LiveConnectRequest: {
+            username: string;
+            /** Format: password */
+            password: string;
+            /**
+             * @default paper
+             * @enum {string}
+             */
+            trading_mode: "paper" | "live";
+        };
+        UserSettings: {
+            appearance: {
+                /**
+                 * @default dark
+                 * @enum {string}
+                 */
+                theme: "dark" | "light";
+            };
+            market: {
+                /**
+                 * @description What the Market tab opens on when a link does not say.
+                 * @default historical
+                 * @enum {string}
+                 */
+                default_data: "historical" | "live";
+                /** @description Ticker lists saved in the Market tab; names are unique. */
+                lists: {
+                    name: string;
+                    symbols: string[];
+                }[];
+            };
+            /** @description The IBKR login offered when connecting. Never the password. */
+            ibkr: {
+                username: string | null;
+                /**
+                 * @default paper
+                 * @enum {string}
+                 */
+                trading_mode: "paper" | "live";
+            };
+        };
+        UserSettingsDocument: {
+            account: {
+                id: string;
+                /** @description Null for the built-in account when sign-in is off. */
+                email: string | null;
+                auth_required: boolean;
+            };
+            settings: components["schemas"]["UserSettings"];
+            /**
+             * Format: date-time
+             * @description When the settings were last saved; null if never.
+             */
+            updated_at: string | null;
+            ibkr_connection: components["schemas"]["LiveConnection"] | null;
         };
     };
     responses: never;
@@ -2367,6 +2513,242 @@ export interface operations {
                 };
             };
             /** @description The live bus is unconfigured or unreachable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getUserSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The settings document */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSettingsDocument"];
+                };
+            };
+        };
+    };
+    updateUserSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/merge-patch+json": Record<string, never>;
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description The settings after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSettingsDocument"];
+                };
+            };
+            /** @description The change would make the settings invalid, or carries a password */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    putIbkrCredentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LiveConnectRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted; `ibkr_connection` shows the gateway's progress */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSettingsDocument"];
+                };
+            };
+            /** @description Missing or malformed fields (the password is never echoed) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Too many connection attempts */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Live data is not set up on this server */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    deleteIbkrCredentials: {
+        parameters: {
+            query?: {
+                forget?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The settings after the disconnect */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSettingsDocument"];
+                };
+            };
+        };
+    };
+    getLiveConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's connection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveConnection"];
+                };
+            };
+            /** @description The live gateway manager is not configured or unreachable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    connectLive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LiveConnectRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted; poll GET /live/connection for progress */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveConnection"];
+                };
+            };
+            /** @description Missing or malformed fields (the password is never echoed) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Too many connection attempts; wait before trying again */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The live gateway manager is not configured or unreachable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    disconnectLive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Disconnected */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveConnection"];
+                };
+            };
+            /** @description The live gateway manager is not configured or unreachable */
             503: {
                 headers: {
                     [name: string]: unknown;

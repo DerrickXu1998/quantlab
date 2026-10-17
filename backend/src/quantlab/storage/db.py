@@ -141,6 +141,17 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions (expires_at);
 
+-- One settings document per user (theme, Market defaults and saved lists,
+-- IBKR username and account type). JSON, validated by quantlab.settings on
+-- the way in and out, like strategies. No foreign key: the single-user mode's
+-- built-in account has no users row. Never holds a password -- an IBKR
+-- password goes to the user's own gateway and is stored nowhere.
+CREATE TABLE IF NOT EXISTS user_settings (
+    user_id    TEXT PRIMARY KEY,
+    settings   TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 -- Saved strategies. The spec is stored as canonical JSON rather than shredded
 -- into columns: it is validated on the way in and on the way out, its shape is
 -- owned by quantlab.strategy, and a schema migration per new execution setting
