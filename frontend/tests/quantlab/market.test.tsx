@@ -2,7 +2,10 @@ import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as apiClient from '../../src/api/client';
-import type { Instrument, PriceBar } from '../../src/api/client';
+import type { Instrument, LiveBar, LiveEvent, PriceBar } from '../../src/api/client';
+import type { LiveStreamHandlers } from '../../src/api/live';
+import { LiveFeed } from '../../src/quantlab/feed/liveFeed';
+import { LiveFeedProvider } from '../../src/quantlab/feed/LiveFeedProvider';
 import { sma } from '../../src/quantlab/data/indicators';
 import {
   cellClasses,
@@ -105,7 +108,7 @@ beforeEach(() => {
 function renderMarket() {
   return render(
     <ThemeProvider>
-      <MarketView instruments={[]} feedError={null} rng={() => 0.5} />
+      <MarketView instruments={[]} feedError={null} />
     </ThemeProvider>,
   );
 }
@@ -348,23 +351,161 @@ describe('Market view', () => {
     });
   });
 
-  it('labels the simulation as not market data, everywhere it shows', async () => {
-    window.location.hash = '#/market?symbols=AAPL.US&data=sim';
-    renderMarket();
+  describe('live mode', () => {
+    function liveBar(ts: string, close: number): LiveBar {
+      return { ts, open: close - 0.5, high: close + 0.5, low: close - 1, close, volume: 1000, kind: 'backfill' };
+    }
 
-    const card = await screen.findByRole('region', { name: /AAPL\.US/ });
-    const chart = await within(card).findByTestId('market-chart');
-    expect(chart).toHaveAttribute('data-mode', 'simulated');
-    expect(within(card).getByTestId('simulated-tag')).toBeInTheDocument();
-    expect(within(card).queryByTestId('provenance-historical')).toBeNull();
-    expect(within(card).getByTestId('fact-source')).toHaveTextContent(/not market data/i);
-    expect(screen.getByTestId('market-provenance')).toHaveAttribute('data-mode', 'simulated');
-    expect(screen.getByTestId('market-provenance')).toHaveTextContent(/no live feed/i);
-    // Bar size belongs to historical data only.
-    expect(screen.getByRole('button', { name: '1W' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Model signals' })).toBeDisabled();
-    // The chart's time axis shows clock time, not dates.
-    expect(createdCharts.at(-1)!.options).toMatchObject({ timeScale: expect.objectContaining({ secondsVisible: true }) });
+    /** A real LiveFeed store over a fake stream and session endpoint. */
+    function fakeFeed() {
+      const streams: { symbols: string[]; handlers: LiveStreamHandlers; closed: boolean }[] = [];
+      const feed = new LiveFeed({
+        debounceMs: 0,
+        open: (symbols, handlers) => {
+          const stream = { symbols, handlers, closed: false };
+          streams.push(stream);
+          return { close: () => (stream.closed = true) };
+        },
+        getSession: async (symbol) => ({
+          symbol,
+          session_date: '2026-10-15',
+          status: 'active',
+          bars: [liveBar('2026-10-15T13:30:00.000Z', 100), liveBar('2026-10-15T13:31:00.000Z', 101)],
+        }),
+      });
+      const send = (...events: LiveEvent[]) =>
+        act(() => {
+          for (const event of events) streams.at(-1)!.handlers.onEvent(event);
+        });
+      return { feed, streams, send };
+    }
+
+    function renderLive(feed: LiveFeed) {
+      return render(
+        <ThemeProvider>
+          <LiveFeedProvider feed={feed}>
+            <MarketView instruments={[]} feedError={null} />
+          </LiveFeedProvider>
+        </ThemeProvider>,
+      );
+    }
+
+    const HEARTBEAT: LiveEvent = {
+      event: 'heartbeat',
+      ts: '2026-10-15T13:32:00.000Z',
+      collector: 'up',
+      market: 'open',
+    };
+
+    it('opens on the session from the open and forms the newest minute from ticks', async () => {
+      window.location.hash = '#/market?symbols=AAPL.US&data=live';
+      const { feed, streams, send } = fakeFeed();
+      renderLive(feed);
+
+      await vi.waitFor(() => expect(streams).toHaveLength(1));
+      expect(streams[0].symbols).toEqual(['AAPL.US']);
+      act(() => streams[0].handlers.onOpen?.());
+      send(HEARTBEAT, {
+        event: 'tick',
+        symbol: 'AAPL.US',
+        ts: '2026-10-15T13:32:10.000Z',
+        last: 102.5,
+        bid: 102.49,
+        ask: 102.51,
+        volume: 5000,
+      });
+
+      const card = await screen.findByRole('region', { name: /AAPL\.US/ });
+      const chart = await within(card).findByTestId('market-chart');
+      expect(chart).toHaveAttribute('data-mode', 'live');
+      await vi.waitFor(() => expect(within(card).getByTestId('provenance-live')).toHaveTextContent('Live · IBKR'));
+      // Real prices: no SIMULATED tag, and the source says whose and how final.
+      expect(within(card).queryByTestId('simulated-tag')).toBeNull();
+      expect(within(card).getByTestId('fact-source')).toHaveTextContent('IBKR · live · provisional');
+      expect(within(card).getByTestId('fact-last')).toHaveTextContent('102.50 (102.49 × 102.51)');
+
+      const candles = createdSeries.find((s) => s.seriesType === 'Candlestick')!;
+      await vi.waitFor(() => expect(candles.setData.mock.calls.at(-1)![0]).toHaveLength(3));
+      const drawn = candles.setData.mock.calls.at(-1)![0];
+      expect(drawn[0]).toMatchObject({ time: Date.parse('2026-10-15T13:30:00Z') / 1000, close: 100 });
+      // The forming 13:32 minute, from the one tick so far.
+      expect(drawn[2]).toMatchObject({ time: Date.parse('2026-10-15T13:32:00Z') / 1000, open: 102.5, close: 102.5 });
+
+      // A second tick in the same minute moves the forming candle, not the count.
+      send({ event: 'tick', symbol: 'AAPL.US', ts: '2026-10-15T13:32:40.000Z', last: 103, volume: 5600 });
+      await vi.waitFor(() =>
+        expect(candles.setData.mock.calls.at(-1)![0][2]).toMatchObject({ high: 103, close: 103 }),
+      );
+      expect(candles.setData.mock.calls.at(-1)![0]).toHaveLength(3);
+
+      // The closed bar replaces the forming one.
+      send({ event: 'bar', symbol: 'AAPL.US', bar: { ...liveBar('2026-10-15T13:32:00.000Z', 102.8), kind: 'rolled' } });
+      await vi.waitFor(() => expect(candles.setData.mock.calls.at(-1)![0][2]).toMatchObject({ close: 102.8 }));
+
+      expect(screen.getByTestId('market-provenance')).toHaveAttribute('data-mode', 'live');
+      expect(screen.getByTestId('market-provenance')).toHaveTextContent(/provisional/i);
+      // Bar size and model signals belong to stored history.
+      expect(screen.getByRole('button', { name: '1W' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Model signals' })).toBeDisabled();
+      // Minutes on the axis, on New York's clock.
+      expect(createdCharts.at(-1)!.options).toMatchObject({
+        timeScale: expect.objectContaining({ timeVisible: true, secondsVisible: false }),
+      });
+    });
+
+    it('says when a symbol could not get a line, instead of inventing prices', async () => {
+      window.location.hash = '#/market?symbols=AAPL.US&data=live';
+      const { feed, streams, send } = fakeFeed();
+      renderLive(feed);
+      await vi.waitFor(() => expect(streams).toHaveLength(1));
+      act(() => streams[0].handlers.onOpen?.());
+      send(HEARTBEAT, { event: 'status', symbol: 'AAPL.US', status: 'over_budget', detail: '' });
+
+      const card = await screen.findByRole('region', { name: /AAPL\.US/ });
+      await vi.waitFor(() => expect(within(card).getByTestId('provenance-live')).toHaveTextContent('Not subscribed'));
+      expect(within(card).getByTestId('provenance-live')).toHaveAttribute('title', expect.stringMatching(/line budget/i));
+    });
+
+    it('reports an offline feed and reconnects on its own', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        window.location.hash = '#/market?symbols=AAPL.US&data=live';
+        const { feed, streams } = fakeFeed();
+        renderLive(feed);
+        await vi.waitFor(() => expect(streams).toHaveLength(1));
+        act(() => streams[0].handlers.onEnd(503, 'live bus unreachable: broker down'));
+
+        const card = await screen.findByRole('region', { name: /AAPL\.US/ });
+        await vi.waitFor(() => expect(within(card).getByTestId('provenance-live')).toHaveTextContent('Feed offline'));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1100);
+        });
+        expect(streams).toHaveLength(2);
+        expect(streams[1].symbols).toEqual(['AAPL.US']);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('marks frames from the development fake publisher as simulated', async () => {
+      window.location.hash = '#/market?symbols=AAPL.US&data=live';
+      const { feed, streams, send } = fakeFeed();
+      renderLive(feed);
+      await vi.waitFor(() => expect(streams).toHaveLength(1));
+      act(() => streams[0].handlers.onOpen?.());
+      send({ ...HEARTBEAT, fake: true });
+
+      const card = await screen.findByRole('region', { name: /AAPL\.US/ });
+      await vi.waitFor(() => expect(within(card).getByTestId('simulated-tag')).toBeInTheDocument());
+      expect(within(card).getByTestId('fact-source')).toHaveTextContent(/FAKE feed/);
+    });
+
+    it('opens an old simulated-intraday link in live mode', async () => {
+      window.location.hash = '#/market?symbols=AAPL.US&data=sim';
+      const { feed } = fakeFeed();
+      renderLive(feed);
+      expect(await screen.findByTestId('market-provenance')).toHaveAttribute('data-mode', 'live');
+    });
   });
 
   it('saves a custom universe and filters the list to it', async () => {

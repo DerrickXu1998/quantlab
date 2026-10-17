@@ -27,11 +27,56 @@ import {
 export const MAX_TICKERS = 4;
 
 /**
- * Where the numbers come from. The API serves end-of-day bars and has no
- * streaming endpoint, so there is no "live" mode: the alternative to stored
- * history is a simulation, and it is named as one everywhere it appears.
+ * Where the numbers come from. `historical`: stored end-of-day bars, the
+ * record. `live`: today's IBKR prices from the live feed -- 1-minute candles
+ * from the open, the newest one forming tick by tick. Live prices are
+ * provisional and display-only; Tiingo's end-of-day load replaces them.
  */
-export type DataMode = 'historical' | 'simulated';
+export type DataMode = 'historical' | 'live';
+
+/** One live candle. `time` is the minute's start, unix seconds. */
+export interface Candle {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  /** The minute has not closed: built from ticks so far. */
+  forming?: boolean;
+}
+
+/** Closed minutes plus the forming one, oldest first, one per minute. */
+export function liveCandles(
+  bars: { ts: string; open: number; high: number; low: number; close: number; volume: number }[],
+  forming: { start: number; open: number; high: number; low: number; close: number; volume: number } | null,
+): Candle[] {
+  const out: Candle[] = bars.map((bar) => ({
+    time: Math.floor(Date.parse(bar.ts) / 1000),
+    open: bar.open,
+    high: bar.high,
+    low: bar.low,
+    close: bar.close,
+    volume: bar.volume,
+  }));
+  const last = out[out.length - 1];
+  if (forming && (!last || forming.start > last.time)) {
+    out.push({ time: forming.start, open: forming.open, high: forming.high, low: forming.low, close: forming.close, volume: forming.volume, forming: true });
+  }
+  return out;
+}
+
+const NY_CLOCK = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+/** `09:31` -- the exchange's own clock, where 09:30 means the open. */
+export function nyClock(seconds: number): string {
+  return NY_CLOCK.format(new Date(seconds * 1000));
+}
 
 export type Interval = '1D' | '1W' | '1M';
 
@@ -59,7 +104,7 @@ export interface StudyDef {
   detail: string;
   /** Price pane overlays share the candles' scale; the rest get their own pane. */
   pane: 'price' | 'rsi' | 'macd' | 'markers';
-  /** Only historical bars carry what the study needs. */
+  /** Only stored history carries what the study needs (model signals). */
   historicalOnly?: boolean;
 }
 
@@ -78,7 +123,6 @@ export const STUDIES: StudyDef[] = [
     label: 'VWAP',
     detail: 'Volume-weighted average price, anchored at the start of the visible window',
     pane: 'price',
-    historicalOnly: true,
   },
   { id: 'rsi', label: `RSI ${RSI_PERIOD}`, detail: `Relative strength index, ${RSI_PERIOD} periods, own pane`, pane: 'rsi' },
   {

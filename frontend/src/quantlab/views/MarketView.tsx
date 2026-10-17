@@ -1,4 +1,4 @@
-import { ChartLine, History, LineChart, ServerCrash, Shuffle } from 'lucide-react';
+import { ChartLine, History, LineChart, Radio, ServerCrash } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import type { Instrument } from '../../api/client';
 import { replaceRoute, useRoute } from '../../chrome/router';
@@ -35,7 +35,10 @@ const labelClass = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted
 function useMarketSettings() {
   const route = useRoute();
   const params = route.params;
-  const mode: DataMode = params.get('data') === 'sim' ? 'simulated' : 'historical';
+  // `sim` is the old simulated-intraday mode, which live data replaced: an old
+  // link opens on the real thing rather than on history.
+  const data = params.get('data');
+  const mode: DataMode = data === 'live' || data === 'sim' ? 'live' : 'historical';
   const interval = (INTERVALS.find((i) => i.id === params.get('bar'))?.id ?? '1D') as Interval;
   const range = (RANGES.find((r) => r === params.get('range')) ?? '1Y') as RangeId;
   const rawStudies = params.get('studies');
@@ -64,7 +67,7 @@ function useMarketSettings() {
     interval,
     range,
     studies,
-    setMode: (value: DataMode) => update('data', value === 'simulated' ? 'sim' : null),
+    setMode: (value: DataMode) => update('data', value === 'live' ? 'live' : null),
     setInterval: (value: Interval) => update('bar', value === '1D' ? null : value),
     setRange: (value: RangeId) => update('range', value === '1Y' ? null : value),
     toggleStudy: (id: StudyId) => {
@@ -117,12 +120,10 @@ function Segment<T extends string>({
 export function MarketView({
   instruments: fallback,
   feedError,
-  rng,
 }: {
   /** The shell's watchlist, used only if the full catalogue cannot be read. */
   instruments: Instrument[];
   feedError: string | null;
-  rng?: () => number;
 }) {
   const catalog = useInstrumentCatalog(fallback);
   const { selected, set, toggle, remove } = useChartSelection();
@@ -190,7 +191,7 @@ export function MarketView({
             onChange={settings.setMode}
             options={[
               { id: 'historical', label: 'Historical', title: 'Stored end-of-day bars from the warehouse' },
-              { id: 'simulated', label: 'Simulated intraday', title: 'A random walk from the last close — not market data' },
+              { id: 'live', label: 'Live intraday', title: "Today's IBKR prices, about one tick a second — provisional; Tiingo's end-of-day bars are the record" },
             ]}
           />
           <Segment<Interval>
@@ -198,7 +199,7 @@ export function MarketView({
             value={settings.interval}
             onChange={settings.setInterval}
             disabled={!historical}
-            disabledTitle="The simulation ticks once a second; bar size applies to historical data"
+            disabledTitle="Live charts draw 1-minute candles; bar size applies to historical data"
             options={INTERVALS.map((i) => ({ id: i.id, label: i.label, title: i.detail }))}
           />
           <Segment<RangeId>
@@ -206,7 +207,7 @@ export function MarketView({
             value={settings.range}
             onChange={settings.setRange}
             disabled={!historical}
-            disabledTitle="The simulation shows its last five minutes"
+            disabledTitle="Live charts show today's session from the open"
             options={RANGES.map((r) => ({ id: r, label: r, title: `Window ending at the latest stored bar: ${r}` }))}
           />
           <div className="flex flex-wrap items-center gap-2">
@@ -242,17 +243,17 @@ export function MarketView({
           role="note"
           className={cn(
             'flex shrink-0 items-center gap-2 border-b border-border px-4 py-1.5 font-mono text-[11px] uppercase tracking-[0.12em]',
-            historical ? 'text-primary' : 'bg-destructive/5 text-destructive',
+            historical ? 'text-primary' : 'text-foreground',
           )}
         >
           {historical ? (
             <History size={16} strokeWidth={1.5} aria-hidden="true" />
           ) : (
-            <Shuffle size={16} strokeWidth={1.5} aria-hidden="true" />
+            <Radio size={16} strokeWidth={1.5} aria-hidden="true" />
           )}
           {historical
             ? `Historical · end-of-day bars ingested from market data providers · each bar = ${INTERVALS.find((i) => i.id === settings.interval)?.detail.toLowerCase()} · not real-time`
-            : 'Simulated · random walk seeded at the last stored close · 1 s ticks · not market data — QuantLab has no live feed'}
+            : "Live · today's IBKR prices · 1-minute candles from the open, the newest forming tick by tick · provisional — Tiingo's end-of-day bars are the record"}
         </div>
 
         {selected.length === 0 ? (
@@ -286,7 +287,6 @@ export function MarketView({
                   range={settings.range}
                   active={settings.studies}
                   onRemove={() => remove(symbol)}
-                  rng={rng}
                 />
               </div>
             ))}
