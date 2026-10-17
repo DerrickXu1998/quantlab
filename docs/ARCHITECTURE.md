@@ -177,7 +177,8 @@ The demo path is guarded by test: `backend/tests/unit/test_demo_fallback.py` mak
 `GET /health` · `GET /instruments` · `GET /instruments/{symbol}/prices` · `GET /signals` ·
 `GET /models` · `POST /runs` · `GET /runs` · `GET /runs/{id}` · `PATCH /runs/{id}` ·
 `DELETE /runs/{id}` · `GET /runs/{id}/performance` · `GET /runs/{id}/replay/stream` ·
-`GET /runs/{id}/replay/summary` · `GET /replay/live/stream`
+`GET /runs/{id}/replay/summary` · `GET /replay/live/stream` · `GET /live/stream` · `GET /live/{symbol}/session` ·
+`GET|POST|DELETE /live/connection` · `GET|PATCH /me/settings` · `PUT|DELETE /me/settings/ibkr/credentials`
 
 The contract is authored once at
 `quantlab_specs/specs/006-warehouse-experiments/contracts/openapi.yaml`. `backend/contracts/`

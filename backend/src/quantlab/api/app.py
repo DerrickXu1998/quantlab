@@ -22,7 +22,7 @@ from quantlab import auth
 from quantlab.api import routes
 from quantlab.logging import get_logger
 from quantlab.research import jobs
-from quantlab.storage import backends, custom_rules, experiments, strategies
+from quantlab.storage import backends, custom_rules, experiments, strategies, user_settings
 
 DEFAULT_DB_PATH = "/data/quantlab.db"
 
@@ -123,6 +123,8 @@ def create_app(db_path: str | Path | None = None, backend=None) -> FastAPI:
     # than the bar store: they are small, mutable, and want foreign keys.
     app.state.auth = auth.AuthService(auth.select_user_store(app.state.db_path))
     app.state.strategies = strategies.select_strategy_store(app.state.db_path)
+    # Per-user settings, beside the accounts (theme, Market defaults, IBKR login).
+    app.state.user_settings = user_settings.select_user_settings_store(app.state.db_path)
     # Template-based custom rules (feature 008): the same seam as experiments.
     app.state.custom_rules = custom_rules.select_custom_rule_store(app.state.db_path, wh=wh)
     app.include_router(routes.router, prefix="/api/v1")

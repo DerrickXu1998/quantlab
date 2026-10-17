@@ -821,6 +821,126 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /me/settings:
+    get:
+      tags: [auth]
+      operationId: getUserSettings
+      summary: The caller's settings, with their account and IBKR connection
+      security: [{ bearerAuth: [] }]
+      description: >
+        Everything a user configures for themselves, kept with their account
+        rather than in one browser: the theme, the Market tab's default data
+        mode and saved ticker lists, and the IBKR login (username and account
+        type) used for live prices. Defaults fill anything never set.
+        `ibkr_connection` is the caller's live gateway (see GET
+        /live/connection), or null where live data is not set up.
+      responses:
+        "200":
+          description: The settings document
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserSettingsDocument"
+    patch:
+      tags: [auth]
+      operationId: updateUserSettings
+      summary: Change some of the caller's settings (JSON merge patch)
+      security: [{ bearerAuth: [] }]
+      description: >
+        RFC 7386 merge patch: objects merge, anything else (lists included)
+        replaces, and `null` puts a key back to its default. Unknown keys are
+        refused, as is any password: the IBKR password has its own endpoint
+        and is never stored.
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema:
+              type: object
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: The settings after the change
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserSettingsDocument"
+        "422":
+          description: The change would make the settings invalid, or carries a password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /me/settings/ibkr/credentials:
+    put:
+      tags: [auth]
+      operationId: putIbkrCredentials
+      summary: Upload the caller's IBKR login and connect their own gateway
+      security: [{ bearerAuth: [] }]
+      description: >
+        Remembers the username and account type in the caller's settings and
+        hands the login to a gateway that runs only for them (see POST
+        /live/connection, which this shares its rules with: rate limited, a
+        failed login never retried). The password is never stored -- not in
+        the settings, a log or any response -- so it is uploaded again after
+        a disconnect or IBKR's weekly re-login.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LiveConnectRequest"
+      responses:
+        "202":
+          description: Accepted; `ibkr_connection` shows the gateway's progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserSettingsDocument"
+        "422":
+          description: Missing or malformed fields (the password is never echoed)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: Too many connection attempts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Live data is not set up on this server
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [auth]
+      operationId: deleteIbkrCredentials
+      summary: Disconnect the caller's IBKR gateway
+      security: [{ bearerAuth: [] }]
+      description: >
+        Stops the caller's gateway, and its login with it. With
+        `forget=true` the remembered IBKR username is cleared too.
+      parameters:
+        - name: forget
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: The settings after the disconnect
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserSettingsDocument"
+
   /live/connection:
     get:
       tags: [live]
@@ -3725,3 +3845,85 @@ components:
           type: string
           enum: [paper, live]
           default: paper
+
+    UserSettings:
+      type: object
+      additionalProperties: false
+      required: [appearance, market, ibkr]
+      properties:
+        appearance:
+          type: object
+          additionalProperties: false
+          required: [theme]
+          properties:
+            theme:
+              type: string
+              enum: [dark, light]
+              default: dark
+        market:
+          type: object
+          additionalProperties: false
+          required: [default_data, lists]
+          properties:
+            default_data:
+              type: string
+              enum: [historical, live]
+              default: historical
+              description: What the Market tab opens on when a link does not say.
+            lists:
+              type: array
+              maxItems: 50
+              description: Ticker lists saved in the Market tab; names are unique.
+              items:
+                type: object
+                additionalProperties: false
+                required: [name, symbols]
+                properties:
+                  name:
+                    type: string
+                    minLength: 1
+                    maxLength: 60
+                  symbols:
+                    type: array
+                    maxItems: 200
+                    items:
+                      type: string
+        ibkr:
+          type: object
+          additionalProperties: false
+          required: [username, trading_mode]
+          description: The IBKR login offered when connecting. Never the password.
+          properties:
+            username:
+              type: [string, "null"]
+              maxLength: 64
+            trading_mode:
+              type: string
+              enum: [paper, live]
+              default: paper
+
+    UserSettingsDocument:
+      type: object
+      required: [account, settings, updated_at, ibkr_connection]
+      properties:
+        account:
+          type: object
+          required: [id, email, auth_required]
+          properties:
+            id:
+              type: string
+            email:
+              type: [string, "null"]
+              description: Null for the built-in account when sign-in is off.
+            auth_required:
+              type: boolean
+        settings:
+          $ref: "#/components/schemas/UserSettings"
+        updated_at:
+          type: [string, "null"]
+          format: date-time
+          description: When the settings were last saved; null if never.
+        ibkr_connection:
+          oneOf:
+            - $ref: "#/components/schemas/LiveConnection"
+            - type: "null"

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   getPrices,
   listInstruments,
@@ -8,6 +8,7 @@ import {
 } from '../../api/client';
 import type { ChartSignal } from '../../components/CandlestickChart';
 import { replaceRoute, useRoute } from '../../chrome/router';
+import { useSettings } from '../../settings/SettingsProvider';
 import { useLiveSymbol, useNow } from '../feed/LiveFeedProvider';
 import { liveCardState, type FeedView, type LiveCardState, type Quote, type SymbolView } from '../feed/liveFeed';
 import { liveCandles, MAX_TICKERS, type Candle } from './marketModel';
@@ -217,26 +218,61 @@ function readUniverses(): CustomUniverse[] {
   }
 }
 
+function clearLocalUniverses(): void {
+  try {
+    window.localStorage.removeItem(UNIVERSE_KEY);
+  } catch {
+    // Nothing to clear, or storage is off.
+  }
+}
+
 /**
- * Watchlists the user builds for this page. Kept in the browser: the API can
- * publish a universe but does not serve its members back, so a saved list
- * could not be reopened from the server.
+ * Watchlists the user builds for this page, kept with their account
+ * (settings.market.lists) so they follow the user to any browser.
+ *
+ * Lists saved before that lived in this browser's localStorage; the first
+ * time an account with no lists of its own opens the Market tab here, they
+ * are moved up to the account and cleared locally. Outside a settings
+ * provider (a page rendered on its own) the browser copy still works.
  */
 export function useCustomUniverses(): {
   universes: CustomUniverse[];
   save: (universe: CustomUniverse) => void;
   remove: (name: string) => void;
 } {
-  const [universes, setUniverses] = useState<CustomUniverse[]>(readUniverses);
+  const settings = useSettings();
+  const [local, setLocal] = useState<CustomUniverse[]>(readUniverses);
+  const ready = settings?.load.status === 'ready' ? settings.load.document : null;
+  const server = ready?.settings.market.lists ?? null;
+  const migrated = useRef(false);
 
-  const persist = useCallback((next: CustomUniverse[]) => {
-    setUniverses(next);
-    try {
-      window.localStorage.setItem(UNIVERSE_KEY, JSON.stringify(next));
-    } catch {
-      // Private mode or a full quota: the list still works for this session.
+  useEffect(() => {
+    if (!settings || server === null || migrated.current) return;
+    migrated.current = true;
+    if (server.length === 0 && local.length > 0) {
+      void settings.update({ market: { lists: local } }).then((error) => {
+        if (error === null) clearLocalUniverses();
+      });
     }
-  }, []);
+  }, [settings, server, local]);
+
+  const universes = server ?? local;
+
+  const persist = useCallback(
+    (next: CustomUniverse[]) => {
+      if (settings && server !== null) {
+        void settings.update({ market: { lists: next } });
+        return;
+      }
+      setLocal(next);
+      try {
+        window.localStorage.setItem(UNIVERSE_KEY, JSON.stringify(next));
+      } catch {
+        // Private mode or a full quota: the list still works for this session.
+      }
+    },
+    [settings, server],
+  );
 
   const save = useCallback(
     (universe: CustomUniverse) =>

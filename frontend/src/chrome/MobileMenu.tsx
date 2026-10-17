@@ -1,9 +1,11 @@
-import { LogOut, Menu, Moon, Sun, UserRound, X, type LucideIcon } from 'lucide-react';
+import { LogOut, Menu, Moon, Settings, Sun, UserRound, X, type LucideIcon } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useDataset } from '../api/DatasetProvider';
 import { useOptionalAuth } from '../auth/AuthProvider';
 import { Button } from '../components/ui/button';
 import { StatusBadge } from '../components/ui/status-badge';
 import { cn } from '../lib/utils';
+import { SettingsDialog } from '../settings/SettingsDialog';
 import { useTheme } from '../theme/ThemeProvider';
 import type { Destination } from './router';
 
@@ -187,35 +189,56 @@ function ThemeRow() {
   );
 }
 
-/** Mirrors UserMenu: shows nothing when there's no session to sign out of. */
+/**
+ * Mirrors UserMenu: the account, its settings, and -- only when there is a
+ * session -- the way out. With sign-in off it is the local account's row.
+ */
 function AccountRow({ onSignedOut }: { onSignedOut: () => void }) {
   const auth = useOptionalAuth();
+  const dataset = useDataset();
   const [busy, setBusy] = useState(false);
-  if (!auth || auth.status !== 'authenticated' || !auth.user) return null;
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const signedIn = auth?.status === 'authenticated' && auth.user ? auth.user : null;
+  const signInOff = dataset.status === 'ready' && dataset.health.auth_required === false;
+  if (!signedIn && !signInOff) return null;
 
   return (
     <div className="flex flex-col gap-2 border-t border-border pt-2" data-testid="mobile-account">
       <Row>
         <span className="flex min-w-0 items-center gap-3 text-xs text-muted-foreground">
           <UserRound size={20} strokeWidth={1.5} aria-hidden="true" className="shrink-0" />
-          <span className="truncate font-mono text-foreground">{auth.user.email}</span>
+          <span className="truncate font-mono text-foreground">
+            {signedIn ? signedIn.email : 'Local account'}
+          </span>
         </span>
       </Row>
       <Button
         type="button"
-        variant="outline"
-        className={cn('w-full', TOUCH)}
-        disabled={busy}
-        onClick={async () => {
-          setBusy(true);
-          await auth.logout();
-          setBusy(false);
-          onSignedOut();
-        }}
+        variant="ghost"
+        className={cn('w-full justify-start gap-3 px-3', TOUCH)}
+        onClick={() => setSettingsOpen(true)}
       >
-        <LogOut size={16} strokeWidth={1.5} aria-hidden="true" />
-        {busy ? 'Signing out…' : 'Sign out'}
+        <Settings size={20} strokeWidth={1.5} aria-hidden="true" />
+        Settings
       </Button>
+      {settingsOpen ? <SettingsDialog onClose={() => setSettingsOpen(false)} /> : null}
+      {signedIn && auth ? (
+        <Button
+          type="button"
+          variant="outline"
+          className={cn('w-full', TOUCH)}
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            await auth.logout();
+            setBusy(false);
+            onSignedOut();
+          }}
+        >
+          <LogOut size={16} strokeWidth={1.5} aria-hidden="true" />
+          {busy ? 'Signing out…' : 'Sign out'}
+        </Button>
+      ) : null}
     </div>
   );
 }
