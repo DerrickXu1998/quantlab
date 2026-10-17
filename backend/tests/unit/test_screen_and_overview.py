@@ -120,7 +120,7 @@ class _Catalog:
             # guarantee has to hold in the resolution, not in this fake.
             wanted_ids, concepts = set(params[0]), set(params[1])
             return [
-                row for row in FUNDAMENTALS
+                (*row, "sec_edgar") for row in FUNDAMENTALS
                 if row[0] in wanted_ids and row[1] in concepts
             ]
         raise AssertionError(f"unexpected catalog query: {sql}")
