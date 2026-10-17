@@ -181,6 +181,9 @@ services:
       # Live IBKR prices (roadmap 4a), published by live-ingest or, in
       # development, scripts/live_fake_publish.py. Same 503-not-crash rule.
       QUANTLAB_LIVE_TICKS_TOPIC: quantlab.live.ticks
+      # Each user's own IBKR connection goes through the live manager.
+      QUANTLAB_LIVE_MANAGER_URL: http://live-manager:8790
+      QUANTLAB_LIVE_MANAGER_TOKEN: ${QUANTLAB_LIVE_MANAGER_TOKEN:-}
       # Login is on unless the host says otherwise; `AUTH_BYPASS=1 make dev`
       # sets this to false for local UI work.
       QUANTLAB_AUTH_REQUIRED: ${QUANTLAB_AUTH_REQUIRED:-true}
@@ -209,43 +212,41 @@ services:
       start_period: 10s
 
   # ---------------------------------------------------------------------------
-  # Live market data (roadmap 4a). `make live-up` (profile `live`). IB Gateway
-  # holds the IBKR login; IBC inside the image handles the daily restart and
-  # re-login. READ_ONLY_API: nothing in quantlab can place an order through it.
-  # Paper first: pacing, line limits and reconnects are where this breaks, and
-  # finding that out should be free. A paper account sees real-time prices
-  # only if "share market data with paper account" is on in Client Portal.
+  # Live market data (roadmap 4a). `make live-up` (profile `live`).
+  #
+  # No shared IBKR login: one account's market data is licensed to that
+  # account's holder, so each user connects their own account from the Market
+  # tab. The manager starts one IB Gateway container per connected user
+  # (logged in as them, READ_ONLY_API: no orders can go through it), runs a
+  # collector for each, queues users beyond QUANTLAB_LIVE_MAX_GATEWAYS (each
+  # gateway is a ~1 GB JVM) and stops idle ones. Passwords are passed to the
+  # user's gateway only -- quantlab stores none.
+  #
+  # The manager holds the Docker socket (so it can start those containers) and
+  # is therefore the most privileged service here: nothing is published, the
+  # backend reaches it with QUANTLAB_LIVE_MANAGER_TOKEN, and the gateways sit
+  # on their own network that reaches the manager but no database.
   # ---------------------------------------------------------------------------
-  ib-gateway:
-    image: ghcr.io/gnzsnz/ib-gateway:10.37@sha256:b248e4dad68cc1de8dd1905ea8598089e92307dfec57f59e08a28182bbb002d5
-    profiles: ["live"]
-    environment:
-      TWS_USERID: ${IBKR_USERNAME:-}
-      TWS_PASSWORD: ${IBKR_PASSWORD:-}
-      TRADING_MODE: ${IBKR_TRADING_MODE:-paper}
-      READ_ONLY_API: "yes"
-      TWOFA_TIMEOUT_ACTION: restart
-      RELOGIN_AFTER_TWOFA_TIMEOUT: "yes"
-      AUTO_RESTART_TIME: "11:59 PM"
-      TIME_ZONE: America/New_York
-    # No ports: only live-ingest talks to it, on the compose network (4004 is
-    # the image's relay to the paper API).
-    volumes:
-      - quantlab-ibgateway:/home/ibgateway/Jts
-    restart: unless-stopped
-
-  live-ingest:
+  live-manager:
     build: ./live-ingest
     profiles: ["live"]
+    # Root inside the container to use the mounted Docker socket.
+    user: "0"
     environment:
       QUANTLAB_DB_URL: ${QUANTLAB_DB_URL:-postgresql://quantlab:quantlab@postgres:5432/quantlab}
       QUANTLAB_CH_URL: ${QUANTLAB_CH_URL:-clickhouse://quantlab:quantlab@clickhouse:8123/quantlab}
       QUANTLAB_CH_PASSWORD: ${QUANTLAB_CH_PASSWORD:-}
       QUANTLAB_KAFKA_BROKERS: redpanda:9092
       QUANTLAB_LIVE_TICKS_TOPIC: quantlab.live.ticks
-      IBKR_HOST: ib-gateway
-      IBKR_PORT: ${IBKR_PORT:-4004}
+      QUANTLAB_LIVE_MANAGER_TOKEN: ${QUANTLAB_LIVE_MANAGER_TOKEN:-}
+      QUANTLAB_LIVE_NETWORK: quantlab-live
+      QUANTLAB_LIVE_MAX_GATEWAYS: ${QUANTLAB_LIVE_MAX_GATEWAYS:-2}
       QUANTLAB_LIVE_MAX_LINES: ${QUANTLAB_LIVE_MAX_LINES:-90}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - default
+      - live
     depends_on:
       postgres:
         condition: service_healthy
@@ -255,8 +256,6 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
-      ib-gateway:
-        condition: service_started
     restart: unless-stopped
 
   frontend:
@@ -272,4 +271,9 @@ volumes:
   quantlab-pgdata:   # Postgres catalog
   quantlab-data:     # synthetic demo SQLite
   quantlab-kafka:    # redpanda log segments (streaming profile)
-  quantlab-ibgateway: # IB Gateway settings (live profile)
+
+networks:
+  # Per-user IB Gateways join this, and only this: the manager's collectors
+  # reach them, and they reach nothing else in the stack.
+  live:
+    name: quantlab-live

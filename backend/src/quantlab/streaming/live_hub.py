@@ -20,6 +20,13 @@ of every tick. A tab that falls behind skips stale prices instead of building
 an ever-later backlog, and cannot slow the hub or anyone else down. Bars and
 ``backfilled`` are rare and all kept (up to a bound).
 
+Ownership: live prices come from each user's own IBKR login, and one
+account's market data is licensed to that account's holder alone. Every
+message the collectors publish carries the ``user`` it belongs to; a
+subscription only ever receives its own user's frames, and each user's
+collector heartbeat is tracked on its own. A message without a user reaches
+nobody.
+
 Failure: the consumer reconnects with backoff, forever -- a broker restart is
 a pause, not an outage. The collector being down is not this module's error
 either; it shows as a stale heartbeat, which ``collector_state`` reports.
@@ -77,7 +84,10 @@ def message_key(message: dict) -> tuple:
 class Subscription:
     """One stream's view of the hub. Owned by the loop that created it."""
 
-    def __init__(self, symbols: Collection[str], loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(
+        self, owner: str, symbols: Collection[str], loop: asyncio.AbstractEventLoop
+    ) -> None:
+        self.owner = owner
         self.symbols = frozenset(symbols)
         self._loop = loop
         self._pending: dict[tuple, dict] = {}
@@ -136,8 +146,8 @@ class LiveHub:
         self._thread: threading.Thread | None = None
         self.bus_ok = False
         self.bus_error = ""
-        self._heartbeat_at: float | None = None
-        self._heartbeat: dict = {}
+        #: user -> (when, the collector's last heartbeat for that user)
+        self._heartbeats: dict[str, tuple[float, dict]] = {}
 
     # --- lifecycle --------------------------------------------------------
 
@@ -156,8 +166,8 @@ class LiveHub:
 
     # --- subscribers ------------------------------------------------------
 
-    def subscribe(self, symbols: Collection[str]) -> Subscription:
-        subscription = Subscription(symbols, asyncio.get_running_loop())
+    def subscribe(self, owner: str, symbols: Collection[str]) -> Subscription:
+        subscription = Subscription(owner, symbols, asyncio.get_running_loop())
         with self._lock:
             self._subscriptions.add(subscription)
         return subscription
@@ -168,19 +178,21 @@ class LiveHub:
 
     # --- state ------------------------------------------------------------
 
-    def collector_state(self) -> tuple[str, str | None]:
-        """(``up`` | ``down``, ``open`` | ``closed`` | None).
+    def collector_state(self, owner: str) -> tuple[str, str | None]:
+        """(``up`` | ``down``, ``open`` | ``closed`` | None) for one user's
+        collector.
 
-        Up means a collector heartbeat arrived within COLLECTOR_STALE_SECONDS
-        and the collector says it is connected to IBKR: a collector that is
-        running but logged out delivers no prices either.
+        Up means that user's collector heartbeat arrived within
+        COLLECTOR_STALE_SECONDS and says it is connected to IBKR: a collector
+        that is running but logged out delivers no prices either.
         """
-        at = self._heartbeat_at
-        if at is None or self._clock() - at > COLLECTOR_STALE_SECONDS:
+        last = self._heartbeats.get(owner)
+        if last is None or self._clock() - last[0] > COLLECTOR_STALE_SECONDS:
             return "down", None
-        if not self._heartbeat.get("connected", False):
+        heartbeat = last[1]
+        if not heartbeat.get("connected", False):
             return "down", None
-        market = self._heartbeat.get("market")
+        market = heartbeat.get("market")
         return "up", market if market in ("open", "closed") else None
 
     # --- dispatch ---------------------------------------------------------
@@ -189,16 +201,20 @@ class LiveHub:
         """Route one topic message. Called on the consumer thread."""
         if not isinstance(message, dict):
             return
+        owner = message.get("user")
+        if not isinstance(owner, str) or not owner:
+            return  # unowned: nobody's licence covers it
         event = message.get("event")
         if event == "heartbeat":
-            self._heartbeat = message
-            self._heartbeat_at = self._clock()
+            self._heartbeats[owner] = (self._clock(), message)
             return
         if event not in SYMBOL_EVENTS:
             return
         symbol = message.get("symbol")
         with self._lock:
-            targets = [s for s in self._subscriptions if symbol in s.symbols]
+            targets = [
+                s for s in self._subscriptions if s.owner == owner and symbol in s.symbols
+            ]
         for subscription in targets:
             subscription.offer_threadsafe(message)
 

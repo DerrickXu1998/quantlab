@@ -35,7 +35,7 @@ from quantlab.storage import live as live_store
 from quantlab.strategy import StrategySpec, StrategyValidationError, templates
 from quantlab.streaming import bus as streaming_bus
 from quantlab.streaming import live as streaming_live
-from quantlab.streaming import live_hub
+from quantlab.streaming import live_hub, live_manager
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -1406,7 +1406,9 @@ async def stream_live(
     except Exception:
         slots.release(user.id)
         raise
-    subscription = hub.subscribe(symbol_list)
+    # The caller's own frames only: each user's prices come from their own
+    # IBKR login, licensed to them alone.
+    subscription = hub.subscribe(user.id, symbol_list)
 
     async def frames():
         loop = asyncio.get_running_loop()
@@ -1443,7 +1445,7 @@ async def stream_live(
                                 {"event": "status", "symbol": symbol,
                                  "status": line.status, "detail": line.detail}
                             )
-                    collector, market = hub.collector_state()
+                    collector, market = hub.collector_state(user.id)
                     yield _sse(
                         {"event": "heartbeat", "ts": _utc_now_iso(),
                          "collector": collector, "market": market}
@@ -1474,9 +1476,85 @@ def get_live_session(
     if symbol not in ids:
         raise HTTPException(status_code=404, detail=f"unknown symbol: {symbol}")
     instrument_id = ids[symbol]
-    session_date, bars = live_store.session_bars(wh, instrument_id)
+    session_date, bars = live_store.session_bars(wh, user.id, instrument_id)
     line = live_store.line_statuses(wh, user.id, [instrument_id])[instrument_id]
     return {"symbol": symbol, "session_date": session_date, "status": line.status, "bars": bars}
+
+
+# --- Live connections: each user's own IBKR login ----------------------------
+#
+# No shared login: one account's market data is licensed to that account's
+# holder. A user connects their own IBKR account; the gateway manager runs a
+# gateway logged in as them. The password goes to the manager and on to that
+# gateway -- quantlab stores it nowhere, and no response carries it.
+
+#: Connection attempts one user may make per window. IBKR locks an account
+#: after repeated failed logins; this keeps quantlab from being the cause.
+_LIVE_CONNECT_ATTEMPTS = 3
+_LIVE_CONNECT_WINDOW_SECONDS = 600.0
+_LIVE_CONNECT_LOCK = threading.Lock()
+
+
+def _connect_attempts(request: Request) -> dict[str, list[float]]:
+    attempts = getattr(request.app.state, "_live_connect_attempts", None)
+    if attempts is None:
+        attempts = request.app.state._live_connect_attempts = {}
+    return attempts
+
+
+def _note_connect_attempt(request: Request, user_id: str) -> None:
+    now = time.monotonic()
+    with _LIVE_CONNECT_LOCK:
+        attempts = _connect_attempts(request)
+        recent = [t for t in attempts.get(user_id, []) if now - t < _LIVE_CONNECT_WINDOW_SECONDS]
+        if len(recent) >= _LIVE_CONNECT_ATTEMPTS:
+            wait = int(_LIVE_CONNECT_WINDOW_SECONDS - (now - recent[0])) + 1
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"{_LIVE_CONNECT_ATTEMPTS} connection attempts in "
+                    f"{int(_LIVE_CONNECT_WINDOW_SECONDS // 60)} minutes; wait before trying "
+                    "again (IBKR locks accounts after repeated failed logins)"
+                ),
+                headers={"Retry-After": str(wait)},
+            )
+        recent.append(now)
+        attempts[user_id] = recent
+
+
+def _manager_call(fn, *args) -> dict:
+    try:
+        return fn(*args)
+    except live_manager.ManagerUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+
+@router.get("/live/connection", tags=["live"], operation_id="getLiveConnection")
+def get_live_connection(user: CurrentUser) -> dict:
+    return _manager_call(live_manager.status, user.id)
+
+
+@router.post(
+    "/live/connection", tags=["live"], operation_id="connectLive", status_code=202
+)
+def connect_live(
+    request: Request, body: schemas.LiveConnectRequest, user: CurrentUser
+) -> dict:
+    if not live_manager.configured():
+        raise HTTPException(status_code=503, detail="live connections are not configured")
+    _note_connect_attempt(request, user.id)
+    return _manager_call(
+        live_manager.connect,
+        user.id,
+        body.username,
+        body.password.get_secret_value(),
+        body.trading_mode,
+    )
+
+
+@router.delete("/live/connection", tags=["live"], operation_id="disconnectLive")
+def disconnect_live(user: CurrentUser) -> dict:
+    return _manager_call(live_manager.disconnect, user.id)
 
 
 def _utc_now_iso() -> str:

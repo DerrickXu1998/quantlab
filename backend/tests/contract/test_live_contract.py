@@ -21,8 +21,9 @@ from fastapi.testclient import TestClient
 from quantlab import seed
 from quantlab.api import routes
 from quantlab.api.app import create_app
+from quantlab.auth import LOCAL_USER
 from quantlab.storage import live as live_store
-from quantlab.streaming import live_hub
+from quantlab.streaming import live_hub, live_manager
 
 
 def _resolve_contract_path() -> Path:
@@ -116,7 +117,8 @@ class FakeWarehouseBackend:
 
 
 class TickingConsumer:
-    """A topic that ticks AAPL and an unwatched symbol on every poll."""
+    """A topic that ticks AAPL and an unwatched symbol on every poll, for the
+    caller -- and AAPL for somebody else, which the caller must never see."""
 
     def __init__(self) -> None:
         self._n = itertools.count()
@@ -124,14 +126,19 @@ class TickingConsumer:
     def poll(self, timeout_ms: int):
         n = next(self._n)
         values = [
-            {"event": "heartbeat", "connected": True, "market": "open"},
-            {"event": "tick", "symbol": "AAPL.US", "ts": f"t{n}", "last": 100.0 + n},
-            {"event": "tick", "symbol": "TSLA.US", "ts": f"t{n}", "last": 1.0},
+            {"event": "heartbeat", "user": ME, "connected": True, "market": "open"},
+            {"event": "tick", "user": ME, "symbol": "AAPL.US", "ts": f"t{n}", "last": 100.0 + n},
+            {"event": "tick", "user": ME, "symbol": "TSLA.US", "ts": f"t{n}", "last": 1.0},
+            {"event": "tick", "user": "someone-else", "symbol": "AAPL.US", "ts": f"t{n}",
+             "last": -1.0},
         ]
         return {("quantlab.live.ticks", 0): [SimpleNamespace(value=v) for v in values]}
 
     def close(self, autocommit: bool = False) -> None:
         pass
+
+
+ME = LOCAL_USER.id
 
 
 @pytest.fixture
@@ -156,7 +163,7 @@ def live_app(tmp_path, live_env, monkeypatch):
     monkeypatch.setattr(
         live_store,
         "session_bars",
-        lambda wh, instrument_id: (
+        lambda wh, owner, instrument_id: (
             "2026-10-15",
             [{"ts": "2026-10-15T13:30:00.000Z", "open": 1, "high": 2, "low": 0.5,
               "close": 1.5, "volume": 10, "kind": "backfill"}],
@@ -186,7 +193,10 @@ def test_a_stream_leases_its_lines_and_forwards_only_its_symbols(live_app):
     allowed = set(SPEC["components"]["schemas"]["LiveEvent"]["properties"]["event"]["enum"])
     assert events <= allowed
 
-    assert all(f["symbol"] == "AAPL.US" for f in frames if f["event"] == "tick")
+    ticks = [f for f in frames if f["event"] == "tick"]
+    assert ticks and all(f["symbol"] == "AAPL.US" for f in ticks)
+    # Another user's AAPL never reaches this stream.
+    assert all(f["last"] >= 100 for f in ticks)
     # Status is sent once per change, not every heartbeat.
     statuses = [f for f in frames if f["event"] == "status"]
     assert statuses == [{"event": "status", "symbol": "AAPL.US", "status": "active", "detail": ""}]
@@ -232,3 +242,105 @@ def test_the_contract_documents_the_live_endpoints():
     assert session["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].endswith(
         "/LiveSession"
     )
+
+
+# --- per-user IBKR connections -------------------------------------------------
+
+CONNECTION_URL = "/api/v1/live/connection"
+SECRET = "hunter2-do-not-echo"
+
+
+@pytest.fixture
+def manager(monkeypatch):
+    """A fake gateway manager, recording what reached it."""
+    monkeypatch.setenv(live_manager.URL_ENV, "http://manager.test")
+    monkeypatch.setenv(live_manager.TOKEN_ENV, "t")
+    calls: list[tuple] = []
+    state = {"state": "none"}
+
+    def status(user_id):
+        calls.append(("status", user_id))
+        return dict(state)
+
+    def connect(user_id, username, password, trading_mode):
+        calls.append(("connect", user_id, username, password, trading_mode))
+        state.update(state="starting", ib_username=username, trading_mode=trading_mode)
+        return dict(state)
+
+    def disconnect(user_id):
+        calls.append(("disconnect", user_id))
+        state.clear()
+        state["state"] = "none"
+        return dict(state)
+
+    monkeypatch.setattr(live_manager, "status", status)
+    monkeypatch.setattr(live_manager, "connect", connect)
+    monkeypatch.setattr(live_manager, "disconnect", disconnect)
+    return calls
+
+
+def test_connections_need_the_manager(client, monkeypatch):
+    monkeypatch.delenv(live_manager.URL_ENV, raising=False)
+    for response in (
+        client.get(CONNECTION_URL),
+        client.post(CONNECTION_URL, json={"username": "u", "password": SECRET}),
+        client.delete(CONNECTION_URL),
+    ):
+        assert response.status_code == 503
+        assert ERROR_REQUIRED <= set(response.json())
+
+
+def test_a_user_connects_their_own_account_and_the_password_goes_nowhere_else(
+    tmp_path, manager
+):
+    db_path = tmp_path / "quantlab.db"
+    seed.run(db_path)
+    with TestClient(create_app(str(db_path))) as client:
+        assert client.get(CONNECTION_URL).json() == {"state": "none"}
+
+        body = {"username": "my-ibkr", "password": SECRET, "trading_mode": "paper"}
+        response = client.post(CONNECTION_URL, json=body)
+        assert response.status_code == 202
+        assert response.json()["state"] == "starting"
+        assert SECRET not in response.text
+
+        followed = client.get(CONNECTION_URL)
+        assert followed.json()["ib_username"] == "my-ibkr"
+        assert SECRET not in followed.text
+
+        assert client.delete(CONNECTION_URL).json() == {"state": "none"}
+
+    # The caller's own id, and the password only on the way to the manager.
+    assert ("connect", ME, "my-ibkr", SECRET, "paper") in manager
+    assert {call[1] for call in manager} == {ME}
+
+    schema = SPEC["components"]["schemas"]["LiveConnection"]
+    assert response.json()["state"] in schema["properties"]["state"]["enum"]
+
+
+def test_a_malformed_request_never_echoes_the_password(tmp_path, manager):
+    db_path = tmp_path / "quantlab.db"
+    seed.run(db_path)
+    with TestClient(create_app(str(db_path))) as client:
+        missing_user = client.post(CONNECTION_URL, json={"password": SECRET})
+        bad_mode = client.post(
+            CONNECTION_URL, json={"username": "u", "password": SECRET, "trading_mode": "yolo"}
+        )
+    for response in (missing_user, bad_mode):
+        assert response.status_code == 422
+        assert SECRET not in response.text
+    assert not [call for call in manager if call[0] == "connect"]
+
+
+def test_connection_attempts_are_rate_limited(tmp_path, manager):
+    db_path = tmp_path / "quantlab.db"
+    seed.run(db_path)
+    body = {"username": "u", "password": SECRET}
+    with TestClient(create_app(str(db_path))) as client:
+        for _ in range(routes._LIVE_CONNECT_ATTEMPTS):
+            assert client.post(CONNECTION_URL, json=body).status_code == 202
+        refused = client.post(CONNECTION_URL, json=body)
+    assert refused.status_code == 429
+    assert "Retry-After" in refused.headers
+    assert "lock" in refused.json()["detail"]
+    assert len([call for call in manager if call[0] == "connect"]) == routes._LIVE_CONNECT_ATTEMPTS

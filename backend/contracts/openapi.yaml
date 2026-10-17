@@ -821,6 +821,98 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /live/connection:
+    get:
+      tags: [live]
+      operationId: getLiveConnection
+      summary: This user's own IBKR connection for live prices
+      security: [{ bearerAuth: [] }]
+      description: >
+        Live prices come from each user's own IBKR login, never a shared one:
+        one account's market data is licensed to that account's holder. This
+        reports the caller's gateway: `none` (never connected, or
+        disconnected), `queued` (all gateway slots are taken; `queue_position`
+        says where), `starting` / `logging_in` (approve the IB Key prompt on
+        your phone if one appears), `connected`, or `failed` (`detail` says
+        why; nothing retries a failed login on its own, so an account is never
+        locked out by repeated attempts).
+      responses:
+        "200":
+          description: The caller's connection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LiveConnection"
+        "503":
+          description: The live gateway manager is not configured or unreachable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags: [live]
+      operationId: connectLive
+      summary: Connect the caller's own IBKR account for live prices
+      security: [{ bearerAuth: [] }]
+      description: >
+        Starts (or queues) a gateway logged in as the given IBKR user. The
+        password is handed to that gateway and is never stored by quantlab
+        nor returned by any endpoint; after a disconnect, or IBKR's weekly
+        re-authentication, it must be entered again. Use a secondary IBKR
+        user with trading disabled where possible -- the gateway runs with a
+        read-only API either way. Attempts are rate limited per user, since
+        IBKR locks an account after repeated failed logins.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LiveConnectRequest"
+      responses:
+        "202":
+          description: Accepted; poll GET /live/connection for progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LiveConnection"
+        "422":
+          description: Missing or malformed fields (the password is never echoed)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: Too many connection attempts; wait before trying again
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: The live gateway manager is not configured or unreachable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [live]
+      operationId: disconnectLive
+      summary: Disconnect the caller's IBKR gateway
+      security: [{ bearerAuth: [] }]
+      description: Stops the caller's gateway (or leaves the queue); its login goes with it.
+      responses:
+        "200":
+          description: Disconnected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LiveConnection"
+        "503":
+          description: The live gateway manager is not configured or unreachable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /live/{symbol}/session:
     get:
       tags: [live]
@@ -3594,3 +3686,42 @@ components:
           description: >
             Present and true only on frames from scripts/live_fake_publish.py, the
             development stand-in for the collector. Never set by live-ingest.
+
+    LiveConnection:
+      type: object
+      required: [state]
+      properties:
+        state:
+          type: string
+          enum: [none, queued, starting, logging_in, connected, failed]
+        detail:
+          type: string
+          description: Why a connection failed, or what it is waiting for.
+        queue_position:
+          type: [integer, "null"]
+          description: 1-based place in the queue while `queued`.
+        ib_username:
+          type: [string, "null"]
+          description: The IBKR user this gateway logs in as (never the password).
+        trading_mode:
+          type: [string, "null"]
+          enum: [paper, live, null]
+
+    LiveConnectRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 64
+        password:
+          type: string
+          format: password
+          minLength: 1
+          maxLength: 256
+          writeOnly: true
+        trading_mode:
+          type: string
+          enum: [paper, live]
+          default: paper

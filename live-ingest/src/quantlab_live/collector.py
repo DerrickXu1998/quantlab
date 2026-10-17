@@ -50,12 +50,16 @@ def iso(ts: float) -> str:
 class Collector:
     def __init__(
         self,
+        owner: str,
         gateway: Gateway,
         store: Any,
         bus: Any,
         max_lines: int,
         clock: Callable[[], float] = time.time,
     ) -> None:
+        #: The quantlab user whose IBKR login this collector streams. Every
+        #: message and row it writes is theirs alone.
+        self.owner = owner
         self.gateway = gateway
         self.store = store
         self.bus = bus
@@ -74,6 +78,8 @@ class Collector:
         self.backfill_times: deque[float] = deque()
         self.pending_bars: list[tuple[str, dict]] = []
         self.market: str | None = None
+        #: When this user last held any lease (clock seconds); for idle shutdown.
+        self.last_lease_at = clock()
 
         self._last_reconcile = -1e9
         self._last_heartbeat = -1e9
@@ -132,10 +138,12 @@ class Collector:
 
     async def reconcile(self) -> None:
         try:
-            leases: list[Lease] = await asyncio.to_thread(self.store.leases)
+            leases: list[Lease] = await asyncio.to_thread(self.store.leases, self.owner)
         except Exception:
             log.exception("reading leases failed; keeping the current lines")
             return
+        if leases:
+            self.last_lease_at = self.clock()
         for lease in leases:
             self.instrument_ids[lease.symbol] = lease.instrument_id
             # Resolve before planning (cached after the first time), so a
@@ -222,7 +230,7 @@ class Collector:
                 continue
             self.sent[symbol] = key
             ts = quote.time.timestamp() if quote.time else now
-            self.bus.send(
+            self._send(
                 symbol,
                 {
                     "event": "tick",
@@ -250,8 +258,8 @@ class Collector:
         for symbol, bar in bars:
             start = datetime.fromtimestamp(bar["start"], UTC)
             if symbol in self.instrument_ids:
-                rows.append(bar_row(self.instrument_ids[symbol], start, bar, "rolled"))
-            self.bus.send(
+                rows.append(bar_row(self.owner, self.instrument_ids[symbol], start, bar, "rolled"))
+            self._send(
                 symbol,
                 {
                     "event": "bar",
@@ -287,14 +295,16 @@ class Collector:
         try:
             bars = await self.gateway.session_bars(self.contracts[symbol])
             instrument_id = self.instrument_ids[symbol]
-            rows = [bar_row(instrument_id, bar["start"], bar, "backfill") for bar in bars]
+            rows = [
+                bar_row(self.owner, instrument_id, bar["start"], bar, "backfill") for bar in bars
+            ]
             await asyncio.to_thread(self.store.insert_bars, rows)
         except Exception:
             log.exception("backfilling %s failed (attempt %d)", symbol, attempts + 1)
             if attempts + 1 < BACKFILL_RETRIES:
                 self.backfills.append((symbol, attempts + 1))
             return
-        self.bus.send(symbol, {"event": "backfilled", "symbol": symbol})
+        self._send(symbol, {"event": "backfilled", "symbol": symbol})
 
     # --- state ----------------------------------------------------------------
 
@@ -315,7 +325,7 @@ class Collector:
         hours, zone = self._hours
         self.market = market_state(hours, zone, datetime.fromtimestamp(now, UTC)) if hours else None
         try:
-            self.bus.send(
+            self._send(
                 None,
                 {
                     "event": "heartbeat",
@@ -328,6 +338,11 @@ class Collector:
                 self.bus.flush()
         except Exception:
             log.exception("heartbeat failed")
+
+    def _send(self, key: str | None, value: dict) -> None:
+        """Publish, stamped with the owner: the API forwards a frame only to
+        the user it belongs to."""
+        self.bus.send(key, {**value, "user": self.owner})
 
     @staticmethod
     async def _sleep(stop: asyncio.Event, seconds: float) -> None:

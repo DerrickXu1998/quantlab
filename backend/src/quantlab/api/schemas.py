@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from quantlab.auth.passwords import MAX_PASSWORD_LENGTH
 
@@ -411,6 +411,18 @@ class Credentials(BaseModel):
     # PBKDF2 over a megabyte-long "password" is a free CPU burn for an
     # attacker, and login never needs what registration would refuse.
     password: str = Field(max_length=MAX_PASSWORD_LENGTH)
+
+
+class LiveConnectRequest(BaseModel):
+    """A user's own IBKR login, for their own live prices (roadmap 4a).
+
+    The password is a SecretStr so it never appears in a repr, a log line or
+    an error; it is handed to the user's gateway and stored nowhere.
+    """
+
+    username: str = Field(min_length=1, max_length=64)
+    password: SecretStr = Field(min_length=1, max_length=256)
+    trading_mode: Literal["paper", "live"] = "paper"
 
 
 class UserOut(BaseModel):

@@ -14,12 +14,16 @@ from quantlab.streaming import live_hub
 from quantlab.streaming.live_hub import LiveHub, Subscription, message_key
 
 
-def tick(symbol: str, last: float, ts: str = "2026-10-15T14:00:00.000Z") -> dict:
-    return {"event": "tick", "symbol": symbol, "ts": ts, "last": last}
+def tick(symbol: str, last: float, ts: str = "2026-10-15T14:00:00.000Z", user="u1") -> dict:
+    return {"event": "tick", "user": user, "symbol": symbol, "ts": ts, "last": last}
 
 
-def bar(symbol: str, ts: str) -> dict:
-    return {"event": "bar", "symbol": symbol, "bar": {"ts": ts, "close": 1.0}}
+def bar(symbol: str, ts: str, user="u1") -> dict:
+    return {"event": "bar", "user": user, "symbol": symbol, "bar": {"ts": ts, "close": 1.0}}
+
+
+def heartbeat(user="u1", **fields) -> dict:
+    return {"event": "heartbeat", "user": user, **fields}
 
 
 class Clock:
@@ -39,7 +43,7 @@ def test_a_newer_tick_replaces_the_older_but_bars_are_kept_per_minute():
 
 def test_a_slow_subscriber_gets_the_latest_price_not_a_backlog():
     async def scenario():
-        sub = Subscription({"A", "B"}, asyncio.get_running_loop())
+        sub = Subscription("u1", {"A", "B"}, asyncio.get_running_loop())
         sub.offer(tick("A", 1))
         sub.offer(bar("A", "t1"))
         sub.offer(tick("B", 5))
@@ -59,7 +63,7 @@ def test_pending_is_bounded(monkeypatch):
     monkeypatch.setattr(live_hub, "MAX_PENDING", 3)
 
     async def scenario():
-        sub = Subscription({"A"}, asyncio.get_running_loop())
+        sub = Subscription("u1", {"A"}, asyncio.get_running_loop())
         for minute in range(5):
             sub.offer(bar("A", f"t{minute}"))
         return await sub.next_batch(timeout=0.1)
@@ -69,7 +73,7 @@ def test_pending_is_bounded(monkeypatch):
 
 def test_an_idle_subscriber_times_out_empty():
     async def scenario():
-        return await Subscription({"A"}, asyncio.get_running_loop()).next_batch(timeout=0.01)
+        return await Subscription("u1", {"A"}, asyncio.get_running_loop()).next_batch(timeout=0.01)
 
     assert asyncio.run(scenario()) == []
 
@@ -78,8 +82,8 @@ def test_messages_reach_only_the_subscribers_that_asked_for_the_symbol():
     hub = LiveHub("broker:9092", "t", consumer_factory=lambda: None)
 
     async def scenario():
-        watching_a = hub.subscribe({"A"})
-        watching_b = hub.subscribe({"B"})
+        watching_a = hub.subscribe("u1", {"A"})
+        watching_b = hub.subscribe("u1", {"B"})
         hub.dispatch_all([tick("A", 1), tick("C", 9), {"event": "nonsense"}, "not a dict", None])
         await asyncio.sleep(0)  # let call_soon_threadsafe deliver
         got_a = await watching_a.next_batch(timeout=0.05)
@@ -99,20 +103,22 @@ def test_messages_reach_only_the_subscribers_that_asked_for_the_symbol():
 def test_the_collector_is_down_until_a_fresh_connected_heartbeat():
     clock = Clock()
     hub = LiveHub("broker:9092", "t", consumer_factory=lambda: None, clock=clock)
-    assert hub.collector_state() == ("down", None)
+    assert hub.collector_state("u1") == ("down", None)
 
-    hub.dispatch({"event": "heartbeat", "connected": True, "market": "open"})
-    assert hub.collector_state() == ("up", "open")
+    hub.dispatch(heartbeat(connected=True, market="open"))
+    assert hub.collector_state("u1") == ("up", "open")
+    # Another user's collector is their own, and has said nothing.
+    assert hub.collector_state("u2") == ("down", None)
 
     # Running but logged out of IBKR delivers nothing either.
-    hub.dispatch({"event": "heartbeat", "connected": False, "market": "open"})
-    assert hub.collector_state() == ("down", None)
+    hub.dispatch(heartbeat(connected=False, market="open"))
+    assert hub.collector_state("u1") == ("down", None)
 
-    hub.dispatch({"event": "heartbeat", "connected": True, "market": "lunch"})
-    assert hub.collector_state() == ("up", None)
+    hub.dispatch(heartbeat(connected=True, market="lunch"))
+    assert hub.collector_state("u1") == ("up", None)
 
     clock.now += live_hub.COLLECTOR_STALE_SECONDS + 0.1
-    assert hub.collector_state() == ("down", None)
+    assert hub.collector_state("u1") == ("down", None)
 
 
 class FakeConsumer:
@@ -134,7 +140,7 @@ class FakeConsumer:
 
 def test_the_consumer_reconnects_after_a_failure_and_dispatches():
     done = threading.Event()
-    consumer = FakeConsumer([[{"event": "heartbeat", "connected": True, "market": "closed"}]], done)
+    consumer = FakeConsumer([[heartbeat(connected=True, market="closed")]], done)
     attempts = []
 
     def factory():
@@ -151,7 +157,7 @@ def test_the_consumer_reconnects_after_a_failure_and_dispatches():
 
     assert len(attempts) == 2
     assert hub.bus_ok is True
-    assert hub.collector_state() == ("up", "closed")
+    assert hub.collector_state("u1") == ("up", "closed")
 
 
 def test_configured_needs_both_brokers_and_topic(monkeypatch):
@@ -162,3 +168,28 @@ def test_configured_needs_both_brokers_and_topic(monkeypatch):
     assert live_hub.configured()
     monkeypatch.delenv("QUANTLAB_KAFKA_BROKERS")
     assert not live_hub.configured()
+
+
+def test_a_user_never_receives_another_users_prices():
+    hub = LiveHub("broker:9092", "t", consumer_factory=lambda: None)
+
+    async def scenario():
+        mine = hub.subscribe("u1", {"AAPL.US"})
+        theirs = hub.subscribe("u2", {"AAPL.US"})
+        hub.dispatch_all(
+            [
+                tick("AAPL.US", 1, user="u1"),
+                tick("AAPL.US", 2, user="u2"),
+                # No owner: nobody's licence covers it, so nobody gets it.
+                {"event": "tick", "symbol": "AAPL.US", "last": 3},
+            ]
+        )
+        await asyncio.sleep(0)
+        return (
+            await mine.next_batch(timeout=0.05),
+            await theirs.next_batch(timeout=0.05),
+        )
+
+    mine, theirs = asyncio.run(scenario())
+    assert [m["last"] for m in mine] == [1]
+    assert [m["last"] for m in theirs] == [2]

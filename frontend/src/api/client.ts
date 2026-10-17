@@ -41,6 +41,8 @@ export type LiveBar = components['schemas']['LiveBar'];
 export type LiveSession = components['schemas']['LiveSession'];
 export type LiveLineStatus = components['schemas']['LiveLineStatus'];
 export type LiveEvent = components['schemas']['LiveEvent'];
+export type LiveConnection = components['schemas']['LiveConnection'];
+export type LiveConnectRequest = components['schemas']['LiveConnectRequest'];
 
 export type SignalQuery = NonNullable<paths['/signals']['get']['parameters']['query']>;
 export type PriceQuery = NonNullable<
@@ -137,6 +139,23 @@ export function listInstruments(): Promise<InstrumentList> {
 export function getPrices(symbol: string, start?: string, end?: string): Promise<PriceBarList> {
   const query: PriceQuery = { start_date: start, end_date: end };
   return request<PriceBarList>(`/instruments/${encodeURIComponent(symbol)}/prices`, query);
+}
+
+/** This user's own IBKR connection (live prices come from their login only). */
+export function getLiveConnection(): Promise<LiveConnection> {
+  return request<LiveConnection>('/live/connection');
+}
+
+/**
+ * Connect the user's own IBKR account. The password goes to their gateway
+ * and is stored nowhere; nothing ever sends it back.
+ */
+export function connectLive(body: LiveConnectRequest): Promise<LiveConnection> {
+  return send<LiveConnection>('/live/connection', 'POST', body);
+}
+
+export function disconnectLive(): Promise<LiveConnection> {
+  return send<LiveConnection>('/live/connection', 'DELETE');
 }
 
 /** Today's live 1-minute bars for one symbol (IBKR, provisional). */

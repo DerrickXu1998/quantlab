@@ -1,4 +1,4 @@
-"""``quantlab-live-ingest``: run the collector until stopped."""
+"""``quantlab-live-ingest``: the gateway manager and its per-user collectors."""
 
 from __future__ import annotations
 
@@ -7,10 +7,15 @@ import logging
 import signal
 import time
 
+from aiohttp import web
+
 from quantlab_live.bus import Bus
 from quantlab_live.collector import Collector
-from quantlab_live.config import Settings
+from quantlab_live.config import API_PORT, Settings
+from quantlab_live.docker_api import DockerGateways
 from quantlab_live.ib import IbGateway
+from quantlab_live.manager import Manager
+from quantlab_live.server import make_app
 from quantlab_live.store import Store
 
 log = logging.getLogger("quantlab_live")
@@ -33,20 +38,32 @@ async def _run(settings: Settings) -> None:
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop.set)
-    collector = Collector(
-        IbGateway(settings.ib_host, settings.ib_port, settings.ib_client_id),
-        Store(settings.pg_dsn, settings.ch),
-        await asyncio.to_thread(_bus, settings),
-        settings.max_lines,
-    )
+
+    bus = await asyncio.to_thread(_bus, settings)
+    store = Store(settings.pg_dsn, settings.ch)
+    gateways = DockerGateways(settings.image, settings.network)
+
+    def make_collector(owner: str, host: str) -> Collector:
+        session = manager.sessions.get(owner)
+        mode = session.trading_mode if session else "paper"
+        ib = IbGateway(host, API_PORT.get(mode, API_PORT["paper"]), settings.ib_client_id)
+        return Collector(owner, ib, store, bus, settings.max_lines)
+
+    manager = Manager(gateways, make_collector, max_gateways=settings.max_gateways)
+
+    runner = web.AppRunner(make_app(manager, settings.token))
+    await runner.setup()
+    await web.TCPSite(runner, "0.0.0.0", settings.port).start()
     log.info(
-        "live-ingest: IB Gateway %s:%s, topic %s, %d lines",
-        settings.ib_host,
-        settings.ib_port,
+        "live gateway manager on :%d, up to %d gateways, topic %s",
+        settings.port,
+        settings.max_gateways,
         settings.topic,
-        settings.max_lines,
     )
-    await collector.run(stop)
+    try:
+        await manager.run(stop)
+    finally:
+        await runner.cleanup()
 
 
 def main() -> None:
