@@ -14,7 +14,7 @@ the catalog (`instruments`, `symbol_map`, `universe_snapshots`,
 GitHub Actions (see `docs/DEPLOY.md`). Universes exist as a plugin abstraction
 (`quantlab_data/universe/` (quantlab-data-pipeline): `static`, `lse`, `nasdaqtrader`) but there are no
 index universes (S&P 500, FTSE 100) and no DB-backed user universes. There is
-no real-time path at all — no tick data, no IBKR integration.
+no real-time path yet — no IBKR integration (planned in Phase 4).
 
 ## Phase 0 — Infra hygiene: backups and monitoring
 
@@ -139,38 +139,109 @@ buildable today with zero code — backtest those first.
 deliberately last of the big items: it should be designed with real backtest
 evidence from A1–A6 in hand, not ahead of it.
 
-## Phase 4 — Real-time tick ingest (IBKR)
+## Phase 4 — Live market data (IBKR, US equities)
 
-**Goal**: live LSE L1 ticks captured to memory for strategies, batched into
-ClickHouse for history. Full design discussion from September 2026; summary:
+**Goal**: live US prices for two consumers, the Market tab (watching) and
+deployed strategies (trading), without letting live data near anything a
+backtest reads. Redesigned October 2026 for the S&P universe; it replaces the
+September LSE tick-capture design.
 
-- **Provider**: Interactive Brokers. LSE UK L1 ≈ £1/mo (non-professional) /
-  £56/mo (professional); L2 ≈ £7/mo. IBKR also gives on-demand historical
-  backfill (`reqHistoricalData` bars, `reqHistoricalTicks` — tick history
-  limited to ~3 years, strict pacing: ≤60 requests / 10 min). Deep multi-year
-  tick history, if ever needed, is a separate one-time purchase (LSEG Tick
-  History or a vendor) — **open**, not budgeted.
-- **Architecture**: `tick-ingest` service (own `pyproject.toml`, own image,
-  same monorepo — same pattern as `backend/`). IB Gateway (headless container)
-  → feed handler (`ib_async`) → bounded in-memory queue → two taps: strategies
-  read from memory; a batch writer flushes ~5k rows / 1s to ClickHouse.
-  Optional Redpanda publish (`streaming` profile) for the UI.
-- **New table**: `ticks` in ClickHouse (`instrument_id`, `ts_event`,
-  `ts_ingest`, `tick_type`, `price`, `size`, `currency`, `source`,
-  `session_id`), `MergeTree`, monthly partitions, `ORDER BY
-  (instrument_id, ts_event, tick_type)`. Dual timestamps make latency
-  histograms free.
-- **Crash recovery**: gap detection via per-run `session_id` tracked in a
-  Postgres `tick_ingest_runs` table + `reqHistoricalTicks` backfill. No WAL in
-  v1.
-- **Placement**: own compose profile (`ticks`), its own disk/volume sizing —
-  tick volume is ~100–1000× bar volume and the Phase 0 disk alert is the tripwire.
-- **Licensing**: non-display usage of exchange data in an algo triggers
-  exchange non-display licences if sourced directly; broker-sourced data for a
-  personal account largely avoids this. Storing ticks for internal backtesting
-  is fine; publishing derived signals would need a derived-data licence.
-- **Order**: paper account first. Pacing and reconnect behavior are where this
-  design breaks, and finding that out should be free.
+Decisions:
+
+- **Provider**: Interactive Brokers, full-exchange (consolidated) US L1,
+  ~$10–15/mo and waived at ~$30/mo commissions. The free Cboe One/IEX feed is
+  not used: a fraction of US volume is a different market from the one we
+  trade.
+- **Tiingo is the source of truth.** Live data is provisional and kept out of
+  `price_bars`: it lives in its own ClickHouse database (`live.*`) and its own
+  topics (`quantlab.live.*`), never on `quantlab.bars`, which carries
+  warehouse replays. Nothing under `runs/` or `replay/` reads `live.*`.
+- **No reconciliation, short retention.** A session's live rows are dropped
+  once that date's Tiingo load succeeds (daily partitions, `DROP PARTITION`,
+  `TTL 7 days` as the safety net). Live topics keep ~1 day. The only live data
+  that survives is what a deployed strategy acted on, recorded on its
+  `decisions` row in Postgres.
+- **Venue mismatch accepted; rules are venue-neutral.** Intraday backtests run
+  on the IEX minute feed (one venue); live bars are consolidated, so volume is
+  ~30–50× larger and intraday ranges are wider. Rules use relative volume
+  (today against the symbol's own history), not absolute thresholds, and live
+  stop-hit rates are expected to exceed the backtest's.
+- **Line budget**: ~100 concurrent IBKR market-data lines. Deployments are
+  served first; Market tab subscriptions take what is left and expire when the
+  tab closes. A symbol over budget says so ("not subscribed: line budget"),
+  and never falls back to a simulation.
+
+Shared foundation:
+
+- [ ] `live-ingest` service (own `pyproject.toml` and image, same pattern as
+      `backend/`): IB Gateway (headless, IBC for the daily restart and
+      re-login) → `ib_async` collector. Own compose profile (`live`).
+- [ ] Postgres `live_subscriptions` (symbol, consumer: `deployment` |
+      `market`, owner, expires_at) is how the backend asks the collector for
+      a symbol; `live_sessions` records each collector session for gap
+      detection.
+- [ ] Paper account first. Pacing, line limits and reconnect behaviour are
+      where this design breaks, and finding that out should be free.
+
+### 4a — Market tab: live intraday view for a few tickers
+
+Replaces the simulated intraday mode (`useSimulatedSeries` in
+`frontend/src/quantlab/market/useMarketData.ts`) with real prices, about one
+tick per second.
+
+- [ ] Subscribing a ticker in the Market tab adds a `market` row to
+      `live_subscriptions`; the collector opens `reqMktData` (~250 ms
+      snapshots) and publishes at most one tick per symbol per second to
+      `quantlab.live.ticks` (last, bid, ask, cumulative volume, `ts_event`).
+- [ ] Backfill, session open → now: on subscribe, one `reqHistoricalData`
+      request for today's 1-minute TRADES bars (regular hours), served by
+      `GET /api/v1/live/{symbol}/session`, so the chart opens with the day so
+      far rather than an empty line. Seconds-level detail starts at
+      subscription time.
+- [ ] Continuous updates: `GET /api/v1/live/stream?symbols=…` (SSE, read with
+      fetch as in `frontend/src/api/replay.ts`, since it needs the auth header)
+      fed by **one** tailing consumer per API process that fans out in memory
+      to every open tab. The existing `streaming/bus.py` consumer reads a
+      finite replay from the start and cannot do this. Answers 503 when the
+      broker or collector is absent, as the replay endpoint does.
+- [ ] `DataMode` becomes `'historical' | 'live'`. Explicit states: Live, Stale
+      (no heartbeat for ~10 s in regular hours), Market closed (shows the last
+      Tiingo session), Feed offline (503), Not subscribed (line budget).
+      Today's candle is marked "IBKR · provisional".
+- [ ] `FeedProvider` (ticker tape, watchlist, positions, order ticket) moves
+      to the same stream. The random walk survives only under the `demo`
+      profile, labelled as simulated.
+
+### 4b — Deployed strategies: 5-second bars aggregated to the strategy's bar
+
+Live signals must come from bars built exactly like the backtest's, or live
+and batch diverge for reasons that have nothing to do with the market.
+
+- [ ] Each deployment's symbols get `deployment` rows in
+      `live_subscriptions`; the collector opens `reqRealTimeBars` (5-second
+      TRADES bars, regular hours only, built by IBKR from every trade, so the
+      high and low are right) and writes them to `live.bars_5s`.
+- [ ] One aggregator builds the strategy's frequency (`5m`, `15m`, `1h`,
+      matching `BAR_FREQUENCIES`) from the 5-second bars on the backtest's
+      boundaries: anchored at 09:30 ET, the same timestamp convention (bar
+      start or end) as the pipeline's minute bars, and official auction
+      prices for the open and close as `execution/minutes.py` uses. A bar is
+      published to `quantlab.live.bars` only once it has closed.
+- [ ] **Signals fire on bar close only.** The runner never evaluates a
+      forming bar, because the backtest never sees one. Stops and targets are
+      checked on every 5-second bar, which matches the backtest checking them
+      against the minute range.
+- [ ] Warm-up is Tiingo history from `price_bars_current` plus today's live
+      bars; after the nightly Tiingo load, tomorrow's warm-up is Tiingo only.
+- [ ] Postgres `deployments`, `decisions` (with the bar and last price the
+      strategy saw), `orders`, `fills`.
+- [ ] A test that feeds a recorded session of 5-second bars through the
+      aggregator and asserts the 5m/15m/1h bars match a reference resample
+      at every boundary, including the open and close.
+
+Licensing (unchanged): broker-sourced data for a personal account largely
+avoids exchange non-display licences. Internal use is fine; publishing derived
+signals would need a derived-data licence.
 
 ## Fundamentals coverage (parallel track)
 
@@ -232,7 +303,7 @@ Only when one of these is true: live trading with real money, a second human
 user, or the Phase 0 disk alert firing on capacity rather than on a leak.
 
 - ClickHouse replica or managed offering.
-- Separate ingest VM if tick capture must not share a failure domain with serving.
+- Separate ingest VM if live ingest (Phase 4) must not share a failure domain with serving.
 - Managed Postgres if the restore drill ever takes longer than the downtime we
   can tolerate.
 
