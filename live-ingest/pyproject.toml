@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# The live market data collector (roadmap 4a): IB Gateway -> quantlab.live.ticks
+# and live.bars_1m. Its own package and image, like backend/, so the API never
+# carries the IBKR client and a collector crash never takes the API with it.
+[project]
+name = "quantlab-live-ingest"
+version = "0.1.0"
+description = "Streams IBKR prices for leased symbols to Kafka and today's minutes to ClickHouse."
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "ib_async>=1.0",
+    "kafka-python>=2.0",
+    "psycopg[binary]>=3.1",
+    "clickhouse-connect>=0.7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff"]
+
+[project.scripts]
+quantlab-live-ingest = "quantlab_live.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+# The backend's settings, so the two Python services lint alike.
+[tool.ruff]
+target-version = "py311"
+src = ["src", "tests"]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W"]
+
+[tool.ruff.format]
+quote-style = "double"

@@ -17,7 +17,7 @@ SERVICE ?= backend
 CONTRACT_SRC := quantlab_specs/specs/006-warehouse-experiments/contracts/openapi.yaml
 CONTRACT_COPY := backend/contracts/openapi.yaml
 
-.PHONY: help up dev down build seed logs shell docker-shell test smoke check-warehouse hash dump-hash gen-api \
+.PHONY: help up dev down live-up live-down live-logs build seed logs shell docker-shell test smoke check-warehouse hash dump-hash gen-api \
 	check-contract sync-contract migrate signals store-test db-shell ch-shell destroy
 
 help: ## Show available targets
@@ -32,6 +32,17 @@ dev: ## Local dev: Docker backend + hot-reloading frontend on :5173 (AUTH_BYPASS
 
 down: ## Stop and remove containers, KEEPING ingested data
 	$(COMPOSE) down
+
+live-up: ## Live IBKR prices for the Market tab: IB Gateway + live-ingest + redpanda (needs IBKR_* in .env)
+	@grep -qE '^IBKR_USERNAME=.+' .env 2>/dev/null && grep -qE '^IBKR_PASSWORD=.+' .env || \
+		{ echo "Set IBKR_USERNAME and IBKR_PASSWORD in .env (paper account first; see .env.example)." >&2; exit 1; }
+	$(COMPOSE) --profile live up -d --build
+
+live-down: ## Stop the live profile's containers (gateway, collector, bus)
+	$(COMPOSE) --profile live stop ib-gateway live-ingest redpanda
+
+live-logs: ## Follow the collector and gateway logs
+	$(COMPOSE) --profile live logs -f live-ingest ib-gateway
 
 destroy: ## DESTRUCTIVE: remove containers AND every volume, including ingested history
 	@echo "This permanently deletes the ClickHouse bars and the Postgres catalog."
