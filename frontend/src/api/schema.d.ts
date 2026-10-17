@@ -329,6 +329,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/live/connection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * This user's own IBKR connection for live prices
+         * @description Live prices come from each user's own IBKR login, never a shared one: one account's market data is licensed to that account's holder. This reports the caller's gateway: `none` (never connected, or disconnected), `queued` (all gateway slots are taken; `queue_position` says where), `starting` / `logging_in` (approve the IB Key prompt on your phone if one appears), `connected`, or `failed` (`detail` says why; nothing retries a failed login on its own, so an account is never locked out by repeated attempts).
+         */
+        get: operations["getLiveConnection"];
+        put?: never;
+        /**
+         * Connect the caller's own IBKR account for live prices
+         * @description Starts (or queues) a gateway logged in as the given IBKR user. The password is handed to that gateway and is never stored by quantlab nor returned by any endpoint; after a disconnect, or IBKR's weekly re-authentication, it must be entered again. Use a secondary IBKR user with trading disabled where possible -- the gateway runs with a read-only API either way. Attempts are rate limited per user, since IBKR locks an account after repeated failed logins.
+         */
+        post: operations["connectLive"];
+        /**
+         * Disconnect the caller's IBKR gateway
+         * @description Stops the caller's gateway (or leaves the queue); its login goes with it.
+         */
+        delete: operations["disconnectLive"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/live/{symbol}/session": {
         parameters: {
             query?: never;
@@ -1692,6 +1720,28 @@ export interface components {
             /** @description Present and true only on frames from scripts/live_fake_publish.py, the development stand-in for the collector. Never set by live-ingest. */
             fake?: boolean;
         };
+        LiveConnection: {
+            /** @enum {string} */
+            state: "none" | "queued" | "starting" | "logging_in" | "connected" | "failed";
+            /** @description Why a connection failed, or what it is waiting for. */
+            detail?: string;
+            /** @description 1-based place in the queue while `queued`. */
+            queue_position?: number | null;
+            /** @description The IBKR user this gateway logs in as (never the password). */
+            ib_username?: string | null;
+            /** @enum {string|null} */
+            trading_mode?: "paper" | "live" | null;
+        };
+        LiveConnectRequest: {
+            username: string;
+            /** Format: password */
+            password: string;
+            /**
+             * @default paper
+             * @enum {string}
+             */
+            trading_mode: "paper" | "live";
+        };
     };
     responses: never;
     parameters: never;
@@ -2369,6 +2419,115 @@ export interface operations {
                 };
             };
             /** @description The live bus is unconfigured or unreachable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getLiveConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's connection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveConnection"];
+                };
+            };
+            /** @description The live gateway manager is not configured or unreachable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    connectLive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LiveConnectRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted; poll GET /live/connection for progress */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveConnection"];
+                };
+            };
+            /** @description Missing or malformed fields (the password is never echoed) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Too many connection attempts; wait before trying again */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The live gateway manager is not configured or unreachable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    disconnectLive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Disconnected */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveConnection"];
+                };
+            };
+            /** @description The live gateway manager is not configured or unreachable */
             503: {
                 headers: {
                     [name: string]: unknown;

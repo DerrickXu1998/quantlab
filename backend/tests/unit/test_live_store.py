@@ -81,10 +81,10 @@ def test_a_renewal_extends_the_lease_and_keeps_the_collectors_answer(warehouse):
 
 def test_session_bars_are_the_latest_session_deduplicated_in_order(warehouse):
     wh, instrument_id = warehouse
-    assert live_store.session_bars(wh, instrument_id) == (None, [])
+    assert live_store.session_bars(wh, "u1", instrument_id) == (None, [])
 
-    def row(ts, close, kind, ingest):
-        return [instrument_id, ts, ts.date(), close, close, close, close, 10, kind, ingest]
+    def row(ts, close, kind, ingest, owner="u1"):
+        return [owner, instrument_id, ts, ts.date(), close, close, close, close, 10, kind, ingest]
 
     early = datetime(2026, 10, 14, 13, 30, tzinfo=UTC)
     m1 = datetime(2026, 10, 15, 13, 31, tzinfo=UTC)
@@ -98,14 +98,20 @@ def test_session_bars_are_the_latest_session_deduplicated_in_order(warehouse):
                 row(m0, 2.0, "backfill", datetime(2026, 10, 15, 13, 40, tzinfo=UTC)),
                 # A reconnect re-backfilled 13:31: the later write wins.
                 row(m1, 3.5, "backfill", datetime(2026, 10, 15, 13, 40, tzinfo=UTC)),
+                # Another user's login fetched this minute too: same key but
+                # for the owner, so it neither replaces u1's nor is served to u1.
+                row(m1, 99.0, "rolled", datetime(2026, 10, 15, 13, 50, tzinfo=UTC), owner="u2"),
+                row(m1, 98.0, "rolled", datetime(2026, 10, 16, 13, 50, tzinfo=UTC), owner="u2"),
             ],
             column_names=[
-                "instrument_id", "ts", "session_date", "open", "high", "low", "close",
-                "volume", "kind", "ts_ingest",
+                "owner_id", "instrument_id", "ts", "session_date", "open", "high", "low",
+                "close", "volume", "kind", "ts_ingest",
             ],
         )
 
-    session, bars = live_store.session_bars(wh, instrument_id)
+    session, bars = live_store.session_bars(wh, "u1", instrument_id)
+    theirs = live_store.session_bars(wh, "u2", instrument_id)
+    assert [b["close"] for b in theirs[1]] == [98.0]
 
     assert session == date(2026, 10, 15).isoformat()
     assert [(b["ts"], b["close"], b["kind"]) for b in bars] == [

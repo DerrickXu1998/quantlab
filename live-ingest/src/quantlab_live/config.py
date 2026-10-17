@@ -6,6 +6,14 @@ import os
 from dataclasses import dataclass
 from urllib.parse import parse_qs, unquote, urlparse
 
+#: ib-gateway-docker, pinned by digest. 4004 inside it relays to the paper
+#: API (4002) and 4003 to the live one (4001).
+DEFAULT_IMAGE = (
+    "ghcr.io/gnzsnz/ib-gateway:10.37"
+    "@sha256:b248e4dad68cc1de8dd1905ea8598089e92307dfec57f59e08a28182bbb002d5"
+)
+API_PORT = {"paper": 4004, "live": 4003}
+
 
 def ch_settings(url: str, password: str = "") -> dict:
     """clickhouse[s]://user:pass@host:port/db -> clickhouse_connect kwargs."""
@@ -32,10 +40,15 @@ class Settings:
     ch: dict
     brokers: str
     topic: str
-    ib_host: str
-    ib_port: int
-    ib_client_id: int
+    #: Shared secret the backend presents; the manager refuses calls without it.
+    token: str
+    port: int
+    #: The compose network the per-user gateways join (so collectors reach them).
+    network: str
+    image: str
+    max_gateways: int
     max_lines: int
+    ib_client_id: int
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -45,10 +58,13 @@ class Settings:
             ch=ch_settings(env["QUANTLAB_CH_URL"], env.get("QUANTLAB_CH_PASSWORD", "")),
             brokers=env.get("QUANTLAB_KAFKA_BROKERS", "redpanda:9092"),
             topic=env.get("QUANTLAB_LIVE_TICKS_TOPIC", "quantlab.live.ticks"),
-            ib_host=env.get("IBKR_HOST", "ib-gateway"),
-            # 4004: ib-gateway-docker's relay to the paper API (4002 inside).
-            ib_port=int(env.get("IBKR_PORT", "4004")),
-            ib_client_id=int(env.get("IBKR_CLIENT_ID", "17")),
-            # Under IBKR's default 100, leaving room for TWS on a laptop.
+            token=env["QUANTLAB_LIVE_MANAGER_TOKEN"],
+            port=int(env.get("QUANTLAB_LIVE_MANAGER_PORT", "8790")),
+            network=env["QUANTLAB_LIVE_NETWORK"],
+            image=env.get("QUANTLAB_IBGW_IMAGE", DEFAULT_IMAGE),
+            # Each gateway is a ~1 GB JVM; two fit beside the stack on the VM.
+            max_gateways=int(env.get("QUANTLAB_LIVE_MAX_GATEWAYS", "2")),
+            # Per account: IBKR's default is 100 lines; leave headroom.
             max_lines=int(env.get("QUANTLAB_LIVE_MAX_LINES", "90")),
+            ib_client_id=int(env.get("IBKR_CLIENT_ID", "17")),
         )

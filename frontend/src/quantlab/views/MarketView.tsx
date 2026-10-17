@@ -6,7 +6,9 @@ import { Button } from '../../components/ui/button';
 import { ButtonGroup } from '../../components/ui/layout';
 import { cn } from '../../lib/utils';
 import { EmptyState } from '../chrome/EmptyState';
+import { LiveConnectPanel } from '../market/LiveConnectPanel';
 import { MarketChartCard } from '../market/MarketChartCard';
+import { useLiveConnection } from '../market/useLiveConnection';
 import {
   cellClasses,
   gridClasses,
@@ -130,6 +132,13 @@ export function MarketView({
   const { universes, save, remove: removeUniverse } = useCustomUniverses();
   const settings = useMarketSettings();
   const historical = settings.mode === 'historical';
+  // Live prices come from the user's own IBKR login; until it is connected,
+  // live mode shows how to connect instead of empty charts.
+  const liveConnection = useLiveConnection(!historical);
+  const connectedAs =
+    liveConnection.load.status === 'ready' && liveConnection.load.connection.state === 'connected'
+      ? liveConnection.load.connection
+      : null;
 
   const instruments = useMemo(
     () => (catalog.status === 'ready' ? catalog.data : []),
@@ -256,7 +265,28 @@ export function MarketView({
             : "Live · today's IBKR prices · 1-minute candles from the open, the newest forming tick by tick · provisional — Tiingo's end-of-day bars are the record"}
         </div>
 
-        {selected.length === 0 ? (
+        {!historical && connectedAs ? (
+          <div
+            data-testid="live-conn-bar"
+            className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-1.5 font-mono text-[11px] text-muted-foreground"
+          >
+            <span>
+              IBKR · <span className="text-foreground">{connectedAs.ib_username}</span> ({connectedAs.trading_mode}) · your
+              own login, your own prices
+            </span>
+            <Button type="button" variant="ghost" size="sm" onClick={() => void liveConnection.disconnect()}>
+              Disconnect
+            </Button>
+          </div>
+        ) : null}
+
+        {!historical && !connectedAs ? (
+          <LiveConnectPanel
+            load={liveConnection.load}
+            onConnect={liveConnection.connect}
+            onCancel={() => void liveConnection.disconnect()}
+          />
+        ) : selected.length === 0 ? (
           <EmptyState
             testId="market-no-selection"
             icon={ChartLine}

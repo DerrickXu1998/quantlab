@@ -11,6 +11,7 @@ from quantlab_live.plan import Lease
 NEW_YORK = ZoneInfo("America/New_York")
 
 BAR_COLUMNS = [
+    "owner_id",
     "instrument_id",
     "ts",
     "session_date",
@@ -23,10 +24,12 @@ BAR_COLUMNS = [
 ]
 
 
-def bar_row(instrument_id: int, start: datetime, bar: dict, kind: str) -> list:
-    """One live.bars_1m row; the session is the New York date of the minute."""
+def bar_row(owner_id: str, instrument_id: int, start: datetime, bar: dict, kind: str) -> list:
+    """One live.bars_1m row, belonging to the user whose login fetched it; the
+    session is the New York date of the minute."""
     start = start.astimezone(UTC)
     return [
+        owner_id,
         instrument_id,
         start.replace(tzinfo=None),
         start.astimezone(NEW_YORK).date(),
@@ -47,7 +50,8 @@ class Store:
         self._ch = ch
         self._client = None
 
-    def leases(self) -> list[Lease]:
+    def leases(self, owner_id: str) -> list[Lease]:
+        """One user's unexpired leases: their own login serves only them."""
         import psycopg
 
         with psycopg.connect(self._dsn) as conn:
@@ -56,8 +60,9 @@ class Store:
                 SELECT s.subscription_id, s.instrument_id, i.symbol, s.consumer, s.requested_at
                   FROM live_subscriptions s
                   JOIN instruments i USING (instrument_id)
-                 WHERE s.expires_at > now()
-                """
+                 WHERE s.expires_at > now() AND s.owner_id = %s
+                """,
+                (owner_id,),
             ).fetchall()
         return [Lease(*row) for row in rows]
 

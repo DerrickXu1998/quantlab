@@ -94,7 +94,7 @@ can import the other.
 
 ## 2. Runtime topology
 
-Ten compose services across five profiles. The base stack is four containers; everything else
+Nine compose services across five profiles, plus one gateway container per connected live user. The base stack is four containers; everything else
 is opt-in, which is what keeps the zero-setup demo honest.
 
 | Service | Profile | Image | Ports | Role |
@@ -106,8 +106,8 @@ is opt-in, which is what keeps the zero-setup demo honest.
 | `migrate` | base | `quantlab-migrate` | — | applies the schema (src/quantlab/store), then exits |
 | `seed` | `demo` | `./backend` | — | writes the synthetic SQLite demo |
 | `redpanda` | `streaming`, `live` | `redpanda:v24.3.18` | 19092 | Kafka API for streamed replay and live ticks |
-| `ib-gateway` | `live` | `gnzsnz/ib-gateway:10.37` | — | IBKR login (read-only API, paper first) |
-| `live-ingest` | `live` | `./live-ingest` | — | IBKR collector: leases → lines → ticks and today's minutes |
+| `live-manager` | `live` | `./live-ingest` | — | starts one IB Gateway per connected user (their own login) and runs a collector for each |
+| `quantlab-ibgw-*` | (started by `live-manager`) | `gnzsnz/ib-gateway:10.37` | — | one user's IBKR login, read-only API, on the isolated `quantlab-live` network |
 
 Volumes: `quantlab-chdata`, `quantlab-pgdata`, `quantlab-cache`, `quantlab-data`, `quantlab-kafka`,
 `quantlab-ibgateway`.
@@ -222,15 +222,30 @@ Not a research path: today's IBKR prices, for the Market tab to watch. Provision
 display-only — Tiingo's end-of-day load is the record, and nothing a backtest reads ever sees them.
 
 ```
-Market tab ─ GET /live/stream?symbols=… ─▶ backend ─ lease ─▶ Postgres live_subscriptions
-                                              ▲                        │ polled every 2 s
-                                              │ LiveHub (one consumer)  ▼
-                                    redpanda quantlab.live.ticks ◀─ live-ingest ◀─ IB Gateway
-           GET /live/{symbol}/session ─▶ ClickHouse live.bars_1m ◀────┘ (backfill + rolled minutes)
+Market tab ─ POST /live/connection (user's own IBKR login) ─▶ backend ─ token ─▶ live-manager
+                                                                                  │ docker: one
+                                                                                  ▼ gateway per user
+Market tab ─ GET /live/stream?symbols=… ─▶ backend ─ lease ─▶ Postgres   quantlab-ibgw-<user>
+                                              ▲ LiveHub: a user's       │ their leases   │
+                                              │ own frames only         ▼                ▼
+                                    redpanda quantlab.live.ticks ◀─ that user's collector
+           GET /live/{symbol}/session ─▶ ClickHouse live.bars_1m (owner, instrument, minute)
 ```
 
+- **No shared login.** An account's market data is licensed to its holder, so every user connects
+  their own IBKR account from the Market tab. `live-manager` starts a gateway logged in as them
+  (read-only API), runs their collector, and caps running gateways at
+  `QUANTLAB_LIVE_MAX_GATEWAYS` (2; each is a ~1 GB JVM) with a queue behind it. Every frame and
+  every `live.bars_1m` row carries its owner; the hub and the session read serve a user their own
+  only. The password goes to that user's gateway and nowhere else — never a database, a log or a
+  response — so it is entered again after a disconnect or IBKR's weekly re-login. A failed login
+  is never retried automatically (IBKR locks accounts), and connection attempts are rate limited.
+  Idle gateways stop after 15 minutes.
+- **Privilege.** `live-manager` holds the Docker socket and is therefore the most privileged
+  service: nothing is published, the backend authenticates with `QUANTLAB_LIVE_MANAGER_TOKEN`,
+  and the gateways sit on `quantlab-live`, a network that reaches the manager and no database.
 - **Leases, not settings.** A stream leases a market-data line per symbol and renews it every 30 s;
-  a closed tab frees its lines two minutes later. IBKR gives ~100 lines; deployed strategies
+  a closed tab frees its lines two minutes later. Each account has ~100 lines; deployed strategies
   outrank charts (`live-ingest/src/quantlab_live/plan.py`). A symbol without a line says so —
   it is never simulated.
 - **Kept apart.** `live.*` is its own ClickHouse database with a 7-day TTL;

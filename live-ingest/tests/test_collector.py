@@ -82,7 +82,8 @@ class FakeStore:
         self.statuses = {}
         self.bars = []
 
-    def leases(self):
+    def leases(self, owner):
+        self.asked_for = owner
         return list(self.leases_now)
 
     def write_statuses(self, rows):
@@ -113,7 +114,8 @@ def lease(sid, symbol, consumer="market", minutes=0):
 
 def make(leases, max_lines=5):
     gateway, store, bus, clock = FakeGateway(), FakeStore(leases), FakeBus(), Clock()
-    return Collector(gateway, store, bus, max_lines, clock=clock), gateway, store, bus, clock
+    collector = Collector("u1", gateway, store, bus, max_lines, clock=clock)
+    return collector, gateway, store, bus, clock
 
 
 def run(coro):
@@ -170,7 +172,7 @@ def test_quotes_publish_only_when_they_change_and_minutes_roll():
     assert bars[0]["bar"]["ts"] == "2026-10-15T14:01:00.000Z"
     assert bars[0]["bar"]["high"] == 102.0 and bars[0]["bar"]["low"] == 99.0
     rolled = [row for row in store.bars if row[-1] == "rolled"]
-    assert len(rolled) == 1 and rolled[0][0] == 101  # instrument id
+    assert len(rolled) == 1 and rolled[0][:2] == ["u1", 101]  # owner, instrument id
 
 
 def test_a_new_line_is_backfilled_once_and_announced():
@@ -181,8 +183,8 @@ def test_a_new_line_is_backfilled_once_and_announced():
     assert gateway.history_calls == ["AAPL"]
     backfilled = [row for row in store.bars if row[-1] == "backfill"]
     assert len(backfilled) == 3
-    assert str(backfilled[0][2]) == "2026-10-15"  # the New York session date
-    assert bus.events("backfilled") == [{"event": "backfilled", "symbol": "AAPL.US"}]
+    assert str(backfilled[0][3]) == "2026-10-15"  # the New York session date
+    assert bus.events("backfilled") == [{"event": "backfilled", "symbol": "AAPL.US", "user": "u1"}]
 
 
 def test_backfills_are_paced_and_retried(monkeypatch):
@@ -252,3 +254,17 @@ def test_the_loop_survives_an_unreachable_gateway_and_reopens_lines():
     assert len(attempts) == 2
     assert gateway.open_lines == {"AAPL"}
     assert any(not v["connected"] for _, v in bus.sent if v["event"] == "heartbeat")
+
+
+def test_everything_a_collector_writes_belongs_to_its_user():
+    c, gateway, store, bus, clock = make([lease(1, "AAPL.US")])
+    run(c.step())
+    gateway.quotes["AAPL"] = Quote(100.0, None, None, 10, None)
+    run(c.step())
+    clock.now += 120
+    gateway.quotes["AAPL"] = Quote(101.0, None, None, 20, None)
+    run(c.step())
+
+    assert store.asked_for == "u1"  # only this user's leases
+    assert bus.sent and all(value["user"] == "u1" for _, value in bus.sent)
+    assert store.bars and all(row[0] == "u1" for row in store.bars)

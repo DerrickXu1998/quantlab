@@ -33,16 +33,18 @@ dev: ## Local dev: Docker backend + hot-reloading frontend on :5173 (AUTH_BYPASS
 down: ## Stop and remove containers, KEEPING ingested data
 	$(COMPOSE) down
 
-live-up: ## Live IBKR prices for the Market tab: IB Gateway + live-ingest + redpanda (needs IBKR_* in .env)
-	@grep -qE '^IBKR_USERNAME=.+' .env 2>/dev/null && grep -qE '^IBKR_PASSWORD=.+' .env || \
-		{ echo "Set IBKR_USERNAME and IBKR_PASSWORD in .env (paper account first; see .env.example)." >&2; exit 1; }
+live-up: ## Live IBKR prices: per-user gateway manager + redpanda (each user connects their own account in Market)
+	@grep -qE '^QUANTLAB_LIVE_MANAGER_TOKEN=.+' .env 2>/dev/null || { \
+		printf '\nQUANTLAB_LIVE_MANAGER_TOKEN=%s\n' "$$(openssl rand -hex 24)" >> .env; \
+		echo "Generated QUANTLAB_LIVE_MANAGER_TOKEN in .env (backend <-> live-manager)."; }
 	$(COMPOSE) --profile live up -d --build
 
-live-down: ## Stop the live profile's containers (gateway, collector, bus)
-	$(COMPOSE) --profile live stop ib-gateway live-ingest redpanda
+live-down: ## Stop live data: the manager, every user's gateway, and the bus
+	$(COMPOSE) --profile live stop live-manager redpanda
+	@docker ps -aq --filter label=quantlab.live=gateway | xargs -r docker rm -f
 
-live-logs: ## Follow the collector and gateway logs
-	$(COMPOSE) --profile live logs -f live-ingest ib-gateway
+live-logs: ## Follow the live manager's log (per-user gateways: docker logs quantlab-ibgw-...)
+	$(COMPOSE) --profile live logs -f live-manager
 
 destroy: ## DESTRUCTIVE: remove containers AND every volume, including ingested history
 	@echo "This permanently deletes the ClickHouse bars and the Postgres catalog."

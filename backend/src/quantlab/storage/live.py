@@ -76,16 +76,21 @@ def line_statuses(
     return {i: found.get(i, LineStatus(PENDING)) for i in instrument_ids}
 
 
-def session_bars(wh: Warehouse, instrument_id: int) -> tuple[str | None, list[dict]]:
-    """The most recent stored session's 1-minute bars, oldest first.
+def session_bars(
+    wh: Warehouse, owner_id: str, instrument_id: int
+) -> tuple[str | None, list[dict]]:
+    """The most recent stored session's 1-minute bars for one owner, oldest first.
 
-    ``(None, [])`` when the collector has stored nothing for the instrument --
-    a symbol whose backfill is still pending, or one never subscribed.
+    Only ``owner_id``'s bars: each user's live prices come from their own IBKR
+    login and are theirs alone. ``(None, [])`` when that user's collector has
+    stored nothing for the instrument -- a backfill still pending, or a symbol
+    they never watched.
     """
     with wh.bars() as client:
         latest = client.query(
-            "SELECT max(session_date), count() FROM live.bars_1m WHERE instrument_id = %(id)s",
-            parameters={"id": instrument_id},
+            "SELECT max(session_date), count() FROM live.bars_1m"
+            " WHERE owner_id = %(owner)s AND instrument_id = %(id)s",
+            parameters={"owner": owner_id, "id": instrument_id},
         ).result_rows
         if not latest or not latest[0][1]:
             return None, []
@@ -94,10 +99,11 @@ def session_bars(wh: Warehouse, instrument_id: int) -> tuple[str | None, list[di
             """
             SELECT ts, open, high, low, close, volume, kind
               FROM live.bars_1m FINAL
-             WHERE instrument_id = %(id)s AND session_date = %(session)s
+             WHERE owner_id = %(owner)s AND instrument_id = %(id)s
+               AND session_date = %(session)s
              ORDER BY ts ASC
             """,
-            parameters={"id": instrument_id, "session": session},
+            parameters={"owner": owner_id, "id": instrument_id, "session": session},
         ).result_rows
     return session.isoformat(), [bar_dict(row) for row in rows]
 

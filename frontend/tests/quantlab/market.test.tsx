@@ -29,7 +29,15 @@ import { installResizeObserver } from '../mocks/resize-observer';
 
 vi.mock('../../src/api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof apiClient>();
-  return { ...actual, getPrices: vi.fn(), listInstruments: vi.fn(), listSignals: vi.fn() };
+  return {
+    ...actual,
+    getPrices: vi.fn(),
+    listInstruments: vi.fn(),
+    listSignals: vi.fn(),
+    getLiveConnection: vi.fn(),
+    connectLive: vi.fn(),
+    disconnectLive: vi.fn(),
+  };
 });
 
 installResizeObserver();
@@ -74,6 +82,13 @@ beforeEach(() => {
   clearBarCache();
   resetLightweightChartsMock();
   vi.mocked(apiClient.listInstruments).mockResolvedValue({ total: instruments.length, items: instruments });
+  // Live mode needs the user's own IBKR login; most live tests start connected.
+  vi.mocked(apiClient.getLiveConnection).mockResolvedValue({
+    state: 'connected',
+    ib_username: 'my-ibkr',
+    trading_mode: 'paper',
+  });
+  vi.mocked(apiClient.disconnectLive).mockResolvedValue({ state: 'none' });
   vi.mocked(apiClient.getPrices).mockResolvedValue({ total: BARS.length, items: BARS });
   vi.mocked(apiClient.listSignals).mockResolvedValue({
     total: 2,
@@ -498,6 +513,89 @@ describe('Market view', () => {
       const card = await screen.findByRole('region', { name: /AAPL\.US/ });
       await vi.waitFor(() => expect(within(card).getByTestId('simulated-tag')).toBeInTheDocument());
       expect(within(card).getByTestId('fact-source')).toHaveTextContent(/FAKE feed/);
+    });
+
+    it('asks for the user\'s own IBKR login before showing live charts', async () => {
+      vi.mocked(apiClient.getLiveConnection).mockResolvedValue({ state: 'none' });
+      vi.mocked(apiClient.connectLive).mockResolvedValue({
+        state: 'logging_in',
+        detail: 'Approve the IB Key notification on your phone to finish logging in.',
+        ib_username: 'my-ibkr',
+        trading_mode: 'live',
+      });
+      window.location.hash = '#/market?symbols=AAPL.US&data=live';
+      const { feed, streams } = fakeFeed();
+      const user = userEvent.setup();
+      renderLive(feed);
+
+      const form = await screen.findByRole('form', { name: /connect your ibkr account/i });
+      // No charts, and no stream, until the user's own gateway is up.
+      expect(screen.queryByTestId('market-grid')).toBeNull();
+      expect(within(form).getByTestId('live-conn-terms')).toHaveTextContent(/not stored/i);
+
+      await user.type(within(form).getByLabelText('IBKR username'), 'my-ibkr');
+      const password = within(form).getByLabelText('IBKR password');
+      await user.type(password, 'hunter2');
+      await user.selectOptions(within(form).getByLabelText('Account'), 'live');
+      await user.click(within(form).getByRole('button', { name: 'Connect' }));
+
+      expect(apiClient.connectLive).toHaveBeenCalledWith({
+        username: 'my-ibkr',
+        password: 'hunter2',
+        trading_mode: 'live',
+      });
+      // Waiting on the phone, with a way out.
+      const pending = await screen.findByTestId('live-conn-pending');
+      expect(pending).toHaveAttribute('data-state', 'logging_in');
+      expect(pending).toHaveTextContent(/approve the login on your phone/i);
+      expect(document.body.textContent).not.toContain('hunter2');
+      expect(streams).toHaveLength(0);
+    });
+
+    it('says where the user is in the queue when every gateway slot is taken', async () => {
+      vi.mocked(apiClient.getLiveConnection).mockResolvedValue({
+        state: 'queued',
+        queue_position: 2,
+        ib_username: 'my-ibkr',
+        trading_mode: 'paper',
+      });
+      window.location.hash = '#/market?symbols=AAPL.US&data=live';
+      renderLive(fakeFeed().feed);
+      const pending = await screen.findByTestId('live-conn-pending');
+      expect(pending).toHaveTextContent(/#2 in line/);
+      await userEvent.setup().click(within(pending).getByRole('button', { name: 'Cancel' }));
+      expect(apiClient.disconnectLive).toHaveBeenCalled();
+    });
+
+    it('shows why a login failed and lets the user try again', async () => {
+      vi.mocked(apiClient.getLiveConnection).mockResolvedValue({
+        state: 'failed',
+        detail: 'IBKR rejected the username or password. Connect again to retry.',
+        ib_username: 'my-ibkr',
+        trading_mode: 'paper',
+      });
+      window.location.hash = '#/market?symbols=AAPL.US&data=live';
+      renderLive(fakeFeed().feed);
+      expect(await screen.findByTestId('live-conn-failed')).toHaveTextContent(/rejected/);
+      // The username is remembered; the password never is.
+      expect(screen.getByLabelText('IBKR username')).toHaveValue('my-ibkr');
+      expect(screen.getByLabelText('IBKR password')).toHaveValue('');
+    });
+
+    it('explains when this server has no live data set up', async () => {
+      vi.mocked(apiClient.getLiveConnection).mockRejectedValue(new apiClient.ApiError(503, 'not configured'));
+      window.location.hash = '#/market?symbols=AAPL.US&data=live';
+      renderLive(fakeFeed().feed);
+      expect(await screen.findByTestId('live-conn-error')).toHaveTextContent(/not set up on this server/i);
+    });
+
+    it('names the connected account and can disconnect it', async () => {
+      window.location.hash = '#/market?symbols=AAPL.US&data=live';
+      renderLive(fakeFeed().feed);
+      const bar = await screen.findByTestId('live-conn-bar');
+      expect(bar).toHaveTextContent('my-ibkr');
+      await userEvent.setup().click(within(bar).getByRole('button', { name: 'Disconnect' }));
+      expect(apiClient.disconnectLive).toHaveBeenCalled();
     });
 
     it('opens an old simulated-intraday link in live mode', async () => {
