@@ -42,6 +42,13 @@ export type LiveSession = components['schemas']['LiveSession'];
 export type LiveLineStatus = components['schemas']['LiveLineStatus'];
 export type LiveEvent = components['schemas']['LiveEvent'];
 export type LiveConnection = components['schemas']['LiveConnection'];
+export type UserSettings = components['schemas']['UserSettings'];
+export type UserSettingsDocument = components['schemas']['UserSettingsDocument'];
+
+/** A JSON merge patch over UserSettings: nested and partial; null resets a key. */
+export type UserSettingsPatch = {
+  [Section in keyof UserSettings]?: { [Key in keyof UserSettings[Section]]?: UserSettings[Section][Key] | null } | null;
+};
 export type LiveConnectRequest = components['schemas']['LiveConnectRequest'];
 
 export type SignalQuery = NonNullable<paths['/signals']['get']['parameters']['query']>;
@@ -139,6 +146,31 @@ export function listInstruments(): Promise<InstrumentList> {
 export function getPrices(symbol: string, start?: string, end?: string): Promise<PriceBarList> {
   const query: PriceQuery = { start_date: start, end_date: end };
   return request<PriceBarList>(`/instruments/${encodeURIComponent(symbol)}/prices`, query);
+}
+
+/** Everything the user configures for themselves, kept with their account. */
+export function getUserSettings(): Promise<UserSettingsDocument> {
+  return request<UserSettingsDocument>('/me/settings');
+}
+
+export function updateUserSettings(patch: UserSettingsPatch): Promise<UserSettingsDocument> {
+  return send<UserSettingsDocument>('/me/settings', 'PATCH', patch);
+}
+
+/**
+ * Upload the user's IBKR login: the username and account type are remembered
+ * in their settings; the password goes to their own gateway and is stored
+ * nowhere.
+ */
+export function putIbkrCredentials(body: LiveConnectRequest): Promise<UserSettingsDocument> {
+  return send<UserSettingsDocument>('/me/settings/ibkr/credentials', 'PUT', body);
+}
+
+export function deleteIbkrCredentials(forget = false): Promise<UserSettingsDocument> {
+  return send<UserSettingsDocument>(
+    `/me/settings/ibkr/credentials${forget ? '?forget=true' : ''}`,
+    'DELETE',
+  );
 }
 
 /** This user's own IBKR connection (live prices come from their login only). */

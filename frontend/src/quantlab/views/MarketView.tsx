@@ -6,6 +6,7 @@ import { Button } from '../../components/ui/button';
 import { ButtonGroup } from '../../components/ui/layout';
 import { cn } from '../../lib/utils';
 import { EmptyState } from '../chrome/EmptyState';
+import { useSettings } from '../../settings/SettingsProvider';
 import { LiveConnectPanel } from '../market/LiveConnectPanel';
 import { MarketChartCard } from '../market/MarketChartCard';
 import { useLiveConnection } from '../market/useLiveConnection';
@@ -40,7 +41,12 @@ function useMarketSettings() {
   // `sim` is the old simulated-intraday mode, which live data replaced: an old
   // link opens on the real thing rather than on history.
   const data = params.get('data');
-  const mode: DataMode = data === 'live' || data === 'sim' ? 'live' : 'historical';
+  // A link that says wins; otherwise the user's own default (settings).
+  const settings = useSettings();
+  const preferred =
+    settings?.load.status === 'ready' ? settings.load.document.settings.market.default_data : 'historical';
+  const mode: DataMode =
+    data === 'live' || data === 'sim' ? 'live' : data === 'historical' ? 'historical' : preferred;
   const interval = (INTERVALS.find((i) => i.id === params.get('bar'))?.id ?? '1D') as Interval;
   const range = (RANGES.find((r) => r === params.get('range')) ?? '1Y') as RangeId;
   const rawStudies = params.get('studies');
@@ -69,7 +75,9 @@ function useMarketSettings() {
     interval,
     range,
     studies,
-    setMode: (value: DataMode) => update('data', value === 'live' ? 'live' : null),
+    // Explicit either way, so a shared link opens on what the sender saw
+    // whatever the recipient's own default is.
+    setMode: (value: DataMode) => update('data', value),
     setInterval: (value: Interval) => update('bar', value === '1D' ? null : value),
     setRange: (value: RangeId) => update('range', value === '1Y' ? null : value),
     toggleStudy: (id: StudyId) => {

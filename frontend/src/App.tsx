@@ -4,6 +4,7 @@ import { AuthGate } from './auth/AuthGate';
 import { AuthProvider } from './auth/AuthProvider';
 import { AppShell } from './chrome/AppShell';
 import { RunsProvider } from './runs/RunsContext';
+import { SettingsProvider } from './settings/SettingsProvider';
 
 /**
  * The runs store is mounted inside the gate on purpose: it fetches the model
@@ -24,9 +25,11 @@ export default function App() {
       <DatasetProvider>
         <UniversesProvider>
           <AuthGate>
-            <RunsProvider>
-              <AppShell />
-            </RunsProvider>
+            <SettingsProvider>
+              <RunsProvider>
+                <AppShell />
+              </RunsProvider>
+            </SettingsProvider>
           </AuthGate>
         </UniversesProvider>
       </DatasetProvider>

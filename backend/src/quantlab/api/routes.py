@@ -18,9 +18,11 @@ from typing import Annotated, Literal, get_args
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from quantlab import auth as auth_lib
+from quantlab import settings as user_settings_model
 from quantlab.api import schemas, security
 from quantlab.api.security import CurrentUser, owner_scope
 from quantlab.execution import adjustments, minutes
@@ -1540,9 +1542,24 @@ def get_live_connection(user: CurrentUser) -> dict:
 def connect_live(
     request: Request, body: schemas.LiveConnectRequest, user: CurrentUser
 ) -> dict:
+    return _connect_ibkr(request, user, body)
+
+
+def _connect_ibkr(request: Request, user, body: schemas.LiveConnectRequest) -> dict:
+    """Remember the login (never the password) and hand it to the user's gateway.
+
+    The one path for both POST /live/connection and the settings page's
+    credential upload, so the rate limit and the "password goes nowhere but
+    the gateway" rule cannot drift apart.
+    """
     if not live_manager.configured():
         raise HTTPException(status_code=503, detail="live connections are not configured")
     _note_connect_attempt(request, user.id)
+    _save_settings(
+        request,
+        user,
+        {"ibkr": {"username": body.username, "trading_mode": body.trading_mode}},
+    )
     return _manager_call(
         live_manager.connect,
         user.id,
@@ -1555,6 +1572,119 @@ def connect_live(
 @router.delete("/live/connection", tags=["live"], operation_id="disconnectLive")
 def disconnect_live(user: CurrentUser) -> dict:
     return _manager_call(live_manager.disconnect, user.id)
+
+
+# --- User settings --------------------------------------------------------------
+#
+# Everything a person configures for themselves, kept with their account:
+# theme, Market defaults and saved lists, and the IBKR login for live prices.
+# One document per user (quantlab.settings validates it); changes are JSON
+# merge patches. The IBKR password is uploaded through its own endpoint and
+# goes to the user's gateway only -- the document never holds it.
+
+
+def _settings_store(request: Request):
+    return request.app.state.user_settings
+
+
+def _load_settings(request: Request, user) -> tuple[dict, str | None]:
+    stored, updated_at = _settings_store(request).get(user.id)
+    return user_settings_model.load(stored), updated_at
+
+
+def _save_settings(request: Request, user, patch: dict) -> tuple[dict, str]:
+    current, _ = _load_settings(request, user)
+    try:
+        merged = user_settings_model.apply(current, patch)
+    except ValidationError as exc:
+        detail = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
+            for error in exc.errors()
+        )
+        raise HTTPException(status_code=422, detail=detail) from None
+    return merged, _settings_store(request).put(user.id, merged)
+
+
+def _has_password_key(value) -> bool:
+    if isinstance(value, dict):
+        return any("password" in str(k).lower() or _has_password_key(v) for k, v in value.items())
+    if isinstance(value, list):
+        return any(_has_password_key(v) for v in value)
+    return False
+
+
+def _ibkr_connection(user) -> dict | None:
+    """The user's live connection, or None when live data is not set up here."""
+    if not live_manager.configured():
+        return None
+    try:
+        return live_manager.status(user.id)
+    except live_manager.ManagerUnavailable:
+        return None
+
+
+def _settings_document(user, settings: dict, updated_at: str | None) -> dict:
+    return {
+        "account": {
+            "id": user.id,
+            # Single-user mode's built-in account has no email to show.
+            "email": None if user.id == auth_lib.LOCAL_USER.id else user.email,
+            "auth_required": auth_lib.auth_required(),
+        },
+        "settings": settings,
+        "updated_at": updated_at,
+        "ibkr_connection": _ibkr_connection(user),
+    }
+
+
+@router.get("/me/settings", tags=["auth"], operation_id="getUserSettings")
+def get_user_settings(request: Request, user: CurrentUser) -> dict:
+    settings, updated_at = _load_settings(request, user)
+    return _settings_document(user, settings, updated_at)
+
+
+@router.patch("/me/settings", tags=["auth"], operation_id="updateUserSettings")
+def update_user_settings(request: Request, patch: dict, user: CurrentUser) -> dict:
+    if _has_password_key(patch):
+        # The one thing this document must never hold. Uploading an IBKR
+        # password has its own endpoint, which stores nothing.
+        raise HTTPException(
+            status_code=422,
+            detail="settings never hold a password; use PUT /me/settings/ibkr/credentials",
+        )
+    settings, updated_at = _save_settings(request, user, patch)
+    return _settings_document(user, settings, updated_at)
+
+
+@router.put(
+    "/me/settings/ibkr/credentials",
+    tags=["auth"],
+    operation_id="putIbkrCredentials",
+    status_code=202,
+)
+def put_ibkr_credentials(
+    request: Request, body: schemas.LiveConnectRequest, user: CurrentUser
+) -> dict:
+    connection = _connect_ibkr(request, user, body)
+    settings, updated_at = _load_settings(request, user)
+    document = _settings_document(user, settings, updated_at)
+    document["ibkr_connection"] = connection
+    return document
+
+
+@router.delete(
+    "/me/settings/ibkr/credentials", tags=["auth"], operation_id="deleteIbkrCredentials"
+)
+def delete_ibkr_credentials(request: Request, user: CurrentUser, forget: bool = False) -> dict:
+    """Disconnect the user's gateway (its login goes with it); ``forget`` also
+    clears the remembered IBKR username."""
+    if live_manager.configured():
+        _manager_call(live_manager.disconnect, user.id)
+    if forget:
+        settings, updated_at = _save_settings(request, user, {"ibkr": None})
+    else:
+        settings, updated_at = _load_settings(request, user)
+    return _settings_document(user, settings, updated_at)
 
 
 def _utc_now_iso() -> str:
