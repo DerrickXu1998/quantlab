@@ -145,7 +145,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions (expires_at);
 -- IBKR username and account type). JSON, validated by quantlab.settings on
 -- the way in and out, like strategies. No foreign key: the single-user mode's
 -- built-in account has no users row. Never holds a password -- an IBKR
--- password goes to the user's own gateway and is stored nowhere.
+-- password goes to the user's own gateway, which keeps it until they disconnect.
 CREATE TABLE IF NOT EXISTS user_settings (
     user_id    TEXT PRIMARY KEY,
     settings   TEXT NOT NULL,

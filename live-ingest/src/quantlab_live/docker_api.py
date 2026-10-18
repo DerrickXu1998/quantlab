@@ -55,7 +55,9 @@ class DockerGateways:
             mem_limit=self._memory,
             # Never restarted by Docker: a login that failed must not be
             # retried behind the user's back -- IBKR locks accounts that way.
-            # IBC restarts the gateway process inside the container daily.
+            # The manager restarts gateways that stopped after connecting
+            # (DockerGateways.restart); IBC restarts the gateway process inside
+            # the container daily.
             restart_policy={"Name": "no"},
             labels={
                 LABEL: "gateway",
@@ -69,16 +71,26 @@ class DockerGateways:
                 "TRADING_MODE": trading_mode,
                 # Nothing in quantlab can place an order through this login.
                 "READ_ONLY_API": "yes",
-                # An unapproved IB Key prompt ends the session instead of
-                # retrying: the user reconnects when they are at their phone.
-                "TWOFA_TIMEOUT_ACTION": "exit",
-                "RELOGIN_AFTER_TWOFA_TIMEOUT": "no",
+                # Always on: an unapproved IB Key prompt (IBKR's weekly forced
+                # re-login, for live accounts) is asked again rather than
+                # ending the session, until the user approves it. That is not
+                # a password retry -- a rejected password is still final.
+                "TWOFA_TIMEOUT_ACTION": "restart",
+                "RELOGIN_AFTER_TWOFA_TIMEOUT": "yes",
                 "AUTO_RESTART_TIME": "11:59 PM",
                 "TIME_ZONE": "America/New_York",
                 "JAVA_HEAP_SIZE": "768",
             },
         )
         return name
+
+    def restart(self, name: str) -> None:
+        """Start a stopped gateway again: the same container, so the same login.
+
+        The manager, not Docker, decides when: Docker's own restart policy
+        would also restart a gateway that stopped on a rejected password.
+        """
+        self._client.containers.get(name).start()
 
     def remove(self, name: str) -> None:
         import docker.errors

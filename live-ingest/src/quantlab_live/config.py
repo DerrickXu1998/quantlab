@@ -49,6 +49,9 @@ class Settings:
     max_gateways: int
     max_lines: int
     ib_client_id: int
+    #: Stop a gateway nobody has used for this long; None keeps it on until
+    #: its user disconnects (the default).
+    idle_seconds: float | None
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -67,4 +70,10 @@ class Settings:
             # Per account: IBKR's default is 100 lines; leave headroom.
             max_lines=int(env.get("QUANTLAB_LIVE_MAX_LINES", "90")),
             ib_client_id=int(env.get("IBKR_CLIENT_ID", "17")),
+            # 0 or unset: always on.
+            idle_seconds=(
+                float(env["QUANTLAB_LIVE_IDLE_MINUTES"]) * 60
+                if float(env.get("QUANTLAB_LIVE_IDLE_MINUTES") or 0) > 0
+                else None
+            ),
         )

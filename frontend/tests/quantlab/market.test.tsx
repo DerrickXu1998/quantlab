@@ -531,7 +531,9 @@ describe('Market view', () => {
       const form = await screen.findByRole('form', { name: /connect your ibkr account/i });
       // No charts, and no stream, until the user's own gateway is up.
       expect(screen.queryByTestId('market-grid')).toBeNull();
-      expect(within(form).getByTestId('live-conn-terms')).toHaveTextContent(/not stored/i);
+      const terms = within(form).getByTestId('live-conn-terms');
+      expect(terms).toHaveTextContent(/never saved in QuantLab's database/i);
+      expect(terms).toHaveTextContent(/until you disconnect/i);
 
       await user.type(within(form).getByLabelText('IBKR username'), 'my-ibkr');
       const password = within(form).getByLabelText('IBKR password');

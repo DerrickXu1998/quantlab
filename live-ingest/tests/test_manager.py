@@ -26,6 +26,7 @@ class FakeGateways:
         self.containers: dict[str, GatewayInfo] = {}
         self.output: dict[str, str] = {}
         self.removed: list[str] = []
+        self.restarted: list[str] = []
 
     def start(self, owner, username, password, mode):
         name = gateway_name(owner)
@@ -36,6 +37,13 @@ class FakeGateways:
     def remove(self, name):
         self.removed.append(name)
         self.containers.pop(name, None)
+
+    def restart(self, name):
+        self.restarted.append(name)
+        info = self.containers[name]
+        self.containers[name] = GatewayInfo(
+            info.name, info.owner, info.ib_username, info.trading_mode, "running"
+        )
 
     def info(self, name):
         return self.containers.get(name)
@@ -83,6 +91,19 @@ def world():
         collectors,
         clock,
     )
+
+
+def world_with(**manager_kwargs):
+    clock = Clock()
+    gateways = FakeGateways()
+    collectors: dict[str, FakeCollector] = {}
+
+    def make_collector(owner, host):
+        collectors[owner] = FakeCollector(owner, host, clock)
+        return collectors[owner]
+
+    manager = Manager(gateways, make_collector, max_gateways=2, clock=clock, **manager_kwargs)
+    return manager, gateways, collectors, clock
 
 
 def run(coro):
@@ -209,15 +230,30 @@ def test_a_login_that_never_completes_times_out(world):
     assert scenario(body)["state"] == "failed"
 
 
-def test_an_idle_gateway_is_stopped_and_frees_its_slot(world):
+def test_a_connected_gateway_stays_on_without_anyone_watching(world):
     m, gateways, collectors, clock = world
+
+    async def body():
+        await m.connect("a", "ib-a", "pw", "paper")
+        collectors["a"].is_connected = True
+        await m.tick()
+        clock.now += 7 * 24 * 3600  # a week of no leases and no polls
+        await m.tick()
+        return m.view("a")
+
+    assert scenario(body)["state"] == "connected"
+    assert gateways.removed == []
+
+
+def test_an_idle_gateway_is_stopped_when_an_idle_limit_is_set():
+    m, gateways, collectors, clock = world_with(idle_seconds=15 * 60)
 
     async def body():
         await m.connect("a", "ib-a", "pw", "paper")
         await asyncio.sleep(0)  # let the collector task start
         collectors["a"].is_connected = True
         await m.tick()
-        clock.now += manager_mod.IDLE_SECONDS + 1
+        clock.now += 15 * 60 + 1
         await m.tick()
         await asyncio.sleep(0)
 
@@ -238,17 +274,104 @@ def test_reconnecting_with_the_same_login_does_not_log_in_twice(world):
     assert len(gateways.started) == 1
 
 
-def test_a_restarted_manager_adopts_running_gateways(world):
+def test_a_restarted_manager_adopts_gateways_and_restarts_stopped_ones(world):
     m, gateways, collectors, clock = world
-    name = gateway_name("a")
-    gateways.containers[name] = GatewayInfo(name, "a", "ib-a", "paper", "running")
-    gateways.containers["dead"] = GatewayInfo("dead", "b", "ib-b", "paper", "exited")
+    running, stopped, rejected = gateway_name("a"), gateway_name("b"), gateway_name("c")
+    gateways.containers[running] = GatewayInfo(running, "a", "ib-a", "paper", "running")
+    # The machine rebooted: this one was fine, it just stopped.
+    gateways.containers[stopped] = GatewayInfo(stopped, "b", "ib-b", "paper", "exited")
+    # This one stopped on a rejected password: never started again.
+    gateways.containers[rejected] = GatewayInfo(rejected, "c", "ib-c", "paper", "exited")
+    gateways.output[rejected] = "Login failed: invalid username or password"
 
     async def body():
         await m.adopt()
+        return m.view("a"), m.view("b")
+
+    a, b = scenario(body)
+    assert a["state"] == b["state"] == "logging_in"
+    assert gateways.restarted == [stopped]
+    assert rejected in gateways.removed and "c" not in m.sessions
+    # Adopted gateways were connected before: no first-login timeout for them.
+    assert m.sessions["b"].was_connected
+
+
+def test_a_connected_gateway_that_stops_is_started_again(world):
+    m, gateways, collectors, clock = world
+
+    async def body():
+        await m.connect("a", "ib-a", "pw", "paper")
+        collectors["a"].is_connected = True
+        await m.tick()
+        collectors["a"].is_connected = False
+        gateways.exit("a")  # e.g. an out-of-memory kill
+        await m.tick()
+        restarting = m.view("a")
+        collectors["a"].is_connected = True
+        await m.tick()
+        return restarting, m.view("a")
+
+    restarting, back = scenario(body)
+    assert restarting["state"] == "logging_in"
+    assert gateways.restarted == [gateway_name("a")]
+    assert len(gateways.started) == 1  # same container, same login: no new one
+    assert back["state"] == "connected"
+
+
+def test_a_gateway_that_keeps_stopping_is_given_up_on(world):
+    m, gateways, collectors, clock = world
+
+    async def body():
+        await m.connect("a", "ib-a", "pw", "paper")
+        collectors["a"].is_connected = True
+        await m.tick()
+        collectors["a"].is_connected = False
+        for _ in range(manager_mod.MAX_RESTARTS_PER_HOUR + 1):
+            gateways.exit("a")
+            clock.now += 60
+            await m.tick()
         return m.view("a")
 
     view = scenario(body)
-    assert view["state"] == "logging_in" and view["ib_username"] == "ib-a"
-    assert "dead" in gateways.removed
-    assert "b" not in m.sessions
+    assert view["state"] == "failed"
+    assert len(gateways.restarted) == manager_mod.MAX_RESTARTS_PER_HOUR
+
+
+def test_a_gateway_that_stopped_on_a_rejected_login_is_not_restarted(world):
+    m, gateways, collectors, clock = world
+
+    async def body():
+        await m.connect("a", "ib-a", "pw", "paper")
+        collectors["a"].is_connected = True
+        await m.tick()
+        collectors["a"].is_connected = False
+        gateways.output[gateway_name("a")] = "IBC: Login failed"
+        gateways.exit("a")
+        await m.tick()
+        return m.view("a")
+
+    view = scenario(body)
+    assert view["state"] == "failed" and "rejected" in view["detail"]
+    assert gateways.restarted == []
+
+
+def test_the_weekly_re_login_waits_for_approval_instead_of_failing(world):
+    m, gateways, collectors, clock = world
+
+    async def body():
+        await m.connect("a", "ib-a", "pw", "live")
+        collectors["a"].is_connected = True
+        await m.tick()
+        # IBKR logs the session out; the gateway asks for IB Key again.
+        collectors["a"].is_connected = False
+        gateways.output[gateway_name("a")] = "Second Factor Authentication initiated"
+        clock.now += manager_mod.LOG_POLL_SECONDS
+        await m.tick()
+        clock.now += manager_mod.LOGIN_TIMEOUT_SECONDS * 10  # nobody at the phone for an hour
+        await m.tick()
+        return m.view("a")
+
+    view = scenario(body)
+    assert view["state"] == "logging_in"
+    assert view["detail"] == manager_mod.RESUME_2FA
+    assert gateways.removed == []

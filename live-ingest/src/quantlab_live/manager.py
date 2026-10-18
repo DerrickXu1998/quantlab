@@ -6,21 +6,31 @@ a gateway logged in as them, and a collector streaming their own leases.
 
 Lifecycle of a session::
 
-    queued ──▶ starting ──▶ logging_in ──▶ connected
-       │           │             │              │
-       └───────────┴──── failed ◀┘   (idle, disconnect) ──▶ gone
+    queued ──▶ starting ──▶ logging_in ──▶ connected ◀──┐
+       │           │             │              │        │ (stopped, IBKR's
+       └───────────┴──── failed ◀┘              └────────┘  weekly re-login)
+                                         disconnect ──▶ gone
 
-- **Capacity.** At most ``max_gateways`` run at once (each is a ~1 GB JVM);
-  the rest wait in a FIFO queue. A queued password is held in this process's
-  memory only, and dropped once handed to a gateway or once the user stops
-  asking (``QUEUE_IDLE_SECONDS``).
+- **Always on.** Once connected, a gateway stays up until its user
+  disconnects. A gateway that stops (a crash, an out-of-memory kill, the
+  machine restarting) is started again -- the same container, so the same
+  login -- up to ``MAX_RESTARTS_PER_HOUR`` times. IBKR's weekly forced
+  re-login waits for the user's IB Key approval rather than ending the
+  session. ``idle_seconds`` (QUANTLAB_LIVE_IDLE_MINUTES) can stop unused
+  gateways instead; it is off by default.
+- **Capacity.** At most ``max_gateways`` run at once (each is a Java app,
+  ~0.2 GB before login, measured); the rest wait in a FIFO queue -- and since
+  gateways no longer stop on their own, a queued user waits for a disconnect.
+  A queued password is held in this process's memory only, and dropped once
+  handed to a gateway or once the user stops asking (``QUEUE_IDLE_SECONDS``).
 - **Login.** Progress is read from the gateway's own output and from whether
-  its API port answers. A failed login is final: the container is removed
+  its API port answers. A rejected login is final: the container is removed
   and nothing retries it, because IBKR locks accounts after repeated failures.
-- **Idle.** A gateway nobody has used for ``IDLE_SECONDS`` (no leases, no
-  status polls) is stopped, freeing its slot.
-- **Restarts.** On start the manager re-adopts labelled gateways still running,
-  so redeploying it does not log everybody out.
+  The same goes for a first login that never completes: restarts are only
+  for gateways that have been connected.
+- **Restarts of this manager.** On start it re-adopts labelled gateways,
+  starting any that stopped (unless they stopped on a rejected login), so
+  redeploying it or rebooting the machine does not log everybody out.
 """
 
 from __future__ import annotations
@@ -36,10 +46,13 @@ log = logging.getLogger(__name__)
 
 TICK_SECONDS = 2.0
 LOGIN_TIMEOUT_SECONDS = 5 * 60
-IDLE_SECONDS = 15 * 60
 QUEUE_IDLE_SECONDS = 2 * 60
 #: How often a logging-in gateway's output is read for progress.
 LOG_POLL_SECONDS = 4.0
+#: A gateway that keeps stopping is broken, not unlucky: stop restarting it.
+MAX_RESTARTS_PER_HOUR = 3
+
+RUNNING = ("created", "running", "restarting")
 
 #: Lowercased phrases in IB Gateway / IBC output. Matched loosely: the exact
 #: wording varies across gateway versions.
@@ -54,6 +67,9 @@ TWOFA = ("second factor", "two factor", "ib key", "2fa")
 
 LOGGING_IN = "Logging in to IBKR. If an IB Key notification appears on your phone, approve it."
 APPROVE_2FA = "Approve the IB Key notification on your phone to finish logging in."
+RESUME_2FA = "IBKR asked to log in again. Approve the IB Key notification on your phone to resume."
+RECONNECTING = "Reconnecting to IBKR."
+RESTARTED = "Your gateway stopped and is starting again."
 
 
 @dataclass
@@ -72,6 +88,14 @@ class Session:
     stop: asyncio.Event | None = None
     started_at: float = 0.0
     last_log_check: float = 0.0
+    #: Has this login ever completed? Only then are stops restarted.
+    was_connected: bool = False
+    restarts: list[float] = field(default_factory=list)
+
+
+def login_rejected(output: str) -> bool:
+    lowered = output.lower()
+    return any(phrase in lowered for phrase in FAILED_LOGIN)
 
 
 class Manager:
@@ -81,12 +105,18 @@ class Manager:
         make_collector: Callable[[str, str], Any],
         max_gateways: int = 2,
         clock: Callable[[], float] = time.time,
+        idle_seconds: float | None = None,
     ) -> None:
-        """``make_collector(owner, gateway_host)`` builds a user's collector."""
+        """``make_collector(owner, gateway_host)`` builds a user's collector.
+
+        ``idle_seconds``: stop a connected gateway nobody has used for this
+        long. None (the default) keeps gateways on until their user disconnects.
+        """
         self.gateways = gateways
         self.make_collector = make_collector
         self.max_gateways = max_gateways
         self.clock = clock
+        self.idle_seconds = idle_seconds
         self.sessions: dict[str, Session] = {}
         self.queue: list[str] = []
         self._lock = asyncio.Lock()
@@ -145,13 +175,25 @@ class Manager:
     # --- the loop -------------------------------------------------------------
 
     async def adopt(self) -> None:
-        """Take back gateways a previous manager left running."""
+        """Take back the gateways a previous manager (or machine) left behind.
+
+        Running ones are adopted as they are; stopped ones are started again --
+        same container, same login -- unless they stopped on a rejected login.
+        """
         for info in await asyncio.to_thread(self.gateways.running):
             if not info.owner or info.owner in self.sessions:
                 continue
-            if info.status != "running":
-                await asyncio.to_thread(self.gateways.remove, info.name)
-                continue
+            if info.status not in RUNNING:
+                output = await asyncio.to_thread(self.gateways.logs, info.name)
+                if login_rejected(output):
+                    await asyncio.to_thread(self.gateways.remove, info.name)
+                    continue
+                try:
+                    await asyncio.to_thread(self.gateways.restart, info.name)
+                except Exception:
+                    log.exception("restarting a stopped gateway failed; removing it")
+                    await asyncio.to_thread(self.gateways.remove, info.name)
+                    continue
             now = self.clock()
             session = Session(
                 owner=info.owner,
@@ -160,9 +202,11 @@ class Manager:
                 state="logging_in",
                 requested_at=now,
                 last_seen=now,
-                detail=LOGGING_IN,
+                detail=RECONNECTING,
                 gateway=info.name,
                 started_at=now,
+                # It was this user's live gateway before: keep it on.
+                was_connected=True,
             )
             self.sessions[info.owner] = session
             self._start_collector(session)
@@ -238,31 +282,64 @@ class Manager:
             if session.state != "connected":
                 log.info("a user's gateway is connected")
             session.state, session.detail = "connected", ""
-            last_used = max(session.last_seen, session.collector.last_lease_at)
-            if now - last_used > IDLE_SECONDS:
-                log.info("stopping an idle gateway")
-                await self._end(session.owner)
+            session.was_connected = True
+            if self.idle_seconds is not None:
+                last_used = max(session.last_seen, session.collector.last_lease_at)
+                if now - last_used > self.idle_seconds:
+                    log.info("stopping an idle gateway")
+                    await self._end(session.owner)
             return
 
         info = await asyncio.to_thread(self.gateways.info, session.gateway)
-        if info is None or info.status not in ("created", "running", "restarting"):
-            await self._fail(session, self._exit_reason(session))
+        if info is None:
+            await self._fail(session, "The gateway was removed.")
+            return
+        if info.status not in RUNNING:
+            await self._stopped(session, now)
             return
         if now - session.last_log_check >= LOG_POLL_SECONDS:
             session.last_log_check = now
-            output = (await asyncio.to_thread(self.gateways.logs, session.gateway)).lower()
-            if any(phrase in output for phrase in FAILED_LOGIN):
+            output = await asyncio.to_thread(self.gateways.logs, session.gateway)
+            if login_rejected(output):
                 await self._fail(session, "IBKR rejected the username or password.")
                 return
-            if any(phrase in output for phrase in TWOFA):
-                session.detail = APPROVE_2FA
+            if any(phrase in output.lower() for phrase in TWOFA):
+                session.detail = RESUME_2FA if session.was_connected else APPROVE_2FA
         if session.state == "connected":
             # Was connected, lost it: IBC's daily restart, or IBKR's weekly
-            # re-authentication, which needs the user again.
-            session.state, session.detail = "logging_in", "Reconnecting to IBKR."
+            # re-login (which may need the user's IB Key approval).
+            session.state, session.detail = "logging_in", RECONNECTING
             session.started_at = now
-        if now - session.started_at > LOGIN_TIMEOUT_SECONDS:
+        if not session.was_connected and now - session.started_at > LOGIN_TIMEOUT_SECONDS:
+            # Only a first login gives up; a gateway that has been connected
+            # waits for IBKR (or the user's approval) as long as it takes.
             await self._fail(session, "Login did not complete within 5 minutes.")
+
+    async def _stopped(self, session: Session, now: float) -> None:
+        """The gateway's container stopped. Start it again if that is safe."""
+        output = await asyncio.to_thread(self.gateways.logs, session.gateway)
+        if login_rejected(output):
+            await self._fail(session, "IBKR rejected the username or password.")
+            return
+        if not session.was_connected:
+            # A first login that ended without connecting is not retried.
+            await self._fail(session, self._exit_reason(session))
+            return
+        session.restarts = [t for t in session.restarts if now - t < 3600]
+        if len(session.restarts) >= MAX_RESTARTS_PER_HOUR:
+            await self._fail(
+                session, f"The gateway stopped {MAX_RESTARTS_PER_HOUR} times within an hour."
+            )
+            return
+        try:
+            await asyncio.to_thread(self.gateways.restart, session.gateway)
+        except Exception as exc:
+            await self._fail(session, f"Could not restart the gateway: {type(exc).__name__}.")
+            return
+        session.restarts.append(now)
+        session.state, session.detail = "logging_in", RESTARTED
+        session.started_at = now
+        log.warning("restarted a stopped gateway")
 
     def _exit_reason(self, session: Session) -> str:
         if session.detail == APPROVE_2FA:
