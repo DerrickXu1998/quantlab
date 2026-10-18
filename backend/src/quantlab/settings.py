@@ -6,9 +6,10 @@ mode and saved ticker lists, and the IBKR login (username and account type)
 they use for live prices.
 
 What is deliberately *not* here: the IBKR password. Live prices come from the
-user's own IBKR account, and the password is handed to their own gateway and
-stored nowhere (see quantlab.streaming.live_manager); the settings only
-remember which login to offer next time.
+user's own IBKR account, and the password is handed to their own gateway,
+which keeps it until they disconnect (see quantlab.streaming.live_manager);
+quantlab's databases never hold it. The settings only remember which login
+to offer next time.
 
 Changes are JSON merge patches (RFC 7386): objects merge, anything else --
 including lists -- replaces, and ``null`` puts a key back to its default.

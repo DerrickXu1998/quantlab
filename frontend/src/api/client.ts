@@ -179,8 +179,8 @@ export function getLiveConnection(): Promise<LiveConnection> {
 }
 
 /**
- * Connect the user's own IBKR account. The password goes to their gateway
- * and is stored nowhere; nothing ever sends it back.
+ * Connect the user's own IBKR account. The password goes to their gateway,
+ * which keeps it until they disconnect; quantlab never stores or returns it.
  */
 export function connectLive(body: LiveConnectRequest): Promise<LiveConnection> {
   return send<LiveConnection>('/live/connection', 'POST', body);

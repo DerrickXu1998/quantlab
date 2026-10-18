@@ -239,9 +239,13 @@ Market tab ─ GET /live/stream?symbols=… ─▶ backend ─ lease ─▶ Post
   `QUANTLAB_LIVE_MAX_GATEWAYS` (2; each is a ~1 GB JVM) with a queue behind it. Every frame and
   every `live.bars_1m` row carries its owner; the hub and the session read serve a user their own
   only. The password goes to that user's gateway and nowhere else — never a database, a log or a
-  response — so it is entered again after a disconnect or IBKR's weekly re-login. A failed login
+  response. The gateway keeps it while it runs (as its container's environment, which Docker
+  holds on the host's disk), so restarts and IBKR's weekly re-login need no re-entry;
+  disconnecting removes the container and the password with it. A failed login
   is never retried automatically (IBKR locks accounts), and connection attempts are rate limited.
-  Idle gateways stop after 15 minutes.
+  A connected gateway stays on until its user disconnects; one that stops is started again
+  (up to 3 times an hour, never after a rejected login), and IBKR's weekly re-login waits for
+  the user's IB Key approval. `QUANTLAB_LIVE_IDLE_MINUTES` stops unused gateways instead.
 - **Privilege.** `live-manager` holds the Docker socket and is therefore the most privileged
   service: nothing is published, the backend authenticates with `QUANTLAB_LIVE_MANAGER_TOKEN`,
   and the gateways sit on `quantlab-live`, a network that reaches the manager and no database.

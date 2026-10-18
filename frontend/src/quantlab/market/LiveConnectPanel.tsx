@@ -223,14 +223,14 @@ function ConnectForm({
           data-testid="live-conn-terms"
         >
           <li>
-            Your password is passed to a gateway that runs only for you and is not stored. You will
-            enter it again after a disconnect or IBKR's weekly re-login.
+            Your password is never saved in QuantLab's database or shown again. It is kept only by a
+            gateway that runs for you, until you disconnect, which deletes both.
           </li>
           <li>
             The gateway is read-only: QuantLab cannot place orders through it. Using a secondary
             IBKR user with trading disabled is safer still.
           </li>
-          <li>It stops after 15 minutes without a live chart open.</li>
+          <li>Once connected it stays on until you disconnect, and restarts itself if it stops. IBKR asks you to log in again weekly; for a live account, approve the IB Key notification to resume.</li>
         </ul>
 
         <Button type="submit" disabled={sending || !username.trim() || !password}>

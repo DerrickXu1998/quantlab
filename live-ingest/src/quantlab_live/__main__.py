@@ -49,7 +49,12 @@ async def _run(settings: Settings) -> None:
         ib = IbGateway(host, API_PORT.get(mode, API_PORT["paper"]), settings.ib_client_id)
         return Collector(owner, ib, store, bus, settings.max_lines)
 
-    manager = Manager(gateways, make_collector, max_gateways=settings.max_gateways)
+    manager = Manager(
+        gateways,
+        make_collector,
+        max_gateways=settings.max_gateways,
+        idle_seconds=settings.idle_seconds,
+    )
 
     runner = web.AppRunner(make_app(manager, settings.token))
     await runner.setup()

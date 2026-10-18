@@ -213,8 +213,10 @@ services:
   # ---------------------------------------------------------------------------
   # Live market data (roadmap 4a). Starts with the stack (`make up`/`make dev`);
   # `QUANTLAB_LIVE=off make up` leaves it out. Idle it costs ~0.15 GB (redpanda
-  # ~50 MB, this manager ~80 MB, measured); a user's gateway (~0.6-1 GB) runs
-  # only from their "Save & connect" until 15 minutes without a live chart.
+  # ~50 MB, this manager ~80 MB, measured). A user's gateway (~0.2 GB before
+  # login, measured; more once streaming) starts on their "Save & connect" and
+  # stays on until they disconnect -- restarted if it stops -- unless
+  # QUANTLAB_LIVE_IDLE_MINUTES is set.
   #
   # No shared IBKR login: one account's market data is licensed to that
   # account's holder, so each user connects their own account from the Market
@@ -242,6 +244,8 @@ services:
       QUANTLAB_LIVE_MANAGER_TOKEN: ${QUANTLAB_LIVE_MANAGER_TOKEN:-}
       QUANTLAB_LIVE_NETWORK: quantlab-live
       QUANTLAB_LIVE_MAX_GATEWAYS: ${QUANTLAB_LIVE_MAX_GATEWAYS:-2}
+      # 0 (default): a connected gateway stays on until its user disconnects.
+      QUANTLAB_LIVE_IDLE_MINUTES: ${QUANTLAB_LIVE_IDLE_MINUTES:-0}
       QUANTLAB_LIVE_MAX_LINES: ${QUANTLAB_LIVE_MAX_LINES:-90}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

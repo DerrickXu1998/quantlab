@@ -348,7 +348,7 @@ export interface paths {
         head?: never;
         /**
          * Change some of the caller's settings (JSON merge patch)
-         * @description RFC 7386 merge patch: objects merge, anything else (lists included) replaces, and `null` puts a key back to its default. Unknown keys are refused, as is any password: the IBKR password has its own endpoint and is never stored.
+         * @description RFC 7386 merge patch: objects merge, anything else (lists included) replaces, and `null` puts a key back to its default. Unknown keys are refused, as is any password: the IBKR password has its own endpoint and is never held in the settings.
          */
         patch: operations["updateUserSettings"];
         trace?: never;
@@ -363,7 +363,7 @@ export interface paths {
         get?: never;
         /**
          * Upload the caller's IBKR login and connect their own gateway
-         * @description Remembers the username and account type in the caller's settings and hands the login to a gateway that runs only for them (see POST /live/connection, which this shares its rules with: rate limited, a failed login never retried). The password is never stored -- not in the settings, a log or any response -- so it is uploaded again after a disconnect or IBKR's weekly re-login.
+         * @description Remembers the username and account type in the caller's settings and hands the login to a gateway that runs only for them (see POST /live/connection, which this shares its rules with: rate limited, a failed login never retried). The password is never stored by quantlab -- not in the settings, a database, a log or any response. It is kept only by the user's gateway, which stays on until they disconnect (deleting the gateway and the password with it).
          */
         put: operations["putIbkrCredentials"];
         post?: never;
@@ -392,7 +392,7 @@ export interface paths {
         put?: never;
         /**
          * Connect the caller's own IBKR account for live prices
-         * @description Starts (or queues) a gateway logged in as the given IBKR user. The password is handed to that gateway and is never stored by quantlab nor returned by any endpoint; after a disconnect, or IBKR's weekly re-authentication, it must be entered again. Use a secondary IBKR user with trading disabled where possible -- the gateway runs with a read-only API either way. Attempts are rate limited per user, since IBKR locks an account after repeated failed logins.
+         * @description Starts (or queues) a gateway logged in as the given IBKR user. The password is handed to that gateway, which keeps it until the user disconnects; quantlab never stores it in a database nor returns it from any endpoint. After a disconnect it must be entered again. The gateway stays on and restarts if it stops; IBKR's weekly re-login waits for the user's IB Key approval. Use a secondary IBKR user with trading disabled where possible -- the gateway runs with a read-only API either way. Attempts are rate limited per user, since IBKR locks an account after repeated failed logins.
          */
         post: operations["connectLive"];
         /**

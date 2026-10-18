@@ -288,9 +288,10 @@ function IbkrSection({ document }: { document: UserSettingsDocument }) {
     <Section title="IBKR · live market data" testId="settings-ibkr">
       <p className="text-xs text-muted-foreground">
         Live prices come from your own Interactive Brokers login. Your username and account type are
-        saved here; your password is passed to a gateway that runs only for you and is never stored,
-        so you enter it again after disconnecting or IBKR's weekly re-login. The gateway is
-        read-only.
+        saved here. Your password is never saved in QuantLab's database or shown again: it is kept
+        only by a gateway that runs for you (on the server, with that gateway's container), which
+        stays on until you disconnect — disconnecting deletes the gateway and the password with
+        it. The gateway is read-only.
       </p>
 
       <p data-testid="settings-ibkr-status" className="text-sm">

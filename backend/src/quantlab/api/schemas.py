@@ -417,7 +417,8 @@ class LiveConnectRequest(BaseModel):
     """A user's own IBKR login, for their own live prices (roadmap 4a).
 
     The password is a SecretStr so it never appears in a repr, a log line or
-    an error; it is handed to the user's gateway and stored nowhere.
+    an error; it is handed to the user's gateway, which keeps it until they
+    disconnect, and no quantlab database stores it.
     """
 
     username: str = Field(min_length=1, max_length=64)
