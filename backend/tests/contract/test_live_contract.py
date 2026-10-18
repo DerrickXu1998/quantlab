@@ -344,3 +344,41 @@ def test_connection_attempts_are_rate_limited(tmp_path, manager):
     assert "Retry-After" in refused.headers
     assert "lock" in refused.json()["detail"]
     assert len([call for call in manager if call[0] == "connect"]) == routes._LIVE_CONNECT_ATTEMPTS
+
+
+# --- live data starts with the app ---------------------------------------------
+
+
+def test_the_live_hub_opens_at_startup_and_closes_at_shutdown(tmp_path, live_env, monkeypatch):
+    # No broker here: the hub's connection attempt fails fast (and quietly).
+    def refuse(self):
+        raise ConnectionError("no broker in this test")
+
+    monkeypatch.setattr(live_hub.LiveHub, "_kafka_consumer", refuse)
+    db_path = tmp_path / "quantlab.db"
+    seed.run(db_path)
+    app = create_app(str(db_path))
+    with TestClient(app):
+        hub = app.state.live_hub  # opened by startup, before any live request
+        assert isinstance(hub, live_hub.LiveHub)
+        assert not hub._stopping.is_set()
+    assert hub._stopping.is_set()
+
+
+def test_without_live_settings_nothing_starts(tmp_path, monkeypatch):
+    monkeypatch.delenv(live_hub.TOPIC_ENV, raising=False)
+    db_path = tmp_path / "quantlab.db"
+    seed.run(db_path)
+    app = create_app(str(db_path))
+    with TestClient(app):
+        assert getattr(app.state, "live_hub", None) is None
+
+
+def test_startup_keeps_a_hub_already_in_place(tmp_path, live_env):
+    db_path = tmp_path / "quantlab.db"
+    seed.run(db_path)
+    app = create_app(str(db_path))
+    injected = live_hub.LiveHub("127.0.0.1:9", "t", consumer_factory=TickingConsumer)
+    app.state.live_hub = injected
+    with TestClient(app):
+        assert app.state.live_hub is injected

@@ -231,6 +231,51 @@ describe('LiveFeed', () => {
     expect(feed.getFeed().connection).toBe('offline');
   });
 
+  it('fills in the session from the open when the backfill lands, keeping the ticks since', async () => {
+    // A newly selected ticker: nothing stored yet, so the first read is empty.
+    // IBKR's minutes from the open arrive later, announced by `backfilled`.
+    let reads = 0;
+    const own: Opened[] = [];
+    const fresh = new LiveFeed({
+      debounceMs: 10,
+      open: (symbols, handlers) => {
+        const stream: Opened = { symbols, handlers, closed: false };
+        own.push(stream);
+        return { close: () => (stream.closed = true) };
+      },
+      getSession: async (symbol) => {
+        reads += 1;
+        return {
+          symbol,
+          session_date: reads === 1 ? null : '2026-10-15',
+          status: 'active',
+          bars: reads === 1 ? [] : [bar(T0, 1), bar(T1, 2)],
+        };
+      },
+    });
+    fresh.watch('AAPL.US');
+    await settle();
+    expect(fresh.getSymbol('AAPL.US')?.bars).toEqual([]);
+
+    // Live data starts flowing before the history lands.
+    own[0].handlers.onEvent({ event: 'bar', symbol: 'AAPL.US', bar: bar(T2, 3, 'rolled') });
+    own[0].handlers.onEvent({ event: 'tick', symbol: 'AAPL.US', ts: '2026-10-15T13:33:05.000Z', last: 4 });
+    own[0].handlers.onEvent({ event: 'backfilled', symbol: 'AAPL.US' });
+    await settle();
+
+    const view = fresh.getSymbol('AAPL.US')!;
+    expect(reads).toBe(2);
+    // History from the open, then the streamed minute, then the forming one.
+    expect(view.bars.map((b) => [b.ts, b.close])).toEqual([
+      [T0, 1],
+      [T1, 2],
+      [T2, 3],
+    ]);
+    expect(view.forming).toMatchObject({ start: Date.parse('2026-10-15T13:33:00Z') / 1000, close: 4 });
+    expect(view.sessionDate).toBe('2026-10-15');
+    fresh.dispose();
+  });
+
   it('comes back after dispose and resume, as StrictMode does on mount', async () => {
     feed.watch('AAPL.US');
     feed.dispose();

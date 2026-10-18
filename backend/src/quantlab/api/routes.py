@@ -1339,7 +1339,7 @@ _LIVE_HUB_LOCK = threading.Lock()
 
 def _live_hub(request: Request) -> live_hub.LiveHub:
     # Started on first use rather than at startup: an API that never serves a
-    # live stream (tests, the demo, a stack without the live profile) never
+    # live stream (tests, a stack started with QUANTLAB_LIVE=off) never
     # opens a consumer. Per app, on its state, like the stream slots.
     hub = getattr(request.app.state, "live_hub", None)
     if hub is None:
@@ -1377,7 +1377,7 @@ async def stream_live(
             status_code=503,
             detail=(
                 "live data is not configured: QUANTLAB_KAFKA_BROKERS or "
-                f"{live_hub.TOPIC_ENV} is unset (start the stack with the 'live' profile)"
+                f"{live_hub.TOPIC_ENV} is unset (the stack was started with QUANTLAB_LIVE=off?)"
             ),
         )
     symbol_list = sorted({s.strip() for s in symbols.split(",") if s.strip()})

@@ -104,17 +104,16 @@ services:
     restart: "no"
 
   # ---------------------------------------------------------------------------
-  # Event bus. Kafka API, single binary, no JVM. Only runs under the
-  # `streaming` profile (`docker compose --profile streaming up`), so the base
-  # stack is unchanged. The publisher (quantlab-data-pipeline:
-  # `make quantlab-data ARGS="replay-publish ..."`)
-  # turns warehouse history into a chronological bar stream on the topic; the
-  # backend consumes it for GET /api/v1/replay/live/stream. The `live` profile
-  # starts it too: live IBKR prices travel on quantlab.live.ticks.
+  # Event bus. Kafka API, single binary, no JVM; ~50 MB idle. Part of the
+  # stack because live IBKR prices travel on it (quantlab.live.ticks);
+  # `QUANTLAB_LIVE=off make up` leaves it out. It also carries streamed
+  # replays: the publisher (quantlab-data-pipeline:
+  # `make quantlab-data ARGS="replay-publish ..."`) turns warehouse history
+  # into a chronological bar stream the backend serves at
+  # GET /api/v1/replay/live/stream.
   # ---------------------------------------------------------------------------
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:v24.3.18
-    profiles: ["streaming", "live"]
     command:
       - redpanda
       - start
@@ -173,9 +172,9 @@ services:
       QUANTLAB_CH_PASSWORD: ${QUANTLAB_CH_PASSWORD:-}
       QUANTLAB_DB: /data/quantlab.db
       QUANTLAB_DB_PATH: /data/quantlab.db
-      # Set unconditionally so the backend service definition works with and
-      # without the `streaming` profile: the live-replay endpoint answers a
-      # clean 503 when the broker is absent, never a startup failure.
+      # Set unconditionally so the backend works with and without the bus
+      # (QUANTLAB_LIVE=off): the streaming endpoints answer a clean 503 when
+      # the broker is absent, never a startup failure.
       QUANTLAB_KAFKA_BROKERS: redpanda:9092
       QUANTLAB_KAFKA_TOPIC: quantlab.bars
       # Live IBKR prices (roadmap 4a), published by live-ingest or, in
@@ -212,7 +211,10 @@ services:
       start_period: 10s
 
   # ---------------------------------------------------------------------------
-  # Live market data (roadmap 4a). `make live-up` (profile `live`).
+  # Live market data (roadmap 4a). Starts with the stack (`make up`/`make dev`);
+  # `QUANTLAB_LIVE=off make up` leaves it out. Idle it costs ~0.15 GB (redpanda
+  # ~50 MB, this manager ~80 MB, measured); a user's gateway (~0.6-1 GB) runs
+  # only from their "Save & connect" until 15 minutes without a live chart.
   #
   # No shared IBKR login: one account's market data is licensed to that
   # account's holder, so each user connects their own account from the Market
@@ -229,7 +231,6 @@ services:
   # ---------------------------------------------------------------------------
   live-manager:
     build: ./live-ingest
-    profiles: ["live"]
     # Root inside the container to use the mounted Docker socket.
     user: "0"
     environment:
