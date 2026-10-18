@@ -58,7 +58,20 @@ for port in "${PORTS[@]}"; do
 done
 
 # --- start ----------------------------------------------------------------
-"${COMPOSE[@]}" up --build -d "$@"
+# Live market data starts with the app (roadmap 4a). The backend and the live
+# manager share a token; make one the first time. QUANTLAB_LIVE=off keeps the
+# stack lean: no redpanda, no manager (the live endpoints then answer 503).
+LIVE_ARGS=()
+if [ "${QUANTLAB_LIVE:-on}" = "off" ]; then
+	LIVE_ARGS=(--scale live-manager=0 --scale redpanda=0)
+	echo "Live market data off (QUANTLAB_LIVE=off)."
+elif ! grep -qE '^QUANTLAB_LIVE_MANAGER_TOKEN=.+' .env 2>/dev/null; then
+	printf '\nQUANTLAB_LIVE_MANAGER_TOKEN=%s\n' "$(openssl rand -hex 24)" >> .env
+	echo "Generated QUANTLAB_LIVE_MANAGER_TOKEN in .env (backend <-> live manager)."
+fi
+
+# ${arr[@]+...}: an empty array under set -u is an error in macOS bash 3.2.
+"${COMPOSE[@]}" up --build -d ${LIVE_ARGS[@]+"${LIVE_ARGS[@]}"} "$@"
 
 # --- wait for the backend healthcheck ------------------------------------
 echo "Waiting for backend to become healthy..."

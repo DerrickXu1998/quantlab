@@ -94,7 +94,7 @@ can import the other.
 
 ## 2. Runtime topology
 
-Nine compose services across five profiles, plus one gateway container per connected live user. The base stack is four containers; everything else
+Nine compose services, plus one gateway container per connected live user. The base stack is six containers (live data included; `QUANTLAB_LIVE=off make up` drops `redpanda` and `live-manager`); everything else
 is opt-in, which is what keeps the zero-setup demo honest.
 
 | Service | Profile | Image | Ports | Role |
@@ -105,8 +105,8 @@ is opt-in, which is what keeps the zero-setup demo honest.
 | `frontend` | base | `./frontend` | 8080 | nginx over the built bundle |
 | `migrate` | base | `quantlab-migrate` | — | applies the schema (src/quantlab/store), then exits |
 | `seed` | `demo` | `./backend` | — | writes the synthetic SQLite demo |
-| `redpanda` | `streaming`, `live` | `redpanda:v24.3.18` | 19092 | Kafka API for streamed replay and live ticks |
-| `live-manager` | `live` | `./live-ingest` | — | starts one IB Gateway per connected user (their own login) and runs a collector for each |
+| `redpanda` | base (unless `QUANTLAB_LIVE=off`) | `redpanda:v24.3.18` | 19092 | Kafka API for live ticks and streamed replay; ~50 MB idle |
+| `live-manager` | base (unless `QUANTLAB_LIVE=off`) | `./live-ingest` | — | starts one IB Gateway per connected user (their own login) and runs a collector for each; ~80 MB idle |
 | `quantlab-ibgw-*` | (started by `live-manager`) | `gnzsnz/ib-gateway:10.37` | — | one user's IBKR login, read-only API, on the isolated `quantlab-live` network |
 
 Volumes: `quantlab-chdata`, `quantlab-pgdata`, `quantlab-cache`, `quantlab-data`, `quantlab-kafka`,

@@ -35,7 +35,7 @@ def _call(method: str, path: str, body: dict | None = None) -> dict:
     if not configured():
         raise ManagerUnavailable(
             f"live connections are not configured: {URL_ENV} or {TOKEN_ENV} is unset "
-            "(start the stack with the 'live' profile)"
+            "(it starts with the stack unless QUANTLAB_LIVE=off)"
         )
     url = os.environ[URL_ENV].rstrip("/") + path
     data = json.dumps(body).encode() if body is not None else None

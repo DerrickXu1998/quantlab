@@ -52,7 +52,7 @@ export function LiveConnectPanel({
             ? 'Live data is not set up on this server'
             : 'Could not read your IBKR connection'
         }
-        detail={load.unavailable ? 'An administrator starts it with `make live-up`.' : load.message}
+        detail={load.unavailable ? 'It starts with the app unless QUANTLAB_LIVE=off; on a hosted server it has to be deployed.' : load.message}
         testId="live-conn-error"
         className="min-h-0 flex-1"
       />

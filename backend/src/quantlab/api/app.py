@@ -23,6 +23,8 @@ from quantlab.api import routes
 from quantlab.logging import get_logger
 from quantlab.research import jobs
 from quantlab.storage import backends, custom_rules, experiments, strategies, user_settings
+from quantlab.streaming import bus as streaming_bus
+from quantlab.streaming import live_hub
 
 DEFAULT_DB_PATH = "/data/quantlab.db"
 
@@ -155,6 +157,30 @@ def create_app(db_path: str | Path | None = None, backend=None) -> FastAPI:
                 application.state.run_worker.stop()
 
         app.router.lifespan_context = lifespan
+
+    # Live market data starts with the app: the hub's Kafka connection opens at
+    # startup, so the first live chart does not wait for it. Prices still flow
+    # only for tickers someone is watching (their leases), and a user's IBKR
+    # gateway still only logs in once they connect. A hub already set (tests
+    # inject one) is left alone; without the env vars nothing starts, and the
+    # routes' lazy start remains the fallback.
+    inner_live = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def live_lifespan(application: FastAPI):
+        started = None
+        if live_hub.configured() and getattr(application.state, "live_hub", None) is None:
+            started = live_hub.LiveHub(streaming_bus.brokers(), live_hub.topic())
+            started.start()
+            application.state.live_hub = started
+        try:
+            async with inner_live(application) as state:
+                yield state
+        finally:
+            if started is not None:
+                started.stop()
+
+    app.router.lifespan_context = live_lifespan
 
     @app.middleware("http")
     async def unhandled_errors_as_json(request: Request, call_next):
