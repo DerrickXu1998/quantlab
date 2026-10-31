@@ -95,6 +95,8 @@ class _Catalog:
         return _Cursor(self._rows_for(sql, params))
 
     def _rows_for(self, sql, params):
+        if "FROM user_universe_snapshots" in sql:
+            return []  # nobody has published a universe of their own
         if "FROM universe_snapshots" in sql and "snapshot_id, snapshot_date" in sql:
             return [(11, dt.date(2024, 6, 28))]
         if "FROM universe_members" in sql:
@@ -310,6 +312,47 @@ def test_the_snapshot_reports_the_date_it_was_captured_not_the_one_asked_for(wh)
     assert warehouse.resolve_universe(wh, "liquid-500-ftse-core", AS_OF).as_of == (
         "2024-06-28"
     )
+
+
+class _Owned(_Catalog):
+    """Alice published "liquid-500-ftse-core" too, with one member of her own."""
+
+    def _rows_for(self, sql, params):
+        if "FROM user_universe_snapshots WHERE owner_id" in sql:
+            return [(1,)] if params[0] == "alice" else []
+        if "FROM user_universe_snapshots" in sql:
+            assert params[-1] == "alice", "an owned name resolves within its owner only"
+            return [(77, dt.date(2024, 6, 1))]
+        if "FROM user_universe_members" in sql:
+            assert params == (77,)
+            return [("CAT.US", NAMES["CAT.US"])]
+        return super()._rows_for(sql, params)
+
+
+def test_a_name_the_caller_published_resolves_to_theirs_and_nobody_elses():
+    wh = _Warehouse()
+    wh._catalog = _Owned()
+
+    assert warehouse.resolve_universe(wh, "liquid-500-ftse-core", AS_OF, "alice").symbols == [
+        "CAT.US"
+    ]
+    # Bob, and a caller with no account at all, get the shared universe.
+    shared = sorted(UNIVERSE_MEMBERS)
+    assert warehouse.resolve_universe(wh, "liquid-500-ftse-core", AS_OF, "bob").symbols == shared
+    assert warehouse.resolve_universe(wh, "liquid-500-ftse-core", AS_OF).symbols == shared
+
+
+def test_the_screen_resolves_its_universe_as_the_caller(wh, monkeypatch):
+    seen = []
+    real = warehouse.resolve_universe
+
+    def spy(wh_, universe, as_of, owner=None):
+        seen.append(owner)
+        return real(wh_, universe, as_of, owner)
+
+    monkeypatch.setattr(warehouse, "resolve_universe", spy)
+    _screen(wh, owner="bob")
+    assert seen == ["bob"]
 
 
 def test_a_universe_with_no_snapshot_that_far_back_is_unresolved():
