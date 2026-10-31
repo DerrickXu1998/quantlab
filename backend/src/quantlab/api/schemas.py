@@ -468,9 +468,11 @@ class ExecutionConfigModel(BaseModel):
     max_position_pct: float = 1.0
     fill_timing: Literal[
         "signal_close", "next_open", "next_close", "next_typical", "next_vwap"
-    ] = "signal_close"
-    commission_bps: float = 0.0
-    slippage_bps: float = 0.0
+    ] = "next_open"
+    commission_bps: float = 1.0
+    slippage_bps: float = 5.0
+    max_volume_participation: float | None = 0.01
+    order_expiry_days: int = 5
     stop_loss_pct: float | None = None
     take_profit_pct: float | None = None
     trailing_stop_pct: float | None = None
@@ -552,6 +554,12 @@ class ExecutionSummaryModel(BaseModel):
     dividends_applied: int = 0
     minute_resolved_exits: int = 0
     minute_fallbacks: int = 0
+    volume_limited_fills: int = 0
+    expired_orders: int = 0
+    unfilled_orders: int = 0
+    requested_notional: float = 0.0
+    filled_notional: float = 0.0
+    unfilled_notional: float = 0.0
     #: Dates where the entry logic said both "long" and "short", and so said
     #: nothing. Neither side was taken.
     contradictions: int = 0

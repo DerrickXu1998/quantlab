@@ -678,10 +678,11 @@ does not fix it. Dividends are simply absent: a total-return series and this
 price series diverge by the dividend yield, compounding, which on income names
 over multi-year windows is not a rounding error.
 
-**Daily bars only.** No intraday fills, no limit orders resting inside a bar, no
-partial fills, no queue position, no auction vs continuous-session distinction.
-The intrabar ambiguity in §3 is a direct consequence and cannot be resolved
-without intraday data the free stack does not provide.
+**No order book or queue model.** OHLCV bars cap each order at a configurable
+share of traded volume and carry partial fills, but they cannot reconstruct the
+bid/ask spread, market depth or queue position. Intraday capacity uses IEX-only
+volume, a conservative proxy for the consolidated market. Protective remainders
+stay active; signal remainders expire after their configured session budget.
 
 **No financing, no interest on cash.** Idle cash earns zero. At non-zero policy
 rates that understates a low-turnover strategy — and flatters nothing, which is
