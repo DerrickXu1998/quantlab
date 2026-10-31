@@ -397,12 +397,13 @@ def _calm_vix(bars):
 
 
 def _healthy_facts(bars):
-    """A profitable, cheap, growing company: every S7 gate open, both triggers live.
+    """A profitable, cheap, growing company with cash-backed earnings.
 
     Annual filings, 60 days after each year end -- the basis the fundamental
     triggers compare. Revenue grows 12% a year and the operating margin widens
     two points a year, so revenue-growth and margin-expansion fire on the same
-    filing date. P/E about 17, ROE 20%, margin from 14%.
+    filing date. P/E about 17, ROE 20%, margin from 14%, low leverage, and
+    operating cash flow 50% above earnings keep every fundamental gate open.
     """
     from datetime import date, timedelta
 
@@ -422,9 +423,13 @@ def _healthy_facts(bars):
              "period_end": end.isoformat(), "filed_at": filed},
             {"concept": "operating_income", "value": revenue * (0.14 + 0.02 * k),
              "period_start": start, "period_end": end.isoformat(), "filed_at": filed},
+            {"concept": "operating_cash_flow", "value": 9.0e8, "period_start": start,
+             "period_end": end.isoformat(), "filed_at": filed},
             {"concept": "shares_outstanding", "value": 1.0e8, "period_start": None,
              "period_end": end.isoformat(), "filed_at": filed},
             {"concept": "equity", "value": 3.0e9, "period_start": None,
+             "period_end": end.isoformat(), "filed_at": filed},
+            {"concept": "long_term_debt", "value": 3.0e8, "period_start": None,
              "period_end": end.isoformat(), "filed_at": filed},
         ]
     return build_series(rows)
@@ -438,7 +443,11 @@ def _inputs_for(template_id, series):
         dated = {s: _dated(bars) for s, bars in series.items()}
         any_bars = next(iter(dated.values()))
         return dated, {}, {"VIX.FRED": _calm_vix(any_bars)}
-    if template_id == "quality-momentum":
+    if template_id in {
+        "quality-momentum",
+        "test-candidate-systematic-3",
+        "test-candidate-systematic-4",
+    }:
         dated = {s: _dated(bars) for s, bars in series.items()}
         return dated, {s: _healthy_facts(bars) for s, bars in dated.items()}, None
     return series, {}, None
@@ -453,6 +462,31 @@ def test_every_template_validates_and_actually_trades(template_id, series):
 
     result = simulate(list(bars), bars, decisions, spec_under_test.execution)
     assert result.trades, "a starter template must produce trades on a live-ish path"
+
+
+def test_systematic_candidates_have_stable_identities_and_carver_risk_controls():
+    expected = {f"test-candidate-systematic-{number}" for number in range(1, 5)}
+    served = {item["id"]: item for item in catalogue() if item["id"].startswith("test-candidate")}
+    assert set(served) == expected
+    assert all(item["name"] == template_id for template_id, item in served.items())
+    assert all(item["collection"] == "systematic-trading" for item in served.values())
+    for item in served.values():
+        assert item["execution"]["position_sizing"] == "volatility_target"
+
+    for template_id in ("test-candidate-systematic-1", "test-candidate-systematic-2"):
+        candidate = template(template_id)
+        entries = [c for c in candidate.components if c.role == "entry"]
+        assert [(c.parameters["fast"], c.parameters["slow"]) for c in entries] == [
+            (8, 32),
+            (16, 64),
+            (32, 128),
+        ]
+        assert candidate.entry_logic == candidate.exit_logic == "majority"
+
+    assert not template("test-candidate-systematic-1").execution.allow_shorts
+    long_short = template("test-candidate-systematic-2").execution
+    assert long_short.allow_shorts
+    assert long_short.borrow_cost_bps == 50.0
 
 
 def test_margin_expansion_fires_on_a_widening_margin(series):

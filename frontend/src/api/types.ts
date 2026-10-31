@@ -191,7 +191,7 @@ export interface StrategyList {
  * stored strategy: it has no owner and no timestamps because nobody owns it
  * until they save a copy.
  */
-export type TemplateCollection = 'starter' | 'ai-quant-book';
+export type TemplateCollection = 'starter' | 'ai-quant-book' | 'systematic-trading';
 
 export type StrategyTemplate = StrategySpec & {
   id: string;

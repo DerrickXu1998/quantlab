@@ -521,7 +521,7 @@ class StrategyList(BaseModel):
 
 class StrategyTemplate(StrategyRequest):
     id: str
-    collection: Literal["starter", "ai-quant-book"] = "starter"
+    collection: Literal["starter", "ai-quant-book", "systematic-trading"] = "starter"
 
 
 class StrategyTemplateList(BaseModel):

@@ -305,6 +305,28 @@ describe('StrategyBuilder', () => {
     expect(book).toHaveTextContent(/split/i);
   });
 
+  it('shelves the Systematic Trading candidates with a research-only note', async () => {
+    vi.mocked(apiClient.listStrategyTemplates).mockResolvedValue({
+      total: templates.length + 1,
+      items: [
+        ...templates,
+        {
+          ...templates[0],
+          id: 'test-candidate-systematic-1',
+          name: 'test-candidate-systematic-1',
+          collection: 'systematic-trading',
+        },
+      ],
+    });
+    const person = await openBuilder();
+    await showList(person, 'Templates');
+
+    const shelf = await screen.findByTestId('template-shelf-systematic-trading');
+    expect(within(shelf).getAllByRole('listitem')).toHaveLength(1);
+    expect(shelf).toHaveTextContent('test-candidate-systematic-1');
+    expect(shelf).toHaveTextContent(/not validated performance claims/i);
+  });
+
   it('loads a template into the builder as a working, unsaved strategy', async () => {
     const person = await openBuilder();
     await showList(person, 'Templates');
