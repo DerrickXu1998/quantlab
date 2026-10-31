@@ -53,6 +53,18 @@ export function executionSummary(execution: ExecutionConfig): SummaryItem[] {
       execution.commission_bps !== d.commission_bps || execution.slippage_bps !== d.slippage_bps,
     caution: costs === 0 ? 'Zero commission and slippage flatter every trade.' : undefined,
   });
+  push(
+    'max_volume_participation',
+    execution.max_volume_participation === null
+      ? 'unlimited volume'
+      : `≤ ${pct(execution.max_volume_participation)} of bar volume`,
+    execution.max_volume_participation === null
+      ? 'Unlimited liquidity assumes every order fills completely, whatever its size.'
+      : undefined,
+  );
+  if (execution.max_volume_participation !== null) {
+    push('order_expiry_days', `order expiry ${execution.order_expiry_days} days`);
+  }
   if (execution.max_positions !== null) push('max_positions', `max ${execution.max_positions} positions`);
   if (execution.max_position_pct !== d.max_position_pct) {
     push('max_position_pct', `max ${pct(execution.max_position_pct)} a position`);

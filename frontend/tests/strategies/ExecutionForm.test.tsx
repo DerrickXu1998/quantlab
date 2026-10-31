@@ -195,6 +195,11 @@ describe('ExecutionForm', () => {
     render(<Harness />);
 
     const timing = screen.getByLabelText(/fill timing/i);
+    expect(timing).toHaveValue('next_open');
+    expect(document.getElementById(timing.getAttribute('aria-describedby') as string))
+      .toHaveTextContent(/first price you could genuinely have traded/i);
+
+    await person.selectOptions(timing, 'signal_close');
     expect(document.getElementById(timing.getAttribute('aria-describedby') as string))
       .toHaveTextContent(/optimistic/i);
 
@@ -216,6 +221,43 @@ describe('ExecutionForm', () => {
 
     expect(config().commission_bps).toBe(5);
     expect(config().slippage_bps).toBe(2);
+  });
+
+  it('applies cost presets and identifies custom values', async () => {
+    const person = userEvent.setup();
+    render(<Harness />);
+
+    const profile = screen.getByLabelText(/cost profile/i);
+    expect(profile).toHaveValue('base');
+    expect(config()).toMatchObject({ commission_bps: 1, slippage_bps: 5 });
+
+    await person.selectOptions(profile, 'stressed');
+    expect(config()).toMatchObject({ commission_bps: 2, slippage_bps: 20 });
+
+    await person.selectOptions(profile, 'idealized');
+    expect(config()).toMatchObject({ commission_bps: 0, slippage_bps: 0 });
+
+    await person.clear(screen.getByLabelText(/commission/i));
+    await person.type(screen.getByLabelText(/commission/i), '3');
+    expect(profile).toHaveValue('custom');
+  });
+
+  it('configures volume participation and signal-order expiry', async () => {
+    const person = userEvent.setup();
+    render(<Harness />);
+
+    const participation = screen.getByLabelText(/max volume participation/i);
+    expect(participation).toHaveValue(1);
+    expect(config()).toMatchObject({ max_volume_participation: 0.01, order_expiry_days: 5 });
+
+    await person.clear(participation);
+    await person.type(participation, '2.5');
+    await person.clear(screen.getByLabelText(/order expiry/i));
+    await person.type(screen.getByLabelText(/order expiry/i), '3');
+    expect(config()).toMatchObject({ max_volume_participation: 0.025, order_expiry_days: 3 });
+
+    await person.clear(participation);
+    expect(config().max_volume_participation).toBeNull();
   });
 
   it('exposes allow shorts as a real checkbox with its consequence spelled out', async () => {

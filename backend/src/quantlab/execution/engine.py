@@ -165,6 +165,12 @@ class ExecutionSummary:
     #: shows) -- including VWAP fills that fell back to the typical price.
     minute_resolved_exits: int = 0
     minute_fallbacks: int = 0
+    volume_limited_fills: int = 0
+    expired_orders: int = 0
+    unfilled_orders: int = 0
+    requested_notional: float = 0.0
+    filled_notional: float = 0.0
+    unfilled_notional: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -203,6 +209,13 @@ class _Position:
     dividends: float = 0.0
     #: The same per share held, in today's share terms, for the trade's return.
     dividends_per_share: float = 0.0
+    initial_qty: float = 0.0
+    exit_qty: float = 0.0
+    exit_notional: float = 0.0
+    closed_entry_fees: float = 0.0
+    closed_exit_fees: float = 0.0
+    closed_borrow: float = 0.0
+    closed_dividends: float = 0.0
 
 
 def _deferred_fill_price(fill_timing: str, bar: Any) -> float:
@@ -224,15 +237,18 @@ def _deferred_fill_price(fill_timing: str, bar: Any) -> float:
 
 @dataclass
 class _PendingOrder:
-    """An order waiting for the next session (``fill_timing`` other than
-    ``signal_close``): its open, its close, or its typical price."""
+    """An unfilled order or remainder, with its original sizing intact."""
 
     symbol: str
-    #: Already resolved to "open" or "close": what the decision meant given the
-    #: book as it stood when the signal fired.
     kind: str
     direction: str
     signal_date: str
+    remaining_qty: float
+    created_index: int
+    at_open: bool
+    reason: str = "signal"
+    protective: bool = False
+    started: bool = False
 
 
 @dataclass
@@ -381,6 +397,10 @@ class ExecutionSimulator:
         self._commission = 0.0
         self._borrow = 0.0
         self._slippage = 0.0
+        self._requested_notional = 0.0
+        self._filled_notional = 0.0
+        self._volume_limited = 0
+        self._expired = 0
         self._counters = dict.fromkeys(
             (
                 "orders",
@@ -591,6 +611,26 @@ class ExecutionSimulator:
         notional = min(notional, equity * config.max_position_pct, available)
         return notional / price if notional > 0 else 0.0
 
+    def _capacity(self, bar: Any) -> float:
+        participation = self.config.max_volume_participation
+        if participation is None:
+            return float("inf")
+        return max(0.0, float(bar.volume)) * participation
+
+    def _pending_for(self, symbol: str) -> _PendingOrder | None:
+        return next((order for order in self._pending if order.symbol == symbol), None)
+
+    def _queue_remainder(
+        self,
+        order: _PendingOrder,
+        filled_qty: float,
+    ) -> None:
+        remaining = order.remaining_qty - filled_qty
+        if remaining > 1e-9:
+            self._pending.append(
+                _PendingOrder(**{**vars(order), "remaining_qty": remaining})
+            )
+
     def _sessions_between(self, symbol: str, earlier: int, later: int) -> int:
         """Trading days from bar ``earlier`` to bar ``later`` of one symbol."""
         sessions = self._session_of.get(symbol)
@@ -601,13 +641,27 @@ class ExecutionSimulator:
     # -- opening and closing -----------------------------------------------
 
     def _open(
-        self, date: str, symbol: str, side: str, price: float, index: int, at_open: bool
+        self,
+        date: str,
+        symbol: str,
+        side: str,
+        price: float,
+        index: int,
+        at_open: bool,
+        *,
+        qty_limit: float = float("inf"),
+        request: bool = False,
     ) -> Fill | None:
         config = self.config
-        if config.max_positions is not None and len(self._positions) >= config.max_positions:
+        position = self._positions.get(symbol)
+        if (
+            position is None
+            and config.max_positions is not None
+            and len(self._positions) >= config.max_positions
+        ):
             self._counters["rejected_max_positions"] += 1
             return None
-        if config.cooldown_days:
+        if position is None and config.cooldown_days:
             last_exit = self._last_exit_index.get(symbol)
             if (
                 last_exit is not None
@@ -618,47 +672,58 @@ class ExecutionSimulator:
 
         action = "buy" if side == "long" else "short"
         fill_price = self._slipped(price, action)
-        qty = self._size(symbol, fill_price, index)
-        if qty <= 0:
+        target_qty = self._size(symbol, fill_price, index)
+        if request:
+            self._requested_notional += target_qty * fill_price
+        if target_qty <= 0:
             self._counters["rejected_no_cash"] += 1
+            return None
+        capacity = self._capacity(self.bars_by_symbol[symbol][index])
+        qty = min(target_qty, qty_limit, capacity)
+        if capacity < target_qty and capacity < qty_limit:
+            self._volume_limited += 1
+        if qty <= 1e-12:
             return None
 
         notional = qty * fill_price
         commission = self._commission_on(notional)
         slippage = abs(fill_price - price) * qty
-
-        # Cash: a long spends the notional, a short receives it. Both pay the
-        # commission.
         self._credit(symbol, (-notional if side == "long" else notional) - commission)
         self._commission += commission
         self._slippage += slippage
         self._realized -= commission
+        self._filled_notional += notional
 
-        stop_price, target_price = self._protective_levels(symbol, side, fill_price, index)
-        self._positions[symbol] = _Position(
-            symbol=symbol,
-            side=side,
-            qty=qty,
-            entry_date=date,
-            entry_index=index,
-            entry_price=fill_price,
-            entry_fees=commission,
-            filled_at_open=at_open,
-            stop_price=stop_price,
-            target_price=target_price,
-            best_close=fill_price,
-        )
+        if position is None:
+            stop_price, target_price = self._protective_levels(symbol, side, fill_price, index)
+            self._positions[symbol] = _Position(
+                symbol=symbol,
+                side=side,
+                qty=qty,
+                entry_date=date,
+                entry_index=index,
+                entry_price=fill_price,
+                entry_fees=commission,
+                filled_at_open=at_open,
+                stop_price=stop_price,
+                target_price=target_price,
+                best_close=fill_price,
+                initial_qty=qty,
+            )
+        else:
+            total = position.qty + qty
+            position.entry_price = (
+                position.entry_price * position.qty + fill_price * qty
+            ) / total
+            position.qty = total
+            position.initial_qty += qty
+            position.entry_fees += commission
+            position.filled_at_open = position.filled_at_open or at_open
+
         fill = Fill(
-            date=date,
-            symbol=symbol,
-            side=action,
-            qty=qty,
-            price=fill_price,
-            value=notional,
-            commission=commission,
-            slippage=slippage,
-            realized_pnl=0.0,
-            reason="signal",
+            date=date, symbol=symbol, side=action, qty=qty, price=fill_price,
+            value=notional, commission=commission, slippage=slippage,
+            realized_pnl=0.0, reason="signal",
         )
         self.fills.append(fill)
         self._counters["fills"] += 1
@@ -712,6 +777,9 @@ class ExecutionSimulator:
         index: int,
         reason: str,
         time: str | None = None,
+        *,
+        qty_limit: float = float("inf"),
+        request: bool = False,
     ) -> Fill | None:
         position = self._positions.get(symbol)
         if position is None:
@@ -719,63 +787,77 @@ class ExecutionSimulator:
 
         action = "sell" if position.side == "long" else "cover"
         fill_price = self._slipped(price, action)
-        notional = position.qty * fill_price
-        commission = self._commission_on(notional)
-        slippage = abs(fill_price - price) * position.qty
+        if request:
+            self._requested_notional += position.qty * fill_price
+        capacity = self._capacity(self.bars_by_symbol[symbol][index])
+        qty = min(position.qty, qty_limit, capacity)
+        if capacity < position.qty and capacity < qty_limit:
+            self._volume_limited += 1
+        if qty <= 1e-12:
+            return None
 
+        fraction = qty / position.qty
+        entry_fee = position.entry_fees * fraction
+        borrow = position.borrow_accrued * fraction
+        dividends = position.dividends * fraction
+        notional = qty * fill_price
+        commission = self._commission_on(notional)
+        slippage = abs(fill_price - price) * qty
         self._credit(symbol, (notional if position.side == "long" else -notional) - commission)
         self._commission += commission
         self._slippage += slippage
+        self._filled_notional += notional
 
         gross = (
-            position.qty * (fill_price - position.entry_price)
+            qty * (fill_price - position.entry_price)
             if position.side == "long"
-            else position.qty * (position.entry_price - fill_price)
+            else qty * (position.entry_price - fill_price)
         )
-        # Borrow was debited and dividends credited day by day; both are
-        # realised with the trade.
-        net = gross - commission - position.borrow_accrued + position.dividends
+        net = gross - commission - borrow + dividends
         self._realized += net
+        position.exit_qty += qty
+        position.exit_notional += notional
+        position.closed_entry_fees += entry_fee
+        position.closed_exit_fees += commission
+        position.closed_borrow += borrow
+        position.closed_dividends += dividends
+        position.qty -= qty
+        position.entry_fees -= entry_fee
+        position.borrow_accrued -= borrow
+        position.dividends -= dividends
 
-        fees = position.entry_fees + commission + position.borrow_accrued
-        self.closed_trades.append(
-            ExecutedTrade(
-                symbol=symbol,
-                side=position.side,
-                entry_date=position.entry_date,
-                entry_price=position.entry_price,
-                exit_date=date,
-                exit_price=fill_price,
-                qty=position.qty,
-                return_pct=self._return_pct(
-                    position.side,
-                    position.entry_price,
-                    fill_price,
-                    position.dividends_per_share,
-                ),
-                open=False,
-                exit_reason=reason,
-                pnl=gross - fees + position.dividends,
-                fees=fees,
-                dividends=position.dividends,
-                exit_time=time,
+        if position.qty <= 1e-9:
+            total_entry_fees = position.closed_entry_fees + position.entry_fees
+            total_borrow = position.closed_borrow + position.borrow_accrued
+            total_dividends = position.closed_dividends + position.dividends
+            exit_price = position.exit_notional / position.exit_qty
+            total_gross = (
+                position.exit_notional - position.entry_price * position.exit_qty
+                if position.side == "long"
+                else position.entry_price * position.exit_qty - position.exit_notional
             )
-        )
-        del self._positions[symbol]
-        self._last_exit_index[symbol] = index
+            fees = total_entry_fees + position.closed_exit_fees + total_borrow
+            self.closed_trades.append(
+                ExecutedTrade(
+                    symbol=symbol, side=position.side, entry_date=position.entry_date,
+                    entry_price=position.entry_price, exit_date=date, exit_price=exit_price,
+                    qty=position.initial_qty,
+                    return_pct=self._return_pct(
+                        position.side, position.entry_price, exit_price,
+                        position.dividends_per_share,
+                    ),
+                    open=False, exit_reason=reason,
+                    pnl=total_gross - fees + total_dividends,
+                    fees=fees, dividends=total_dividends, exit_time=time,
+                )
+            )
+            del self._positions[symbol]
+            self._last_exit_index[symbol] = index
 
         fill = Fill(
-            date=date,
-            symbol=symbol,
-            side=action,
-            qty=position.qty,
-            price=fill_price,
-            value=notional,
-            commission=commission,
-            slippage=slippage,
-            realized_pnl=net,
-            reason=reason,
-            time=time,
+            date=date, symbol=symbol, side=action, qty=qty, price=fill_price,
+            value=notional, commission=commission, slippage=slippage,
+            realized_pnl=net, reason=reason, time=time,
         )
         self.fills.append(fill)
         self._counters["fills"] += 1
@@ -810,6 +892,10 @@ class ExecutionSimulator:
                 position = self._positions.get(symbol)
                 if position is not None and position.entry_date < actions[index].ex_date:
                     self._apply_action(symbol, position, actions[index])
+                if actions[index].is_split:
+                    for order in self._pending:
+                        if order.symbol == symbol and order.signal_date < actions[index].ex_date:
+                            order.remaining_qty *= float(actions[index].split_ratio)
                 index += 1
             self._next_action[symbol] = index
 
@@ -819,6 +905,8 @@ class ExecutionSimulator:
             # Same holding, more shares at a proportionally lower price: equity
             # does not move. Every level fixed in price terms moves with it.
             position.qty *= ratio
+            position.initial_qty *= ratio
+            position.exit_qty *= ratio
             position.entry_price /= ratio
             position.best_close /= ratio
             position.dividends_per_share /= ratio
@@ -1030,8 +1118,7 @@ class ExecutionSimulator:
 
         # 1. Orders queued yesterday for today's open fill before anything else
         #    can happen in the session.
-        if self.config.fill_timing == "next_open":
-            fills_today.extend(self._drain_pending(date, bars_today, indices))
+        fills_today.extend(self._drain_pending(date, bars_today, indices, at_open=True))
 
         # 2. Protective exits, against this bar's own range.
         for symbol in sorted(self._positions):
@@ -1040,6 +1127,9 @@ class ExecutionSimulator:
             if bar is None:
                 continue
             index = indices[symbol]
+            pending = self._pending_for(symbol)
+            if pending is not None and pending.protective:
+                continue
             # A position entered at today's close has no exposure left today;
             # one entered at today's open has the whole session.
             live = index > position.entry_index or (
@@ -1067,15 +1157,23 @@ class ExecutionSimulator:
                     outcome = ("max_holding", float(bar.close))
             if outcome is not None:
                 reason, price = outcome
-                fill = self._close(date, symbol, price, index, reason, exit_time)
+                self._pending = [o for o in self._pending if o.symbol != symbol]
+                order = _PendingOrder(
+                    symbol=symbol, kind="close", direction="", signal_date=date,
+                    remaining_qty=position.qty, created_index=index, at_open=True,
+                    reason=reason, protective=True, started=True,
+                )
+                fill = self._close(
+                    date, symbol, price, index, reason, exit_time, request=True
+                )
                 if fill is not None:
                     fills_today.append(fill)
+                    self._queue_remainder(order, fill.qty)
+                else:
+                    self._queue_remainder(order, 0.0)
 
-        # 2b. Orders queued yesterday for today's close or typical price fill
-        #     only now: a stop the session hit on the way happened first, and
-        #     re-checking the book below means it wins over the queued exit.
-        if self.config.fill_timing in ("next_close", "next_typical", "next_vwap"):
-            fills_today.extend(self._drain_pending(date, bars_today, indices))
+        # 2b. Orders queued for a later price fill after the session's protective checks.
+        fills_today.extend(self._drain_pending(date, bars_today, indices, at_open=False))
 
         # 3 and 4. Today's decisions: closers first, then openers.
         for decision in sorted(
@@ -1166,37 +1264,62 @@ class ExecutionSimulator:
             yield self._step(key, by_date.get(key, []), bars_today, indices)
 
     def _drain_pending(
-        self, date: str, bars_today: dict[str, Any], indices: dict[str, int]
+        self,
+        date: str,
+        bars_today: dict[str, Any],
+        indices: dict[str, int],
+        *,
+        at_open: bool,
     ) -> list[Fill]:
         if not self._pending:
             return []
         still_waiting: list[_PendingOrder] = []
         fills: list[Fill] = []
         for order in self._pending:
+            if order.at_open != at_open:
+                still_waiting.append(order)
+                continue
             bar = bars_today.get(order.symbol)
             if bar is None:
-                # No session for this instrument yet; the order keeps waiting
-                # rather than filling at some other instrument's price.
                 still_waiting.append(order)
                 continue
             index = indices[order.symbol]
-            price = self._pending_fill_price(order.symbol, date, bar)
-            if order.kind == "close":
-                # Re-checked against the book rather than assumed still valid:
-                # a stop may have taken this position out in the meantime.
-                if order.symbol in self._positions:
-                    fill = self._close(date, order.symbol, price, index, "signal")
-                    if fill is not None:
-                        fills.append(fill)
-            elif order.symbol not in self._positions:
+            if order.protective:
+                price = float(bar.open)
+            elif self.config.fill_timing == "signal_close":
+                price = float(bar.close)
+            else:
+                price = self._pending_fill_price(order.symbol, date, bar)
+
+            fill = None
+            if order.kind == "close" and order.symbol in self._positions:
+                fill = self._close(
+                    date, order.symbol, price, index, order.reason,
+                    qty_limit=order.remaining_qty, request=not order.started,
+                )
+            elif order.kind == "open":
                 side = "long" if order.direction == "bullish" else "short"
-                # Only an open fill has the whole session ahead of it; one at
-                # the close or through the day is not exposed to this bar's
-                # range, so stops start tomorrow -- as for signal_close.
-                at_open = self.config.fill_timing == "next_open"
-                fill = self._open(date, order.symbol, side, price, index, at_open=at_open)
-                if fill is not None:
-                    fills.append(fill)
+                fill = self._open(
+                    date, order.symbol, side, price, index, at_open=order.at_open,
+                    qty_limit=order.remaining_qty, request=not order.started,
+                )
+            order.started = True
+            if fill is not None:
+                fills.append(fill)
+                order.remaining_qty -= fill.qty
+            if order.remaining_qty <= 1e-9:
+                continue
+            if fill is None and self._capacity(bar) > 0.0:
+                continue
+            expired = (
+                not order.protective
+                and self._sessions_between(order.symbol, order.created_index, index)
+                >= self.config.order_expiry_days
+            )
+            if expired:
+                self._expired += 1
+            else:
+                still_waiting.append(order)
         self._pending = still_waiting
         return fills
 
@@ -1222,6 +1345,10 @@ class ExecutionSimulator:
         )
         may_close = decision.kind in ("exit", "both")
         may_open = decision.kind in ("entry", "both")
+        if self._pending_for(symbol) is not None:
+            if not (closes_position and may_close):
+                return None
+            self._pending = [order for order in self._pending if order.symbol != symbol]
 
         if closes_position and may_close:
             index = indices.get(symbol)
@@ -1250,23 +1377,36 @@ class ExecutionSimulator:
             self._counters["dropped_no_bar"] += 1
             return None
 
-        if config.fill_timing in DEFERRED_FILL_TIMING:
-            self._pending.append(
-                _PendingOrder(
-                    symbol=symbol,
-                    kind=action,
-                    direction=decision.direction,
-                    signal_date=date,
-                )
-            )
-            return None
-
         index = indices[symbol]
         price = float(bar.close)
         if action == "close":
-            return self._close(date, symbol, price, index, "signal")
-        side = "long" if decision.direction == "bullish" else "short"
-        return self._open(date, symbol, side, price, index, at_open=False)
+            target_qty = position.qty
+            fill_price = self._slipped(price, "sell" if position.side == "long" else "cover")
+        else:
+            side = "long" if decision.direction == "bullish" else "short"
+            fill_price = self._slipped(price, "buy" if side == "long" else "short")
+            target_qty = self._size(symbol, fill_price, index)
+        order = _PendingOrder(
+            symbol=symbol, kind=action, direction=decision.direction, signal_date=date,
+            remaining_qty=target_qty, created_index=index,
+            at_open=config.fill_timing == "next_open",
+        )
+        if config.fill_timing in DEFERRED_FILL_TIMING:
+            self._pending.append(order)
+            return None
+
+        order.started = True
+        if action == "close":
+            fill = self._close(date, symbol, price, index, "signal", request=True)
+        else:
+            fill = self._open(
+                date, symbol, side, price, index, at_open=False, request=True
+            )
+        if fill is not None:
+            self._queue_remainder(order, fill.qty)
+        elif self._capacity(bar) == 0.0:
+            self._queue_remainder(order, 0.0)
+        return fill
 
     # -- results -----------------------------------------------------------
 
@@ -1281,28 +1421,32 @@ class ExecutionSimulator:
         for symbol in sorted(self._positions):
             position = self._positions[symbol]
             last = self._last_price.get(symbol, position.entry_price)
-            gross = (
+            closed_gross = (
+                position.exit_notional - position.entry_price * position.exit_qty
+                if position.side == "long"
+                else position.entry_price * position.exit_qty - position.exit_notional
+            )
+            gross = closed_gross + (
                 position.qty * (last - position.entry_price)
                 if position.side == "long"
                 else position.qty * (position.entry_price - last)
             )
+            mark = (position.exit_notional + position.qty * last) / position.initial_qty
+            entry_fees = position.closed_entry_fees + position.entry_fees
+            exit_fees = position.closed_exit_fees
+            borrow = position.closed_borrow + position.borrow_accrued
+            dividends = position.closed_dividends + position.dividends
             out.append(
                 ExecutedTrade(
-                    symbol=symbol,
-                    side=position.side,
-                    entry_date=position.entry_date,
-                    entry_price=position.entry_price,
-                    exit_date=None,
-                    exit_price=last,
-                    qty=position.qty,
+                    symbol=symbol, side=position.side, entry_date=position.entry_date,
+                    entry_price=position.entry_price, exit_date=None, exit_price=mark,
+                    qty=position.initial_qty,
                     return_pct=self._return_pct(
-                        position.side, position.entry_price, last, position.dividends_per_share
+                        position.side, position.entry_price, mark, position.dividends_per_share
                     ),
-                    open=True,
-                    exit_reason="end_of_window",
-                    pnl=gross - position.entry_fees - position.borrow_accrued + position.dividends,
-                    fees=position.entry_fees + position.borrow_accrued,
-                    dividends=position.dividends,
+                    open=True, exit_reason="end_of_window",
+                    pnl=gross - entry_fees - exit_fees - borrow + dividends,
+                    fees=entry_fees + exit_fees + borrow, dividends=dividends,
                 )
             )
         out.sort(key=lambda t: (t.symbol, t.entry_date))
@@ -1318,6 +1462,15 @@ class ExecutionSimulator:
             dividends_applied=self._dividends_applied,
             minute_resolved_exits=self._minute_resolved,
             minute_fallbacks=self._minute_fallbacks,
+            volume_limited_fills=self._volume_limited,
+            expired_orders=self._expired,
+            unfilled_orders=len(self._pending),
+            requested_notional=self._requested_notional,
+            filled_notional=self._filled_notional,
+            unfilled_notional=sum(
+                order.remaining_qty * self._last_price.get(order.symbol, 0.0)
+                for order in self._pending
+            ),
             **self._counters,
         )
 

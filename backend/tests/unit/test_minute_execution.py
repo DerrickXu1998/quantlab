@@ -39,12 +39,13 @@ def run(sessions, minutes, decisions, **config):
         calls.append((symbol, date))
         return minutes.get(date, [])
 
+    settings = {
+        "fill_timing": "signal_close", "commission_bps": 0.0,
+        "slippage_bps": 0.0, "max_volume_participation": None,
+    }
+    settings.update(config)
     result = simulate(
-        ["AAA"],
-        {"AAA": sessions},
-        decisions,
-        ExecutionConfig(**config),
-        minute_source=source,
+        ["AAA"], {"AAA": sessions}, decisions, ExecutionConfig(**settings), minute_source=source
     )
     return result, calls
 

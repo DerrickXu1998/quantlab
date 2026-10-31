@@ -3079,6 +3079,17 @@ components:
           minimum: 0
           default: 5
           description: Moves the fill price against the trade, per side.
+        max_volume_participation:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 1
+          default: 0.01
+          description: Maximum fraction of a bar's volume one order may fill; null means unlimited.
+        order_expiry_days:
+          type: integer
+          minimum: 1
+          default: 5
+          description: Trading sessions a partially filled signal order remains active.
         stop_loss_pct:
           type: [number, "null"]
           exclusiveMinimum: 0
@@ -3197,6 +3208,12 @@ components:
           description: >
             Sessions where minute resolution fell back to the daily rule: no
             minute bars, or none reaching the level the daily range shows.
+        volume_limited_fills: { type: integer }
+        expired_orders: { type: integer }
+        unfilled_orders: { type: integer }
+        requested_notional: { type: number }
+        filled_notional: { type: number }
+        unfilled_notional: { type: number }
         contradictions:
           type: integer
           description: >

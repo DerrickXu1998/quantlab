@@ -103,6 +103,12 @@ function runWithStrategy(): RunDetailV2 {
       contradictions: 0,
       total_commission: 118.44,
       total_slippage: 96.1,
+      volume_limited_fills: 7,
+      expired_orders: 2,
+      unfilled_orders: 1,
+      requested_notional: 150000,
+      filled_notional: 120000,
+      unfilled_notional: 30000,
     },
   };
 }
@@ -157,6 +163,10 @@ describe('run results, with execution criteria', () => {
     const summary = within(breakdown).getByTestId('execution-summary');
     expect(summary).toHaveTextContent('42');
     expect(summary).toHaveTextContent('40');
+    expect(summary).toHaveTextContent('Volume limited');
+    expect(summary).toHaveTextContent('$150,000');
+    expect(summary).toHaveTextContent('$120,000');
+    expect(summary).toHaveTextContent('$30,000');
   });
 
   it('surfaces the rejections that mean the strategy was not really tested', async () => {

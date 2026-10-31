@@ -1392,6 +1392,16 @@ export interface components {
              * @default 5
              */
             slippage_bps: number;
+            /**
+             * @description Maximum fraction of a bar's volume one order may fill; null means unlimited.
+             * @default 0.01
+             */
+            max_volume_participation: number | null;
+            /**
+             * @description Trading sessions a partially filled signal order remains active.
+             * @default 5
+             */
+            order_expiry_days: number;
             /** @description A fraction, not a percentage: 0.05 is five percent. Bounded because a user who types `5` meaning "five percent" would otherwise get a stop 500% away that never triggers, and the backtest would look like the stop simply never helped. */
             stop_loss_pct?: number | null;
             take_profit_pct?: number | null;
@@ -1454,6 +1464,12 @@ export interface components {
             minute_resolved_exits?: number;
             /** @description Sessions where minute resolution fell back to the daily rule: no minute bars, or none reaching the level the daily range shows. */
             minute_fallbacks?: number;
+            volume_limited_fills?: number;
+            expired_orders?: number;
+            unfilled_orders?: number;
+            requested_notional?: number;
+            filled_notional?: number;
+            unfilled_notional?: number;
             /** @description Dates where the entry logic said both "long" and "short", and so said nothing. Neither side was taken. */
             contradictions?: number;
         };
