@@ -693,10 +693,16 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The named lists a screen may be run over */
+        /**
+         * The named lists a screen may be run over
+         * @description The shared universes (the data pipeline's, and the server's default `all`) plus the ones the caller published. Another user's universes are never listed.
+         */
         get: operations["listUniverses"];
         put?: never;
-        /** Publish a custom universe snapshot */
+        /**
+         * Publish a custom universe snapshot
+         * @description The snapshot belongs to the caller: only they list, resolve or screen it. A shared universe's name cannot be taken. Snapshots are append-only, so a published one cannot be edited.
+         */
         post: operations["publishUniverse"];
         delete?: never;
         options?: never;
@@ -715,7 +721,7 @@ export interface paths {
         };
         /**
          * The members of a saved universe
-         * @description The newest snapshot of `name` captured on or before `as_of` (today when omitted) -- the same point-in-time rule a screen applies. What a strategy picker loads when the reader chooses a universe saved earlier.
+         * @description The newest snapshot of `name` captured on or before `as_of` (today when omitted) -- the same point-in-time rule a screen applies. What a strategy picker loads when the reader chooses a universe saved earlier. A name the caller published resolves to their own snapshots only; another user's universe is a 404.
          */
         get: operations["getUniverseMembers"];
         put?: never;
@@ -3469,7 +3475,7 @@ export interface operations {
                     "application/json": components["schemas"]["Universe"];
                 };
             };
-            /** @description Unknown symbols or duplicate snapshot */
+            /** @description Unknown symbols, a duplicate snapshot, a shared universe's name, or the synthetic demo (which has no universe history) */
             422: {
                 headers: {
                     [name: string]: unknown;

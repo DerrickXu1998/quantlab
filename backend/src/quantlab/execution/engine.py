@@ -1331,6 +1331,21 @@ class ExecutionResult:
     assumptions: list[str]
 
 
+def mark_session(curve: list, date: str, value: float, point: type = EquityPoint) -> None:
+    """Add one bar's equity to a curve kept in sessions.
+
+    One mark per session: an intraday run keeps each session's last bar, so
+    the curve -- and every daily statistic built on it, Sharpe's sqrt(252)
+    included -- is in sessions whatever the bar frequency. Shared by the batch
+    run and the replay, whose summaries must agree.
+    """
+    session = date[:10]
+    if curve and curve[-1].date == session:
+        curve[-1] = point(date=session, value=value)
+    else:
+        curve.append(point(date=session, value=value))
+
+
 def simulate(
     symbols: list[str],
     bars_by_symbol: dict[str, list[Any]],
@@ -1348,14 +1363,7 @@ def simulate(
         # Only dates with a bar enter the curve: a date on which nothing in the
         # selection traded is not a mark, it is a holiday.
         if day.closes:
-            # One mark per session: an intraday run keeps each session's last
-            # bar, so the curve -- and every daily statistic built on it -- is
-            # in sessions whatever the bar frequency.
-            session = day.date[:10]
-            if curve and curve[-1].date == session:
-                curve[-1] = EquityPoint(date=session, value=day.equity)
-            else:
-                curve.append(EquityPoint(date=session, value=day.equity))
+            mark_session(curve, day.date, day.equity)
     return ExecutionResult(
         equity=curve,
         trades=simulator.trades(),

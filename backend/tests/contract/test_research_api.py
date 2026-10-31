@@ -273,7 +273,7 @@ class _WithUniverses:
     def health(self):
         return True, 0
 
-    def list_universes(self):
+    def list_universes(self, owner=None):
         return {
             "total": 1,
             "items": [{"name": "liquid-500-ftse-core", "as_of": "2026-09-20", "size": 598}],

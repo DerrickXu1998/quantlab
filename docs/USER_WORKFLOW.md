@@ -23,6 +23,8 @@ the warehouse (for example, `all`, `us`, `uk`, or a custom list you create).
   **Everything**) or search for individual tickers.
 - When you have a list you want to reuse, click **Save as universe**, give it a
   name, and it becomes available in the **Research > Screen** universe dropdown.
+  A saved universe is yours: other users never see it, and it cannot take the
+  name of a shared universe such as `all`.
 
 The warehouse stores universe membership as a dated snapshot, so a screen run
 against `2024-01-01` uses the members as of that date, not today's survivors.

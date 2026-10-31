@@ -377,3 +377,49 @@ def test_a_cooldown_day_blocks_reentry_for_the_rest_of_that_session():
     entries = sorted(trade.entry_date for trade in result.trades)
     assert [e[:10] for e in entries] == ["2024-01-02", "2024-01-03"]
     assert result.summary.rejected_cooldown == 1
+
+
+# --- replay -------------------------------------------------------------------
+
+
+def test_a_replay_of_an_intraday_run_scores_it_as_the_run_does():
+    """Replay used to mark equity on every bar and performance on every
+    session, so an intraday run's replay counted 5-minute bars as days and
+    annualised their returns with sqrt(252): a different Sharpe, drawdown and
+    day count for the same run. Both now mark sessions."""
+    from quantlab.replay import engine as replay
+    from quantlab.research import performance
+
+    bars = series(
+        session("2024-01-02", [100, 103, 99, 101]),
+        session("2024-01-03", [101, 97, 104, 102]),
+        session("2024-01-04", [102, 106, 100, 105]),
+        session("2024-01-05", [105, 101, 107, 103]),
+        session("2024-01-08", [103, 108, 102, 109]),
+    )
+    signals = [
+        {
+            "date": "2024-01-02T09:30",
+            "symbol": "AAA",
+            "direction": "bullish",
+            "kind": "entry",
+            "trigger_values": {},
+            "data_window_end": "2024-01-02T09:30",
+        },
+    ]
+    config = ExecutionConfig(bar_frequency="5m")
+    run = {"id": "r", "symbols": ["AAA"], "start_date": "2024-01-02"}
+
+    scored = performance.compute_performance(
+        run_id="r",
+        signals=signals,
+        bars_by_symbol={"AAA": bars},
+        symbols=["AAA"],
+        execution=config,
+    )
+    replayed = replay.replay_summary(run, signals, {"AAA": bars}, config=config)
+
+    assert replayed.days == len(scored.equity) == 5
+    assert replayed.sharpe_ratio == pytest.approx(scored.metrics.sharpe_ratio)
+    assert replayed.max_drawdown == pytest.approx(scored.metrics.max_drawdown)
+    assert replayed.total_return == pytest.approx(scored.metrics.total_return)

@@ -76,12 +76,14 @@ class StorageBackend(Protocol):
     # universe history, so it answers zero and empty rather than raising, for
     # the same reason `load_facts_for` does.
     def fundamentals_coverage(self) -> dict: ...
-    def list_universes(self) -> dict: ...
+    # Universes are shared (the pipeline's) or a user's own (POST /universes).
+    # ``owner`` is the caller: they see the shared ones and their own only.
+    def list_universes(self, owner: str | None = None) -> dict: ...
     def publish_universe(
-        self, name: str, symbols: list[str], snapshot_date: str | None = None
+        self, name: str, symbols: list[str], snapshot_date: str | None = None, *, owner: str
     ) -> dict: ...
     def ensure_default_universe(self) -> None: ...
-    def universe_members(self, name: str, as_of: str) -> dict | None: ...
+    def universe_members(self, name: str, as_of: str, owner: str | None = None) -> dict | None: ...
     def company_overview(self, symbol: str, as_of: str) -> dict | None: ...
     #: Tiingo's profile, daily metrics and as-reported statements for a name.
     def company_fundamentals(
@@ -228,19 +230,21 @@ class SqliteBackend:
             "symbols_without_facts": instruments,
         }
 
-    def list_universes(self) -> dict:
+    def list_universes(self, owner: str | None = None) -> dict:
         # The synthetic dataset is one flat list with no membership history.
         return {"total": 0, "items": []}
 
     def publish_universe(
-        self, name: str, symbols: list[str], snapshot_date: str | None = None
+        self, name: str, symbols: list[str], snapshot_date: str | None = None, *, owner: str
     ) -> dict:
-        raise NotImplementedError("the demo dataset has no universe history")
+        # A ValueError, which the route answers as a 422 naming the problem --
+        # not NotImplementedError, which reached the client as a bare 500.
+        raise ValueError("the demo dataset has no universe history; universes need the warehouse")
 
     def ensure_default_universe(self) -> None:
         pass
 
-    def universe_members(self, name: str, as_of: str) -> dict | None:
+    def universe_members(self, name: str, as_of: str, owner: str | None = None) -> dict | None:
         # No universe history, so no universe to resolve.
         return None
 
@@ -440,22 +444,22 @@ class WarehouseBackend:
     def fundamentals_coverage(self) -> dict:
         return warehouse.fundamentals_coverage(self.wh)
 
-    def list_universes(self) -> dict:
-        return warehouse.list_universes(self.wh)
+    def list_universes(self, owner: str | None = None) -> dict:
+        return warehouse.list_universes(self.wh, owner)
 
     def publish_universe(
-        self, name: str, symbols: list[str], snapshot_date: str | None = None
+        self, name: str, symbols: list[str], snapshot_date: str | None = None, *, owner: str
     ) -> dict:
         date: dt.date | None = None
         if snapshot_date:
             date = dt.date.fromisoformat(snapshot_date)
-        return warehouse.publish_universe(self.wh, name, symbols, snapshot_date=date)
+        return warehouse.publish_universe(self.wh, name, symbols, snapshot_date=date, owner=owner)
 
     def ensure_default_universe(self) -> None:
         warehouse.ensure_default_universe(self.wh)
 
-    def universe_members(self, name: str, as_of: str) -> dict | None:
-        snapshot = warehouse.resolve_universe(self.wh, name, as_of)
+    def universe_members(self, name: str, as_of: str, owner: str | None = None) -> dict | None:
+        snapshot = warehouse.resolve_universe(self.wh, name, as_of, owner)
         if snapshot is None:
             return None
         return {"name": snapshot.universe, "as_of": snapshot.as_of, "symbols": snapshot.symbols}
