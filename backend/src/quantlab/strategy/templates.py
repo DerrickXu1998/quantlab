@@ -301,6 +301,158 @@ def _quality_momentum() -> StrategySpec:
     )
 
 
+# ---------------------------------------------------------------------------
+# Robert Carver, Systematic Trading (Bookey summary supplied by the user).
+#
+# Carver's EWMAC produces continuous, volatility-normalized forecasts. The
+# strategy engine combines events instead, so these candidates use agreement
+# across EMA-crossover speeds as an explicit approximation, not as a claim to
+# implement forecast scalars or diversification multipliers. Volatility-targeted
+# sizing, several instruments, next-open fills and non-zero costs retain the
+# book's risk and turnover discipline. A carry candidate is deliberately absent:
+# this store has no dividend-yield, funding-rate or futures-curve series.
+# ---------------------------------------------------------------------------
+
+_EWMAC_WINDOWS = ((8, 32), (16, 64), (32, 128))
+
+
+def _ewmac_ensemble(name: str, description: str, execution: ExecutionConfig) -> StrategySpec:
+    components = tuple(
+        component
+        for fast, slow in _EWMAC_WINDOWS
+        for component in (
+            _component("ema-crossover", "entry", fast=fast, slow=slow),
+            _component("ema-crossover", "exit", fast=fast, slow=slow),
+        )
+    )
+    return StrategySpec(
+        name=name,
+        description=description,
+        components=components,
+        entry_logic="majority",
+        exit_logic="majority",
+        combine_window_days=5,
+        execution=execution,
+    )
+
+
+def _systematic_ewmac_long() -> StrategySpec:
+    return _ewmac_ensemble(
+        name="test-candidate-systematic-1",
+        description=(
+            "Carver-inspired diversified EWMAC: two of three trend speeds (8/32, "
+            "16/64 and 32/128 sessions) must agree within five sessions to enter "
+            "or exit. Event voting approximates the book's combined forecasts; it "
+            "does not implement continuous forecast scalars. Positions are sized "
+            "to a 2% annualised volatility contribution, capped per name, filled "
+            "at the next open and charged costs. Long-only research candidate, "
+            "not a fitted or out-of-sample-validated recommendation."
+        ),
+        execution=ExecutionConfig(
+            position_sizing="volatility_target",
+            sizing_value=0.02,
+            max_positions=10,
+            max_position_pct=0.15,
+            fill_timing="next_open",
+            **_COSTS,
+        ),
+    )
+
+
+def _systematic_ewmac_long_short() -> StrategySpec:
+    return _ewmac_ensemble(
+        name="test-candidate-systematic-2",
+        description=(
+            "The multi-speed EWMAC ensemble traded in both directions: majority "
+            "bullish agreement opens a long, majority bearish agreement opens a "
+            "short, and the opposite majority closes it. This is an event-based "
+            "approximation of Carver's combined forecasts. A lower volatility "
+            "target and position cap limit risk; shorts pay 50 bps annual borrow, "
+            "though locate availability remains unmodelled. Next-open fills and "
+            "transaction costs apply. Research candidate, not a validated system."
+        ),
+        execution=ExecutionConfig(
+            position_sizing="volatility_target",
+            sizing_value=0.015,
+            max_positions=10,
+            max_position_pct=0.10,
+            fill_timing="next_open",
+            allow_shorts=True,
+            borrow_cost_bps=50.0,
+            **_COSTS,
+        ),
+    )
+
+
+def _systematic_quality_value() -> StrategySpec:
+    return StrategySpec(
+        name="test-candidate-systematic-3",
+        description=(
+            "A simple ideas-first quality/value trend candidate. A 16/64 EWMAC "
+            "cross enters only while filed accounts show ROE of at least 10%, "
+            "long-term debt no greater than equity, P/E between 0 and 30, and P/B "
+            "between 0 and 4; the opposite cross exits. Every fundamental is "
+            "point-in-time by filing date, and missing or stale facts keep the "
+            "gate shut, so coverage will vary by symbol. Volatility-targeted "
+            "sizing, next-open fills and costs follow Carver's risk discipline."
+        ),
+        components=(
+            _component("ema-crossover", "entry", fast=16, slow=64),
+            _component("ema-crossover", "exit", fast=16, slow=64),
+            _component("profitability-filter", "filter", min_roe=0.10),
+            _component("leverage-filter", "filter", max_ratio=1.0),
+            _component("pe-filter", "filter", min_pe=0.0, max_pe=30.0),
+            _component("pb-filter", "filter", min_pb=0.0, max_pb=4.0),
+        ),
+        entry_logic="all",
+        exit_logic="any",
+        execution=ExecutionConfig(
+            position_sizing="volatility_target",
+            sizing_value=0.02,
+            max_positions=10,
+            max_position_pct=0.15,
+            fill_timing="next_open",
+            **_COSTS,
+        ),
+    )
+
+
+def _systematic_cash_backed_growth() -> StrategySpec:
+    return StrategySpec(
+        name="test-candidate-systematic-4",
+        description=(
+            "Combine market and filing evidence: any two of a 16/64 EWMAC cross, "
+            "annual revenue growth of at least 5%, and operating cash flow "
+            "exceeding earnings by at least 25% must agree within 21 sessions. "
+            "ROE and leverage gates exclude weak or highly geared issuers. An "
+            "EWMAC reversal or cash flow falling short of earnings exits. Filing "
+            "signals fire only when public, never on their period end; sparse "
+            "coverage and reporting-season clustering are expected. Volatility "
+            "targeting, next-open fills and costs limit risk and turnover."
+        ),
+        components=(
+            _component("ema-crossover", "entry", fast=16, slow=64),
+            _component("revenue-growth", "entry", threshold=0.05),
+            _component("accrual-reversal", "entry", threshold=0.25),
+            _component("ema-crossover", "exit", fast=16, slow=64),
+            _component("accrual-reversal", "exit", threshold=0.25),
+            _component("profitability-filter", "filter", min_roe=0.10),
+            _component("leverage-filter", "filter", max_ratio=1.0),
+        ),
+        entry_logic="majority",
+        exit_logic="any",
+        combine_window_days=21,
+        execution=ExecutionConfig(
+            position_sizing="volatility_target",
+            sizing_value=0.02,
+            max_positions=10,
+            max_position_pct=0.15,
+            fill_timing="next_open",
+            **_COSTS,
+        ),
+    )
+
+
 _BUILDERS = {
     "rsi-mean-reversion": _rsi_mean_reversion,
     "macd-trend-following": _macd_trend_following,
@@ -310,6 +462,10 @@ _BUILDERS = {
     "regime-reversion": _regime_reversion,
     "macro-gated-trend": _macro_gated_trend,
     "quality-momentum": _quality_momentum,
+    "test-candidate-systematic-1": _systematic_ewmac_long,
+    "test-candidate-systematic-2": _systematic_ewmac_long_short,
+    "test-candidate-systematic-3": _systematic_quality_value,
+    "test-candidate-systematic-4": _systematic_cash_backed_growth,
 }
 
 #: Stable ids the frontend can offer as one-click starting points.
@@ -319,6 +475,15 @@ TEMPLATE_IDS: tuple[str, ...] = tuple(_BUILDERS)
 #: generic starters so a user can tell a worked example from a research baseline.
 BOOK_TEMPLATE_IDS: frozenset[str] = frozenset(
     {"regime-trend", "regime-reversion", "macro-gated-trend", "quality-momentum"}
+)
+
+SYSTEMATIC_TRADING_TEMPLATE_IDS: frozenset[str] = frozenset(
+    {
+        "test-candidate-systematic-1",
+        "test-candidate-systematic-2",
+        "test-candidate-systematic-3",
+        "test-candidate-systematic-4",
+    }
 )
 
 
@@ -338,6 +503,11 @@ def catalogue() -> list[dict]:
     out = []
     for template_id in TEMPLATE_IDS:
         spec = template(template_id)
-        collection = "ai-quant-book" if template_id in BOOK_TEMPLATE_IDS else "starter"
+        if template_id in BOOK_TEMPLATE_IDS:
+            collection = "ai-quant-book"
+        elif template_id in SYSTEMATIC_TRADING_TEMPLATE_IDS:
+            collection = "systematic-trading"
+        else:
+            collection = "starter"
         out.append({"id": template_id, "collection": collection, **spec.to_dict()})
     return out

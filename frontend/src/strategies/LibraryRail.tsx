@@ -15,19 +15,22 @@ const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-fore
 
 export type LibraryList = 'mine' | 'templates' | 'signals';
 
-/**
- * Two shelves: generic starters, and the presets replicating the AI-quant-book
- * plan. The book shelf says what those presets are for -- falsifiable
- * baselines, each predicting its own failure mode -- and repeats the
- * unadjusted-price caveat, because a long-horizon backtest of them is exactly
- * where a split gap turns into a fake signal.
- */
-const TEMPLATE_SHELVES: { id: 'starter' | 'ai-quant-book'; label: string; note?: string }[] = [
+/** Presentation only; the server owns template membership and ordering. */
+const TEMPLATE_SHELVES: {
+  id: 'starter' | 'ai-quant-book' | 'systematic-trading';
+  label: string;
+  note?: string;
+}[] = [
   { id: 'starter', label: 'Starters' },
   {
     id: 'ai-quant-book',
     label: 'AI Quant Book presets',
     note: 'Regime-routed baselines from the strategy plan (S1, S2, S6, S7). Each description says where it should fail — a backtest that does not fail there is a bug signal. Splits and dividends are adjusted by default (Execution → Splits & dividends); a run made before that traded raw prices — check its trades on split dates.',
+  },
+  {
+    id: 'systematic-trading',
+    label: 'Systematic Trading candidates',
+    note: 'Research candidates inspired by Robert Carver: diversified EWMAC signals, point-in-time fundamentals, volatility targeting, and explicit trading costs. They are starting points for evaluation, not validated performance claims.',
   },
 ];
 

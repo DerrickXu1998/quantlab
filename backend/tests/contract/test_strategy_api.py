@@ -194,10 +194,10 @@ def test_the_new_rules_are_all_served(client):
 
 def test_templates_are_public_and_complete(client):
     body = client.get("/api/v1/strategy-templates").json()
-    assert body["total"] == 8
-    # The AI-quant-book presets (S1, S2, S6, S7) are one click, like the starters.
+    assert body["total"] == 12
     ids = {item["id"] for item in body["items"]}
     assert {"regime-trend", "regime-reversion", "macro-gated-trend", "quality-momentum"} <= ids
+    assert {f"test-candidate-systematic-{number}" for number in range(1, 5)} <= ids
     for item in body["items"]:
         assert item["components"], item["id"]
         assert item["execution"]["commission_bps"] > 0, "a starter must not teach free turnover"
@@ -476,7 +476,13 @@ def test_assumptions_describe_the_run_that_actually_happened(client, token, wind
     assert any("10 bps commission" in line for line in body["assumptions"])
 
     free = client.post(
-        "/api/v1/runs", json=run_body(window, model_name="rsi-threshold"), headers=auth(token)
+        "/api/v1/runs",
+        json=run_body(
+            window,
+            model_name="rsi-threshold",
+            execution={"commission_bps": 0.0, "slippage_bps": 0.0},
+        ),
+        headers=auth(token),
     ).json()
     free_body = client.get(
         f"/api/v1/runs/{free['id']}/performance", headers=auth(token)

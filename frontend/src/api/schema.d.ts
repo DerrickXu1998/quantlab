@@ -1345,13 +1345,13 @@ export interface components {
         };
         StrategyTemplate: components["schemas"]["StrategyRequest"] & {
             /** @enum {string} */
-            id: "rsi-mean-reversion" | "macd-trend-following" | "donchian-breakout" | "dual-confirmation" | "regime-trend" | "regime-reversion" | "macro-gated-trend" | "quality-momentum";
+            id: "rsi-mean-reversion" | "macd-trend-following" | "donchian-breakout" | "dual-confirmation" | "regime-trend" | "regime-reversion" | "macro-gated-trend" | "quality-momentum" | "test-candidate-systematic-1" | "test-candidate-systematic-2" | "test-candidate-systematic-3" | "test-candidate-systematic-4";
             /**
-             * @description Which shelf the template belongs on: the generic starters, or the presets replicating docs/AI_QUANT_BOOK_STRATEGY_PLAN.md (S1, S2, S6, S7). Presentation only; not part of the spec.
+             * @description Which shelf the template belongs on: the generic starters, the presets replicating docs/AI_QUANT_BOOK_STRATEGY_PLAN.md, or the Robert Carver Systematic Trading research candidates. Presentation only; not part of the spec.
              * @default starter
              * @enum {string}
              */
-            collection: "starter" | "ai-quant-book";
+            collection: "starter" | "ai-quant-book" | "systematic-trading";
         };
         StrategyTemplateList: {
             total: number;
@@ -1378,18 +1378,18 @@ export interface components {
             max_position_pct: number;
             /**
              * @description Where signal entries and exits fill. `signal_close`: the close of the bar that produced the signal (optimistic -- that close is also the rule's input). `next_open` / `next_close`: the open or close of the following session. `next_typical`: (high + low + close) / 3 of the following session, a stand-in for VWAP. `next_vwap`: the following session's volume-weighted average price from its minute bars; needs intraday_resolution minute. The `next_*` timings drop a signal on the window's last bar. Protective exits (stops, targets) are unaffected: they fill against the bar that hit them.
-             * @default signal_close
+             * @default next_open
              * @enum {string}
              */
             fill_timing: "signal_close" | "next_open" | "next_close" | "next_typical" | "next_vwap";
             /**
              * @description Charged per side, on notional.
-             * @default 0
+             * @default 1
              */
             commission_bps: number;
             /**
              * @description Moves the fill price against the trade, per side.
-             * @default 0
+             * @default 5
              */
             slippage_bps: number;
             /** @description A fraction, not a percentage: 0.05 is five percent. Bounded because a user who types `5` meaning "five percent" would otherwise get a stop 500% away that never triggers, and the backtest would look like the stop simply never helped. */
