@@ -204,7 +204,13 @@ export function listSignals(filters: SignalQuery = {}): Promise<SignalList> {
 export type ParamSpec = components['schemas']['ParamSpec'];
 export type Model = components['schemas']['Model'];
 export type ModelList = components['schemas']['ModelList'];
-export type RunRequest = components['schemas']['RunRequest'];
+/**
+ * `execution` is the hand-written config (types.ts), which can run ahead of
+ * the generated schema when a sizing mode is added; the backend validates it.
+ */
+export type RunRequest = Omit<components['schemas']['RunRequest'], 'execution'> & {
+  execution?: ExecutionConfig;
+};
 export type Run = components['schemas']['Run'];
 export type RunList = components['schemas']['RunList'];
 export type RunDetail = components['schemas']['RunDetail'];

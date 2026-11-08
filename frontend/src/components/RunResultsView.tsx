@@ -2,7 +2,8 @@ import { AlertTriangle, Ban, Hourglass, Info, TriangleAlert } from 'lucide-react
 import { useState } from 'react';
 import type { Run } from '../api/client';
 import type { ExecutionConfig, RunDetailV2 } from '../api/types';
-import { FILL_TIMING_SHORT } from '../api/types';
+import { FILL_TIMING_SHORT, isAllocationSizing } from '../api/types';
+import { allocationChips } from '../strategies/executionSummary';
 import { navigate } from '../chrome/router';
 import { useRunPerformance } from '../quantlab/data/useRunPerformance';
 import { EquityCurve } from '../quantlab/charts/EquityCurve';
@@ -464,7 +465,13 @@ export function RunResultsView({ run }: { run: RunDetailV2 }) {
 function executionChips(execution: ExecutionConfig): string[] {
   const chips: string[] = [];
   chips.push(FILL_TIMING_SHORT[execution.fill_timing]);
-  chips.push(`${execution.position_sizing.replace(/_/g, ' ')} sizing`);
+  if (isAllocationSizing(execution.position_sizing)) {
+    // A shared-capital run resizes positions after entry: the reader needs the
+    // targets it was steering to, in the builder summary's own words.
+    chips.push(...allocationChips(execution).map((chip) => chip.text));
+  } else {
+    chips.push(`${execution.position_sizing.replace(/_/g, ' ')} sizing`);
+  }
   if (execution.max_positions !== null) chips.push(`max ${execution.max_positions} positions`);
   if (execution.commission_bps > 0) chips.push(`${execution.commission_bps} bps commission`);
   if (execution.slippage_bps > 0) chips.push(`${execution.slippage_bps} bps slippage`);

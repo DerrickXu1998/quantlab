@@ -126,8 +126,57 @@ export const TERMS = {
   position_sizing: {
     label: 'Position sizing',
     short:
-      'How much of the book each new position gets: an equal share, a fixed fraction, fixed cash, or a volatility target.',
+      'How much of the book each position gets. Independent modes size each position once at entry (equal share, fixed fraction, fixed cash, volatility target); portfolio allocation modes hold target weights across a shared book and rebalance them.',
     unit: 'choice',
+    group: 'Execution',
+  },
+  portfolio_allocation: {
+    label: 'Portfolio allocation',
+    short:
+      'Sizing that shares one pool of capital: every active signal gets a target weight, and existing positions are resized toward it, so one signal can shrink another position.',
+    unit: 'choice',
+    group: 'Execution',
+  },
+  target_exposure: {
+    label: 'Target exposure',
+    short:
+      'Gross share of equity the allocation targets add up to, longs plus shorts. The remainder is held as cash.',
+    unit: 'percent',
+    group: 'Execution',
+  },
+  allocation_score: {
+    label: 'Signal strength',
+    short:
+      'The weighted share of a strategy’s entry components that agree on a name, from just above 0% to 100%. Filters and exits never count toward it.',
+    unit: 'percent',
+    group: 'Execution',
+  },
+  realised_volatility: {
+    label: 'Realised volatility',
+    short:
+      'How much a price has actually moved over a recent lookback, annualised. Inverse-volatility allocation gives quieter names more weight.',
+    unit: 'bars',
+    group: 'Execution',
+  },
+  rebalance: {
+    label: 'Rebalance',
+    short:
+      'Trading open positions back toward their target weights, on a signal change or on a schedule. Fills it causes are marked Rebalance.',
+    unit: 'choice',
+    group: 'Execution',
+  },
+  rebalance_threshold: {
+    label: 'Rebalance threshold',
+    short:
+      'The smallest gap between a position’s weight and its target worth trading. Smaller drifts are left alone to save costs; exits always trade.',
+    unit: 'percentage-points',
+    group: 'Execution',
+  },
+  max_turnover: {
+    label: 'Max turnover',
+    short:
+      'The most one rebalance may trade, as the sum of weight changes. A larger rebalance is scaled down in proportion; exits are never delayed.',
+    unit: 'percent',
     group: 'Execution',
   },
   max_positions: {

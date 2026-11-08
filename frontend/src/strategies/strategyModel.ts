@@ -1,14 +1,20 @@
 import type {
+  AllocationField,
   CatalogModel,
   CombineLogic,
   ExecutionConfig,
+  RebalanceFrequency,
   Strategy,
   StrategyComponent,
   StrategyRole,
   StrategySpec,
 } from '../api/types';
 import {
+  ALLOCATION_FIELDS,
   DEFAULT_EXECUTION,
+  REBALANCE_FREQUENCIES,
+  isAllocationSizing,
+  resolveAllocation,
   ROLE_LABELS,
   UNIT_PRESENTATION,
   unitOf,
@@ -194,6 +200,24 @@ export function draftWarnings(draft: Draft): string[] {
         : 'No exit signal and no stop, target or holding limit. Every position will stay open to the end of the window.',
     );
   }
+
+  const sizing = execution.position_sizing;
+  if (sizing === 'signal_strength' || sizing === 'signal_inverse_volatility') {
+    const entries = draft.components.filter((component) => component.role === 'entry');
+    // An `all` entry, or a weighted one whose threshold needs every weight,
+    // only fires when every component agrees: every signal scores 100%.
+    const totalWeight = entries.reduce((total, component) => total + component.weight, 0);
+    const everyoneMustAgree =
+      draft.entry_logic === 'all' ||
+      (draft.entry_logic === 'weighted' && draft.entry_threshold >= totalWeight);
+    if (entries.length === 1 || (entries.length > 1 && everyoneMustAgree)) {
+      warnings.push(
+        sizing === 'signal_strength'
+          ? 'Every entry signal scores 100% here (one entry component, or ALL must agree), so signal strength allocates exactly like equal active weight.'
+          : 'Every entry signal scores 100% here (one entry component, or ALL must agree), so weights differ only by volatility.',
+      );
+    }
+  }
   return warnings;
 }
 
@@ -240,6 +264,85 @@ export function draftBlockers(draft: Draft): string[] {
       );
     }
   }
+  blockers.push(...allocationBlockers(draft.execution));
+  return blockers;
+}
+
+/** Set, as the backend reads it: null and absent both mean "use the default". */
+function isSet<T>(value: T | null | undefined): value is T {
+  return value !== null && value !== undefined;
+}
+
+const ALLOCATION_FIELD_LABELS: Record<AllocationField, string> = {
+  target_exposure: 'Target exposure',
+  min_allocation_score: 'Min allocation score',
+  rebalance_frequency: 'Rebalance',
+  rebalance_threshold: 'Rebalance threshold',
+  max_turnover: 'Max turnover',
+};
+
+/**
+ * The allocation combinations `ExecutionConfig.validate` refuses, with the same
+ * ranges, so Run is disabled with the reason rather than sent into a 422.
+ */
+export function allocationBlockers(execution: ExecutionConfig): string[] {
+  const blockers: string[] = [];
+  if (!isAllocationSizing(execution.position_sizing)) {
+    const stray = ALLOCATION_FIELDS.filter((field) => isSet(execution[field]));
+    if (stray.length > 0) {
+      const names = joinList(
+        stray.map((field) => ALLOCATION_FIELD_LABELS[field]),
+        'and',
+      );
+      const one = stray.length === 1;
+      blockers.push(
+        `${names} only ${one ? 'applies' : 'apply'} to portfolio allocation sizing (equal active, signal strength, strength ÷ volatility) — clear ${one ? 'it' : 'them'} or pick one of those modes.`,
+      );
+    }
+    return blockers;
+  }
+
+  if (isSet(execution.sizing_value)) {
+    blockers.push('Portfolio allocation sizing takes no sizing value — the targets set the size.');
+  }
+  const {
+    target_exposure,
+    min_allocation_score,
+    rebalance_frequency,
+    rebalance_threshold,
+    max_turnover,
+  } = execution;
+  const finite = (value: number) => Number.isFinite(value);
+  if (
+    isSet(target_exposure) &&
+    !(finite(target_exposure) && target_exposure > 0 && target_exposure <= 1)
+  ) {
+    blockers.push('Target exposure must be above 0% and at most 100%.');
+  }
+  if (
+    isSet(min_allocation_score) &&
+    !(finite(min_allocation_score) && min_allocation_score >= 0 && min_allocation_score <= 1)
+  ) {
+    blockers.push('Min allocation score must be between 0% and 100%.');
+  }
+  if (isSet(rebalance_frequency) && !REBALANCE_FREQUENCIES.includes(rebalance_frequency)) {
+    blockers.push(`Rebalance must be one of ${REBALANCE_FREQUENCIES.join(', ')}.`);
+  }
+  if (
+    isSet(rebalance_threshold) &&
+    !(finite(rebalance_threshold) && rebalance_threshold >= 0 && rebalance_threshold < 1)
+  ) {
+    blockers.push('Rebalance threshold must be at least 0% and below 100%.');
+  }
+  if (isSet(max_turnover) && !(finite(max_turnover) && max_turnover > 0 && max_turnover <= 2)) {
+    blockers.push('Max turnover must be above 0% and at most 200%, or blank for no cap.');
+  }
+  if (
+    execution.position_sizing === 'signal_inverse_volatility' &&
+    !(Number.isInteger(execution.atr_period) && execution.atr_period >= 2)
+  ) {
+    blockers.push('Volatility lookback must be a whole number of at least 2 bars.');
+  }
   return blockers;
 }
 
@@ -260,8 +363,9 @@ export function draftToSpec(draft: Draft, catalog: CatalogModel[]): StrategySpec
         role: component.role,
       };
       if (component.rule_version) built.rule_version = component.rule_version;
-      // `weight` is only read by weighted logic; sending it regardless would
-      // put a number in the record that had no effect on the run.
+      // `weight` is only editable, and only sent, under weighted logic. The
+      // allocation score reads it too, but a weight the user cannot see must
+      // not tilt the allocation, so otherwise every component counts as 1.
       if (draft.entry_logic === 'weighted' || draft.exit_logic === 'weighted') {
         built.weight = component.weight;
       }
@@ -460,6 +564,52 @@ function exitClause(draft: Draft, catalog: CatalogModel[]): string {
   return protective.length === 0 ? `${signal}.` : `${signal}, or on ${joinList(protective, 'or')}.`;
 }
 
+const REBALANCE_PHRASE: Record<RebalanceFrequency, string> = {
+  on_signal: 'whenever a signal opens, changes or closes',
+  daily: 'every session',
+  weekly: 'on the first session of each week',
+  monthly: 'on the first session of each month',
+};
+
+/**
+ * How a shared-capital mode splits the book, in English; null for the
+ * independent modes, whose sizing the sentence has never described.
+ */
+export function describeAllocation(execution: ExecutionConfig): string | null {
+  const mode = execution.position_sizing;
+  if (!isAllocationSizing(mode)) return null;
+  const settings = resolveAllocation(execution);
+  const exposure = percent(settings.target_exposure);
+  // Equal scores tie, and ties go alphabetically: said, because a cap then
+  // picks names by symbol rather than by conviction.
+  const names =
+    execution.max_positions === null
+      ? 'every active signal'
+      : `at most ${execution.max_positions} active ${execution.max_positions === 1 ? 'signal' : 'signals'} (strongest first, ties by symbol)`;
+  const how =
+    mode === 'equal_active'
+      ? `equally across ${names}`
+      : mode === 'signal_strength'
+        ? `across ${names} in proportion to signal strength (the share of entry components that agree)`
+        : `across ${names} in proportion to signal strength divided by trailing ${execution.atr_period}-bar volatility`;
+  const parts = [`Shares ${exposure} of the book ${how}`];
+  if (execution.max_position_pct < 1)
+    parts.push(`at most ${percent(execution.max_position_pct)} in any one name`);
+  if (settings.min_allocation_score > 0) {
+    parts.push(`ignoring signals scoring below ${percent(settings.min_allocation_score)}`);
+  }
+  const rebalance = [
+    `rebalancing open positions ${REBALANCE_PHRASE[settings.rebalance_frequency]}`,
+  ];
+  if (settings.rebalance_threshold > 0) {
+    rebalance.push(`skipping drifts under ${percent(settings.rebalance_threshold)}`);
+  }
+  if (settings.max_turnover !== null) {
+    rebalance.push(`trading at most ${percent(settings.max_turnover)} turnover at a time`);
+  }
+  return `${parts.join(', ')}, ${joinList(rebalance, 'and')} — so one signal can resize the other positions.`;
+}
+
 /**
  * The strategy, in a sentence a non-expert can check against what they meant.
  *
@@ -489,6 +639,9 @@ export function describeStrategy(draft: Draft, catalog: CatalogModel[]): string 
       ? 'A bearish entry opens a short; long and short are both in play.'
       : 'Long only — bearish signals are ignored for entry.',
   );
+
+  const allocation = describeAllocation(draft.execution);
+  if (allocation) sentences.push(allocation);
 
   // The point-in-time rule, said in the sentence the user reads back rather
   // than only in the run's assumptions (FUNDAMENTALS §5.4). It appears only
