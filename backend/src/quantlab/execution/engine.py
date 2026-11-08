@@ -249,6 +249,10 @@ class _PendingOrder:
     reason: str = "signal"
     protective: bool = False
     started: bool = False
+    #: The quantity is a fixed target (a rebalance order), not a request to
+    #: size afresh: later fills take ``min(remaining_qty, capacity)`` and never
+    #: re-size from that session's equity or price.
+    frozen_qty: bool = False
 
 
 @dataclass
@@ -433,7 +437,7 @@ class ExecutionSimulator:
                     symbol: self._seed_atr_state(bars)
                     for symbol, bars in self.bars_by_symbol.items()
                 }
-            if self.config.position_sizing == "volatility_target":
+            if self._needs_volatility():
                 self._vol_state = {
                     symbol: self._seed_vol_state(bars)
                     for symbol, bars in self.bars_by_symbol.items()
@@ -473,6 +477,13 @@ class ExecutionSimulator:
 
     # -- precomputation ----------------------------------------------------
 
+    def _needs_volatility(self) -> bool:
+        """Whether sizing reads the trailing realised volatility series."""
+        return self.config.position_sizing in (
+            "volatility_target",
+            "signal_inverse_volatility",
+        )
+
     def _precompute_atr(self) -> dict[str, np.ndarray]:
         if self.config.atr_stop_multiple is None:
             return {}
@@ -497,7 +508,7 @@ class ExecutionSimulator:
         uses -- one risk horizon rather than two that can be tuned against each
         other.
         """
-        if self.config.position_sizing != "volatility_target":
+        if not self._needs_volatility():
             return {}
         window = self.config.atr_period
         out: dict[str, np.ndarray] = {}
@@ -651,7 +662,16 @@ class ExecutionSimulator:
         *,
         qty_limit: float = float("inf"),
         request: bool = False,
+        qty: float | None = None,
+        reason: str = "signal",
     ) -> Fill | None:
+        """Open or add to a position.
+
+        ``qty`` given is an explicit target quantity (a rebalance order): it
+        bypasses :meth:`_size` but is still capped by the cash available,
+        the session's volume capacity and ``qty_limit``, and pays the same
+        costs. Left ``None``, the configured sizing mode decides.
+        """
         config = self.config
         position = self._positions.get(symbol)
         if (
@@ -672,9 +692,23 @@ class ExecutionSimulator:
 
         action = "buy" if side == "long" else "short"
         fill_price = self._slipped(price, action)
-        target_qty = self._size(symbol, fill_price, index)
+        if qty is None:
+            target_qty = self._size(symbol, fill_price, index)
+            requested_qty = target_qty
+        else:
+            if position is not None and position.side != side:
+                # A reversal closes the old side first; it is never netted here.
+                return None
+            available = self._available(symbol)
+            target_qty = (
+                min(float(qty), available / fill_price)
+                if qty > 0 and available > 0 and fill_price > 0
+                else 0.0
+            )
+            # The target is what was asked for, even where cash falls short.
+            requested_qty = max(0.0, min(float(qty), qty_limit))
         if request:
-            self._requested_notional += target_qty * fill_price
+            self._requested_notional += requested_qty * fill_price
         if target_qty <= 0:
             self._counters["rejected_no_cash"] += 1
             return None
@@ -723,7 +757,7 @@ class ExecutionSimulator:
         fill = Fill(
             date=date, symbol=symbol, side=action, qty=qty, price=fill_price,
             value=notional, commission=commission, slippage=slippage,
-            realized_pnl=0.0, reason="signal",
+            realized_pnl=0.0, reason=reason,
         )
         self.fills.append(fill)
         self._counters["fills"] += 1
@@ -788,7 +822,8 @@ class ExecutionSimulator:
         action = "sell" if position.side == "long" else "cover"
         fill_price = self._slipped(price, action)
         if request:
-            self._requested_notional += position.qty * fill_price
+            # A partial close requests only the part it asks for.
+            self._requested_notional += min(position.qty, qty_limit) * fill_price
         capacity = self._capacity(self.bars_by_symbol[symbol][index])
         qty = min(position.qty, qty_limit, capacity)
         if capacity < position.qty and capacity < qty_limit:
@@ -1302,6 +1337,8 @@ class ExecutionSimulator:
                 fill = self._open(
                     date, order.symbol, side, price, index, at_open=order.at_open,
                     qty_limit=order.remaining_qty, request=not order.started,
+                    qty=order.remaining_qty if order.frozen_qty else None,
+                    reason=order.reason,
                 )
             order.started = True
             if fill is not None:

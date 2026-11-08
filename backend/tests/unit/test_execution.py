@@ -816,3 +816,190 @@ def test_a_protective_exit_remainder_stays_active_until_filled():
     assert trade.exit_reason == "stop_loss"
     assert trade.qty == 200.0
     assert result.summary.expired_orders == 0
+
+
+# --- allocation primitives (unused by legacy sizing) --------------------------
+
+
+def _pending_open(qty, *, frozen, reason="rebalance"):
+    from quantlab.execution.engine import _PendingOrder
+
+    return _PendingOrder(
+        symbol="AAA", kind="open", direction="bullish", signal_date="d000",
+        remaining_qty=qty, created_index=0, at_open=True, reason=reason,
+        frozen_qty=frozen,
+    )
+
+
+def test_a_frozen_deferred_order_keeps_its_quantity_when_equity_and_price_move():
+    # fixed_notional would re-size to 1_000 / 200 = 5 shares on d001; the
+    # frozen target of 50 is filled as is.
+    series = bars([100.0, 200.0, 200.0])
+    config = idealized_config(
+        fill_timing="next_open", position_sizing="fixed_notional", sizing_value=1_000.0
+    )
+    frozen = ExecutionSimulator(["AAA"], {"AAA": series}, config)
+    frozen.step_day("d000", [])
+    frozen._pending.append(_pending_open(50.0, frozen=True))
+    frozen.step_day("d001", [])
+    (fill,) = frozen.fills
+    assert fill.qty == 50.0
+    assert fill.price == 200.0
+    assert fill.reason == "rebalance"
+    assert frozen._pending == []
+
+    resized = ExecutionSimulator(["AAA"], {"AAA": series}, config)
+    resized.step_day("d000", [])
+    resized._pending.append(_pending_open(50.0, frozen=False, reason="signal"))
+    resized.step_day("d001", [])
+    assert [f.qty for f in resized.fills] == [5.0]
+
+
+def test_a_capacity_limited_frozen_remainder_keeps_its_frozen_quantity():
+    # 10% of 100 shares a session caps each fill at 10; the 25-share target
+    # carries over, never re-sized down to fixed_notional's 5 shares.
+    series = volume_bars([100.0, 100.0, 120.0, 150.0, 150.0], [100] * 5)
+    config = volume_config(
+        fill_timing="next_open", position_sizing="fixed_notional", sizing_value=500.0
+    )
+    simulator = ExecutionSimulator(["AAA"], {"AAA": series}, config)
+    simulator.step_day("d000", [])
+    simulator._pending.append(_pending_open(25.0, frozen=True))
+    simulator.step_day("d001", [])
+    (remainder,) = simulator._pending
+    assert remainder.frozen_qty is True
+    assert remainder.remaining_qty == 15.0
+    assert remainder.reason == "rebalance"
+    simulator.step_day("d002", [])
+    simulator.step_day("d003", [])
+    assert [(f.date, f.qty, f.reason) for f in simulator.fills] == [
+        ("d001", 10.0, "rebalance"), ("d002", 10.0, "rebalance"), ("d003", 5.0, "rebalance"),
+    ]
+    assert simulator._pending == []
+    assert simulator._positions["AAA"].qty == 25.0
+    # Requested once, at the first attempt: 25 shares at d001's open.
+    assert simulator._requested_notional == pytest.approx(25.0 * 100.0)
+
+
+def test_a_partial_close_requests_only_the_quantity_asked_for():
+    series = bars([100.0, 110.0])
+    config = idealized_config(position_sizing="fixed_notional", sizing_value=10_000.0)
+    simulator = ExecutionSimulator(["AAA"], {"AAA": series}, config)
+    simulator.step_day("d000", [decision("d000", "entry", "bullish")])
+    assert simulator._positions["AAA"].qty == 100.0
+    before = simulator._requested_notional
+    fill = simulator._close(
+        "d001", "AAA", 110.0, 1, "rebalance", qty_limit=40.0, request=True
+    )
+    assert fill.qty == 40.0
+    assert fill.reason == "rebalance"
+    assert simulator._requested_notional - before == pytest.approx(40.0 * 110.0)
+    assert simulator._positions["AAA"].qty == 60.0
+
+
+def test_an_explicit_quantity_open_sets_levels_and_charges_costs():
+    series = bars([100.0, 100.0])
+    config = idealized_config(
+        commission_bps=10.0, slippage_bps=10.0, stop_loss_pct=0.05,
+        take_profit_pct=0.10, position_sizing="fixed_notional", sizing_value=1_000.0,
+    )
+    simulator = ExecutionSimulator(["AAA"], {"AAA": series}, config)
+    fill = simulator._open(
+        "d000", "AAA", "long", 100.0, 0, at_open=False, request=True,
+        qty=30.0, reason="rebalance",
+    )
+    # 30 shares, not fixed_notional's 10.
+    assert fill.qty == 30.0
+    assert fill.reason == "rebalance"
+    assert fill.price == pytest.approx(100.1)
+    assert fill.slippage == pytest.approx(0.1 * 30.0)
+    assert fill.commission == pytest.approx(30.0 * 100.1 * 0.001)
+    position = simulator._positions["AAA"]
+    assert position.stop_price == pytest.approx(100.1 * 0.95)
+    assert position.target_price == pytest.approx(100.1 * 1.10)
+    assert simulator.cash == pytest.approx(100_000.0 - 30.0 * 100.1 - fill.commission)
+    assert simulator._requested_notional == pytest.approx(30.0 * 100.1)
+
+    # Adding to the holding takes the weighted-average entry.
+    add = simulator._open(
+        "d001", "AAA", "long", 110.0, 1, at_open=False, qty=10.0, reason="rebalance"
+    )
+    assert add.qty == 10.0
+    assert position.qty == 40.0
+    assert position.entry_price == pytest.approx((100.1 * 30.0 + add.price * 10.0) / 40.0)
+
+
+def test_an_explicit_quantity_open_is_capped_by_cash_capacity_and_limit():
+    series = volume_bars([100.0], [1_000])
+    simulator = ExecutionSimulator(
+        ["AAA"], {"AAA": series}, volume_config(initial_capital=5_000.0)
+    )
+    # Cash buys 50, capacity allows 100, the limit 40: the limit binds.
+    fill = simulator._open(
+        "d000", "AAA", "long", 100.0, 0, at_open=False, qty=1_000.0, qty_limit=40.0
+    )
+    assert fill.qty == 40.0
+    # Cash left buys 10 more, below the 100 capacity.
+    fill = simulator._open("d000", "AAA", "long", 100.0, 0, at_open=False, qty=1_000.0)
+    assert fill.qty == pytest.approx(10.0)
+    # Capacity binds when cash does not.
+    rich = ExecutionSimulator(["AAA"], {"AAA": series}, volume_config())
+    fill = rich._open("d000", "AAA", "long", 100.0, 0, at_open=False, qty=500.0)
+    assert fill.qty == 100.0
+
+
+def test_an_explicit_quantity_open_requests_its_target_even_when_cash_is_short():
+    series = volume_bars([100.0], [100_000])
+    simulator = ExecutionSimulator(
+        ["AAA"], {"AAA": series}, volume_config(initial_capital=5_000.0)
+    )
+    fill = simulator._open(
+        "d000", "AAA", "long", 100.0, 0, at_open=False, qty=1_000.0, request=True
+    )
+    assert fill.qty == 50.0
+    assert simulator._requested_notional == pytest.approx(100_000.0)
+    assert simulator._filled_notional == pytest.approx(5_000.0)
+
+
+def test_an_explicit_quantity_open_never_nets_against_the_opposite_side():
+    series = bars([100.0, 100.0])
+    simulator = ExecutionSimulator(
+        ["AAA"], {"AAA": series}, idealized_config(allow_shorts=True)
+    )
+    simulator.step_day("d000", [decision("d000", "entry", "bearish")])
+    assert simulator._positions["AAA"].side == "short"
+    assert simulator._open("d001", "AAA", "long", 100.0, 1, at_open=False, qty=10.0) is None
+    assert simulator._positions["AAA"].side == "short"
+
+
+def test_an_explicit_quantity_open_respects_the_cooldown():
+    series = bars([100.0, 100.0, 100.0])
+    simulator = ExecutionSimulator(["AAA"], {"AAA": series}, idealized_config(cooldown_days=5))
+    simulator.step_day("d000", [decision("d000", "entry", "bullish")])
+    simulator.step_day("d001", [decision("d001", "exit", "bearish")])
+    assert simulator._open("d002", "AAA", "long", 100.0, 2, at_open=False, qty=10.0) is None
+    assert simulator._counters["rejected_cooldown"] == 1
+
+
+def test_volatility_series_is_built_for_both_volatility_sizing_modes():
+    series = bars([100.0 + (i % 3) for i in range(30)])
+    legacy = ExecutionSimulator(["AAA"], {"AAA": series}, idealized_config())
+    assert not legacy._needs_volatility()
+    assert legacy._vol == {}
+
+    target = ExecutionSimulator(
+        ["AAA"], {"AAA": series},
+        idealized_config(position_sizing="volatility_target", sizing_value=0.1),
+    )
+    assert target._needs_volatility()
+    assert "AAA" in target._vol and "AAA" in target._vol_state
+
+    # The allocation mode lands in config separately; force it here.
+    config = idealized_config()
+    object.__setattr__(config, "position_sizing", "signal_inverse_volatility")
+    allocation = ExecutionSimulator(["AAA"], {"AAA": series}, config)
+    assert allocation._needs_volatility()
+    assert allocation._vol["AAA"].tolist() == pytest.approx(
+        target._vol["AAA"].tolist(), nan_ok=True
+    )
+    assert "AAA" in allocation._vol_state
