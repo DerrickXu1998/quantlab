@@ -1366,16 +1366,30 @@ export interface components {
             /** @default 100000 */
             initial_capital: number;
             /**
-             * @description `equal_weight` gives each instrument its own cash sleeve, which is what the pre-execution engine did and what makes a legacy run reproduce exactly. The other three draw on one shared pool, so `max_positions` and cash rejections behave differently between them.
+             * @description `equal_weight` gives each instrument its own cash sleeve, which is what the pre-execution engine did and what makes a legacy run reproduce exactly. `fixed_fraction`, `fixed_notional` and `volatility_target` draw on one shared pool and size each position once, at entry, so `max_positions` and cash rejections behave differently between them.
+             *     The portfolio allocation modes share one pool and keep target weights across every held position, so a new signal, a changed score or an exit elsewhere can resize positions the strategy did not signal on. `equal_active`: equal weights across instruments with an active entry signal. `signal_strength`: weights proportional to each signal's score (the weight of the entry components that fired over the weight of all entry components). `signal_inverse_volatility`: score divided by trailing annualised volatility over `atr_period` bars; an instrument with undefined or zero volatility gets nothing. Weights are normalised to `target_exposure` gross. Under these modes `max_positions` keeps the highest-scoring signals (ties by symbol) and `max_position_pct` caps each weight, redistributing the excess.
              * @default equal_weight
              * @enum {string}
              */
-            position_sizing: "equal_weight" | "fixed_fraction" | "fixed_notional" | "volatility_target";
-            /** @description Fraction of equity (`fixed_fraction`), cash per trade (`fixed_notional`), or target annualised volatility (`volatility_target`). Rejected rather than ignored under `equal_weight`: silently discarding a number the user typed is how a run quietly does something other than what the form said. */
+            position_sizing: "equal_weight" | "fixed_fraction" | "fixed_notional" | "volatility_target" | "equal_active" | "signal_strength" | "signal_inverse_volatility";
+            /** @description Fraction of equity (`fixed_fraction`), cash per trade (`fixed_notional`), or target annualised volatility (`volatility_target`). Rejected rather than ignored under `equal_weight` and the portfolio allocation modes: silently discarding a number the user typed is how a run quietly does something other than what the form said. */
             sizing_value?: number | null;
             max_positions?: number | null;
             /** @default 1 */
             max_position_pct: number;
+            /** @description Portfolio allocation modes only (rejected under any other sizing). Gross exposure, longs plus shorts, targeted as a fraction of equity; the rest stays in cash. Null means 1. */
+            target_exposure?: number | null;
+            /** @description Portfolio allocation modes only. Signals scoring below this get no allocation. Null means 0. */
+            min_allocation_score?: number | null;
+            /**
+             * @description Portfolio allocation modes only. When targets are recomputed and traded toward: `on_signal` on a session whose signals change the allocation; `daily` every session; `weekly` the first session of each ISO week; `monthly` the first session of each calendar month. Strategy and protective exits are always taken when they happen. Null means `on_signal`.
+             * @enum {string|null}
+             */
+            rebalance_frequency?: "on_signal" | "daily" | "weekly" | "monthly" | null;
+            /** @description Portfolio allocation modes only. A change smaller than this fraction of equity between a position's current and target weight is not traded; exits are never skipped. Null means 0. */
+            rebalance_threshold?: number | null;
+            /** @description Portfolio allocation modes only. The most total absolute weight change, as a fraction of equity, one rebalance trades; a larger rebalance scales every discretionary change down in proportion. Exits are neither counted nor scaled. Null means no cap. */
+            max_turnover?: number | null;
             /**
              * @description Where signal entries and exits fill. `signal_close`: the close of the bar that produced the signal (optimistic -- that close is also the rule's input). `next_open` / `next_close`: the open or close of the following session. `next_typical`: (high + low + close) / 3 of the following session, a stand-in for VWAP. `next_vwap`: the following session's volume-weighted average price from its minute bars; needs intraday_resolution minute. The `next_*` timings drop a signal on the window's last bar. Protective exits (stops, targets) are unaffected: they fill against the bar that hit them.
              * @default next_open
@@ -1481,10 +1495,10 @@ export interface components {
             dividends?: number;
         };
         /**
-         * @description Why a position closed. "The strategy said so" and "the stop caught it" are different facts about a strategy, and averaging them into one win rate hides which one is doing the work.
+         * @description Why a position closed. "The strategy said so" and "the stop caught it" are different facts about a strategy, and averaging them into one win rate hides which one is doing the work. `rebalance`: portfolio allocation sizing traded the position to a target weight of zero without a strategy exit (another signal took its capital).
          * @enum {string}
          */
-        ExitReason: "signal" | "stop_loss" | "take_profit" | "trailing_stop" | "max_holding" | "end_of_window";
+        ExitReason: "signal" | "stop_loss" | "take_profit" | "trailing_stop" | "max_holding" | "end_of_window" | "rebalance";
         /** @description The terminal event of a run's replay. Metrics are computed by the same helpers behind GET /runs/{run_id}/performance, over the replayed equity curve and trade list, so the two reconcile on the same run. */
         ReplaySummary: {
             run_id: string;
