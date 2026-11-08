@@ -635,6 +635,105 @@ def test_a_replay_stream_emits_stop_fills(client, token, window):
     assert "stop_loss" in reasons
 
 
+def two_entry_strategy(execution: dict) -> dict:
+    """Two weighted entry rules under ``any``, so scores are 0.25, 0.75 or 1."""
+    return {
+        "name": "Scored entries",
+        "description": "",
+        "components": [
+            {
+                "rule_name": "rsi-threshold", "role": "entry", "weight": 1.0,
+                "parameters": {"oversold": 45.0},
+            },
+            {
+                "rule_name": "sma-crossover", "role": "entry", "weight": 3.0,
+                "parameters": {"fast": 5, "slow": 20},
+            },
+            {"rule_name": "rsi-threshold", "role": "exit", "parameters": {"overbought": 60.0}},
+        ],
+        "entry_logic": "any",
+        "exit_logic": "any",
+        "execution": execution,
+    }
+
+
+@pytest.mark.parametrize(
+    "mode", ["equal_active", "signal_strength", "signal_inverse_volatility"]
+)
+def test_a_portfolio_allocation_run_submits_runs_and_replays(client, token, window, mode):
+    execution = {
+        "position_sizing": mode, "stop_loss_pct": 0.08, "max_positions": 2,
+        "rebalance_frequency": "on_signal", "rebalance_threshold": 0.01,
+    }
+    response = client.post(
+        "/api/v1/runs",
+        json=run_body(window, strategy=two_entry_strategy(execution)),
+        headers=auth(token),
+    )
+    assert response.status_code == 201, response.text
+    run = response.json()
+    assert run["execution"]["position_sizing"] == mode
+    assert run["execution"]["rebalance_threshold"] == 0.01
+    assert run["execution_summary"]["fills"] > 0
+
+    detail = client.get(f"/api/v1/runs/{run['id']}", headers=auth(token)).json()
+    scores = {
+        s["trigger_values"].get("_score")
+        for s in detail["signals"]
+        if s.get("kind") in ("entry", "both")
+    }
+    assert scores and all(0 < score <= 1 for score in scores)
+
+    performance = client.get(f"/api/v1/runs/{run['id']}/performance", headers=auth(token))
+    assert performance.status_code == 200, performance.text
+    body = performance.json()
+    assert body["trades"]
+    assert sum(body["exit_reasons"].values()) == len(body["trades"])
+    assert any("shared pool of capital" in line for line in body["assumptions"])
+
+    summary = client.get(
+        f"/api/v1/runs/{run['id']}/replay/summary", headers=auth(token)
+    ).json()
+    assert summary["total_return"] == pytest.approx(
+        body["metrics"]["total_return"], rel=1e-9
+    )
+    assert summary["exit_reasons"] == body["exit_reasons"]
+
+    with client.stream(
+        "GET", f"/api/v1/runs/{run['id']}/replay/stream", headers=auth(token),
+        params={"max_events": 200_000},
+    ) as stream:
+        assert stream.status_code == 200
+        reasons = set()
+        for line in stream.iter_lines():
+            if line.startswith("data: ") and '"event": "fill"' in line:
+                import json
+
+                reasons.add(json.loads(line[6:])["reason"])
+    assert "rebalance" in reasons
+
+
+def test_allocation_and_legacy_runs_of_one_strategy_differ(client, token, window):
+    legacy = client.post(
+        "/api/v1/runs",
+        json=run_body(window, strategy=two_entry_strategy({})),
+        headers=auth(token),
+    ).json()
+    shared = client.post(
+        "/api/v1/runs",
+        json=run_body(
+            window, strategy=two_entry_strategy({"position_sizing": "signal_strength"})
+        ),
+        headers=auth(token),
+    ).json()
+    assert legacy["execution"]["position_sizing"] == "equal_weight"
+    assert "rebalance_frequency" not in legacy["execution"] or (
+        legacy["execution"]["rebalance_frequency"] is None
+    )
+    assert legacy["signal_count"] == shared["signal_count"]
+    assert legacy["execution_summary"] != shared["execution_summary"]
+
+
 # --- run ownership ----------------------------------------------------------
 
 

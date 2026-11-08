@@ -55,9 +55,10 @@ def bars(prices, *, high=None, low=None, opens=None):
     return out
 
 
-def decision(date, kind, direction, symbol="AAA"):
+def decision(date, kind, direction, symbol="AAA", *, trigger_values=None):
     return Decision(
-        date=date, symbol=symbol, kind=kind, direction=direction, data_window_end=date
+        date=date, symbol=symbol, kind=kind, direction=direction,
+        trigger_values=dict(trigger_values or {}), data_window_end=date,
     )
 
 
@@ -1212,3 +1213,527 @@ def test_volatility_series_is_built_for_both_volatility_sizing_modes():
         target._vol["AAA"].tolist(), nan_ok=True
     )
     assert "AAA" in allocation._vol_state
+
+
+# --- portfolio allocation: the simulator integration ------------------------
+
+
+def scored(date, symbol, score=1.0, kind="entry", direction="bullish"):
+    return decision(date, kind, direction, symbol, trigger_values={"_score": score})
+
+
+def alloc_config(mode="equal_active", **kwargs):
+    return idealized_config(position_sizing=mode, **kwargs)
+
+
+def dated_bars(prices, *, start="2024-01-01"):
+    """Bars on real business days (2024-01-01 is a Monday)."""
+    import numpy as np
+
+    days = np.busday_offset(start, np.arange(len(prices)), roll="forward")
+    return [
+        Bar(
+            date=str(day), open=float(close), high=float(close) * 1.01,
+            low=float(close) * 0.99, close=float(close), volume=1_000,
+        )
+        for day, close in zip(days, prices, strict=True)
+    ]
+
+
+def trail(result):
+    return [(f.date, f.symbol, f.side, round(f.qty, 6), f.reason) for f in result.fills]
+
+
+def test_a_new_signal_resizes_the_position_already_held():
+    """Shared capital: B's entry trims A from 100% to 50% before buying B."""
+    series = {"AAA": bars([100.0] * 6), "BBB": bars([50.0] * 6)}
+    result = simulate(
+        ["AAA", "BBB"], series,
+        [scored("d001", "AAA"), scored("d003", "BBB")],
+        alloc_config(),
+    )
+    assert trail(result) == [
+        ("d001", "AAA", "buy", 1000.0, "rebalance"),
+        ("d003", "AAA", "sell", 500.0, "rebalance"),  # reduction first
+        ("d003", "BBB", "buy", 1000.0, "rebalance"),
+    ]
+    assert result.equity[-1].value == pytest.approx(100_000.0)
+
+
+def test_weakening_conviction_reduces_a_position_rather_than_liquidating_it():
+    series = {"AAA": bars([100.0] * 8), "BBB": bars([100.0] * 8)}
+    result = simulate(
+        ["AAA", "BBB"], series,
+        [scored("d001", "AAA", 1.0), scored("d001", "BBB", 1.0), scored("d004", "AAA", 0.5)],
+        alloc_config("signal_strength"),
+    )
+    # 50/50, then AAA 0.5 / (0.5 + 1) = 1/3 and BBB 2/3.
+    assert trail(result) == [
+        ("d001", "AAA", "buy", 500.0, "rebalance"),
+        ("d001", "BBB", "buy", 500.0, "rebalance"),
+        ("d004", "AAA", "sell", round(500 - 100_000 / 3 / 100, 6), "rebalance"),
+        ("d004", "BBB", "buy", round(200_000 / 3 / 100 - 500, 6), "rebalance"),
+    ]
+    aaa, bbb = result.trades
+    assert aaa.open and bbb.open  # trimmed, not closed
+
+
+def test_an_unchanged_repeat_entry_trades_nothing():
+    series = {"AAA": bars([100.0, 100.0, 120.0, 90.0])}
+    result = simulate(
+        ["AAA"], series,
+        [scored("d001", "AAA"), scored("d002", "AAA"), scored("d003", "AAA")],
+        alloc_config("signal_strength"),
+    )
+    assert [f.date for f in result.fills] == ["d001"]
+
+
+def test_a_strategy_exit_closes_in_full_and_its_capital_moves_to_the_rest():
+    series = {"AAA": bars([100.0] * 6), "BBB": bars([100.0] * 6)}
+    result = simulate(
+        ["AAA", "BBB"], series,
+        [scored("d001", "AAA"), scored("d001", "BBB"), decision("d003", "exit", "bearish", "BBB")],
+        alloc_config(),
+    )
+    assert trail(result)[2:] == [
+        ("d003", "BBB", "sell", 500.0, "signal"),  # the strategy's own exit
+        ("d003", "AAA", "buy", 500.0, "rebalance"),
+    ]
+    aaa, bbb = result.trades
+    assert bbb.exit_reason == "signal" and not bbb.open
+
+
+def test_a_protective_exit_clears_the_allocation_and_is_not_rebought():
+    # AAA falls 10% on d003 through its 5% stop; BBB takes the freed capital.
+    series = {
+        "AAA": bars([100.0, 100.0, 100.0, 90.0, 90.0, 90.0]),
+        "BBB": bars([100.0] * 6),
+    }
+    result = simulate(
+        ["AAA", "BBB"], series,
+        [scored("d001", "AAA"), scored("d001", "BBB")],
+        alloc_config(stop_loss_pct=0.05),
+    )
+    fills = trail(result)
+    assert fills[2][:3] == ("d003", "AAA", "sell") and fills[2][4] == "stop_loss"
+    assert fills[3][:3] == ("d003", "BBB", "buy") and fills[3][4] == "rebalance"
+    assert len(fills) == 4  # AAA's stale entry is gone: nothing re-buys it
+    assert [t.symbol for t in result.trades if t.open] == ["BBB"]
+
+
+def test_a_reversal_closes_the_old_side_before_opening_the_new():
+    series = {"AAA": bars([100.0] * 5)}
+    result = simulate(
+        ["AAA"], series,
+        [scored("d001", "AAA"), scored("d003", "AAA", direction="bearish")],
+        alloc_config(allow_shorts=True),
+    )
+    assert trail(result) == [
+        ("d001", "AAA", "buy", 1000.0, "rebalance"),
+        ("d003", "AAA", "sell", 1000.0, "rebalance"),
+        ("d003", "AAA", "short", 1000.0, "rebalance"),
+    ]
+
+
+def test_a_reversal_is_not_blocked_by_its_own_close_under_a_cooldown():
+    series = {"AAA": bars([100.0] * 5)}
+    result = simulate(
+        ["AAA"], series,
+        [scored("d001", "AAA"), scored("d003", "AAA", direction="bearish")],
+        alloc_config(allow_shorts=True, cooldown_days=3),
+    )
+    assert [f.side for f in result.fills] == ["buy", "sell", "short"]
+    assert result.summary.rejected_cooldown == 0
+
+
+def test_a_re_entry_while_its_exit_is_in_flight_is_traded_once_the_exit_completes():
+    """on_signal: the rebalance that could not touch AAA (its close still
+    queued) keeps the next session due, so the re-entry is not lost."""
+    series = {"AAA": volume_bars([100.0] * 8, [1_000] * 8)}
+    result = simulate(
+        ["AAA"], series,
+        [
+            scored("d000", "AAA"),
+            decision("d002", "exit", "bearish"),
+            scored("d003", "AAA"),
+        ],
+        alloc_config(fill_timing="next_open", max_volume_participation=0.6),
+    )
+    # 1000 bought over d001 (600) and d002 (400); the exit's close takes
+    # d003 and d004; the re-entry rebalances once the close is done.
+    sides = [(f.date, f.side, f.reason) for f in result.fills]
+    assert sides[-1][1:] == ("buy", "rebalance")
+    assert ("d004", "sell", "signal") in sides
+
+
+def test_a_zero_close_on_a_rebalance_session_is_skipped_not_a_crash():
+    series = {"AAA": bars([100.0, 0.0, 100.0, 100.0])}
+    result = simulate(
+        ["AAA"], series, [scored("d001", "AAA")], alloc_config()
+    )
+    assert [(f.date, f.qty) for f in result.fills] == [("d002", 1000.0)]
+    assert result.summary.dropped_no_bar == 1
+
+
+def test_long_only_drops_a_bearish_entry_as_the_legacy_modes_do():
+    series = {"AAA": bars([100.0] * 5)}
+    result = simulate(
+        ["AAA"], series,
+        [scored("d001", "AAA"), scored("d003", "AAA", direction="bearish")],
+        alloc_config(),
+    )
+    assert [f.date for f in result.fills] == ["d001"]
+    assert result.summary.rejected_shorts_disabled == 1
+
+
+def test_a_both_decision_that_closes_does_not_also_open():
+    series = {"AAA": bars([100.0] * 5)}
+    result = simulate(
+        ["AAA"], series,
+        [decision("d001", "both", "bullish"), decision("d003", "both", "bearish")],
+        alloc_config(allow_shorts=True),
+    )
+    assert trail(result) == [
+        ("d001", "AAA", "buy", 1000.0, "rebalance"),
+        ("d003", "AAA", "sell", 1000.0, "signal"),
+    ]
+
+
+def test_max_positions_keeps_the_highest_scores():
+    series = {s: bars([100.0] * 5) for s in ("AAA", "BBB", "CCC")}
+    result = simulate(
+        ["AAA", "BBB", "CCC"], series,
+        [scored("d001", "AAA", 0.5), scored("d001", "BBB", 1.0), scored("d001", "CCC", 0.5)],
+        alloc_config("signal_strength", max_positions=2),
+    )
+    # BBB, then AAA wins the tie with CCC by symbol: 1/1.5 and 0.5/1.5.
+    assert trail(result) == [
+        ("d001", "AAA", "buy", round(100_000 / 3 / 100, 6), "rebalance"),
+        ("d001", "BBB", "buy", round(200_000 / 3 / 100, 6), "rebalance"),
+    ]
+
+
+def test_a_slot_is_reserved_when_a_capped_turnover_cannot_free_it():
+    """max_turnover scales AAA's close to a partial one, so AAA keeps its slot
+    and the new name's open is refused rather than overfilling the book."""
+    series = {s: bars([100.0] * 5) for s in ("AAA", "BBB")}
+    simulator = ExecutionSimulator(
+        ["AAA", "BBB"], series,
+        alloc_config("signal_strength", max_positions=1, max_turnover=0.5),
+    )
+    days = list(simulator.iter_days([scored("d000", "AAA", 0.5), scored("d002", "BBB", 1.0)]))
+    assert all(day.positions <= 1 for day in days)
+    assert simulator.summary().rejected_max_positions == 1
+    # d000 trades 0.5 of the 1.0 target (the cap). On d002 BBB outranks AAA:
+    # AAA 0.5 -> 0 and BBB 0 -> 1 is 1.5 of turnover, scaled by 1/3, so AAA
+    # only falls to 1/3 and still holds the one slot.
+    assert [(f.date, f.symbol, f.side, round(f.qty, 6)) for f in simulator.fills] == [
+        ("d000", "AAA", "buy", 500.0), ("d002", "AAA", "sell", round(50_000 / 3 / 100, 6)),
+    ]
+
+
+def test_position_caps_leave_the_excess_in_cash():
+    series = {"AAA": bars([100.0] * 3), "BBB": bars([100.0] * 3)}
+    result = simulate(
+        ["AAA", "BBB"], series,
+        [scored("d001", "AAA"), scored("d001", "BBB")],
+        alloc_config(max_position_pct=0.3),
+    )
+    assert [f.qty for f in result.fills] == [pytest.approx(300.0), pytest.approx(300.0)]
+
+
+def test_target_exposure_is_gross():
+    series = {"AAA": bars([100.0] * 3), "BBB": bars([100.0] * 3)}
+    result = simulate(
+        ["AAA", "BBB"], series,
+        [scored("d001", "AAA"), scored("d001", "BBB", direction="bearish")],
+        alloc_config(allow_shorts=True, target_exposure=0.6),
+    )
+    assert trail(result) == [
+        ("d001", "AAA", "buy", 300.0, "rebalance"),
+        ("d001", "BBB", "short", 300.0, "rebalance"),
+    ]
+
+
+def test_inverse_volatility_weights_the_calmer_name_more():
+    import numpy as np
+
+    calm = [100.0 * (1.01 if i % 2 else 1.0) for i in range(30)]
+    wild = [100.0 * (1.04 if i % 2 else 1.0) for i in range(30)]
+    series = {"AAA": bars(calm), "BBB": bars(wild)}
+    config = alloc_config("signal_inverse_volatility", atr_period=10)
+    simulator = ExecutionSimulator(["AAA", "BBB"], series, config)
+    list(simulator.iter_days([scored("d020", "AAA"), scored("d020", "BBB")]))
+    vol_a, vol_b = simulator._vol["AAA"][20], simulator._vol["BBB"][20]
+    assert np.isfinite(vol_a) and vol_b > vol_a
+    a, b = simulator.fills
+    assert a.value / (a.value + b.value) == pytest.approx(
+        (1 / vol_a) / (1 / vol_a + 1 / vol_b)
+    )
+
+
+def test_inverse_volatility_gives_nothing_before_the_volatility_is_defined():
+    series = {"AAA": bars([100.0 + i % 2 for i in range(30)])}
+    result = simulate(
+        ["AAA"], series, [scored("d003", "AAA")],
+        alloc_config("signal_inverse_volatility", atr_period=10),
+    )
+    assert result.fills == []
+
+
+def test_weekly_rebalance_waits_for_the_next_week_but_exits_do_not():
+    # 2024-01-03 is a Wednesday; the next ISO week starts Monday 2024-01-08.
+    series = {"AAA": dated_bars([100.0] * 15), "BBB": dated_bars([100.0] * 15)}
+    result = simulate(
+        ["AAA", "BBB"], series,
+        [
+            scored("2024-01-03", "AAA"),
+            scored("2024-01-09", "BBB"),
+            decision("2024-01-11", "exit", "bearish", "AAA"),
+        ],
+        alloc_config(rebalance_frequency="weekly"),
+    )
+    assert trail(result) == [
+        ("2024-01-08", "AAA", "buy", 1000.0, "rebalance"),
+        ("2024-01-11", "AAA", "sell", 1000.0, "signal"),  # never held for Monday
+        ("2024-01-15", "BBB", "buy", 1000.0, "rebalance"),
+    ]
+
+
+def test_monthly_rebalance_runs_on_the_first_session_of_each_month():
+    series = {"AAA": dated_bars([100.0] * 30, start="2024-01-15")}
+    result = simulate(
+        ["AAA"], series, [scored("2024-01-16", "AAA")],
+        alloc_config(rebalance_frequency="monthly"),
+    )
+    assert [f.date for f in result.fills] == ["2024-02-01"]
+
+
+def test_daily_rebalance_restores_drifted_weights_every_session():
+    series = {"AAA": bars([100.0, 100.0, 110.0, 110.0]), "BBB": bars([100.0] * 4)}
+    result = simulate(
+        ["AAA", "BBB"], series,
+        [scored("d000", "AAA"), scored("d000", "BBB")],
+        alloc_config(rebalance_frequency="daily"),
+    )
+    # AAA's 10% rise on d002 drifts the book to 52.4/47.6; d002 trades back.
+    assert [(f.symbol, f.side) for f in result.fills if f.date == "d002"] == [
+        ("AAA", "sell"), ("BBB", "buy"),
+    ]
+    assert not [f for f in result.fills if f.date in ("d001", "d003")]
+
+
+def test_a_drift_threshold_skips_small_changes():
+    series = {"AAA": bars([100.0, 100.0, 110.0, 110.0]), "BBB": bars([100.0] * 4)}
+    result = simulate(
+        ["AAA", "BBB"], series,
+        [scored("d000", "AAA"), scored("d000", "BBB")],
+        alloc_config(rebalance_frequency="daily", rebalance_threshold=0.05),
+    )
+    assert [f.date for f in result.fills] == ["d000", "d000"]
+
+
+def test_the_drift_threshold_and_turnover_cap_never_delay_a_mandatory_exit():
+    series = {"AAA": bars([100.0] * 6)}
+    result = simulate(
+        ["AAA"], series,
+        [scored("d001", "AAA"), decision("d003", "exit", "bearish")],
+        alloc_config(rebalance_threshold=0.005, max_turnover=0.01),
+    )
+    # The open is scaled to the 1% turnover budget; the exit is taken in full.
+    buy, sell = result.fills
+    assert buy.qty == pytest.approx(10.0)
+    assert (sell.date, sell.qty, sell.reason) == ("d003", pytest.approx(10.0), "signal")
+
+
+def test_turnover_scales_every_discretionary_change_but_not_the_exit():
+    series = {s: bars([100.0] * 5) for s in ("AAA", "BBB", "CCC")}
+    result = simulate(
+        ["AAA", "BBB", "CCC"], series,
+        [
+            scored("d000", "AAA"), scored("d000", "BBB"),
+            decision("d002", "exit", "bearish", "BBB"), scored("d002", "CCC"),
+        ],
+        alloc_config(max_turnover=0.5),
+    )
+    # d000: 1.0 of turnover against a 0.5 budget, so 0.25 each. d002: BBB's
+    # exit is full and uncounted; AAA 0.25 -> 0.5 and CCC 0 -> 0.5 is 0.75,
+    # scaled by 2/3. (Counting the exit would have made it 1.0, scaled 1/2.)
+    assert [t for t in trail(result) if t[0] == "d000"] == [
+        ("d000", "AAA", "buy", 250.0, "rebalance"),
+        ("d000", "BBB", "buy", 250.0, "rebalance"),
+    ]
+    assert [t for t in trail(result) if t[0] == "d002"] == [
+        ("d002", "BBB", "sell", 250.0, "signal"),
+        ("d002", "AAA", "buy", round(25_000 * 2 / 3 / 100, 6), "rebalance"),
+        ("d002", "CCC", "buy", round(50_000 * 2 / 3 / 100, 6), "rebalance"),
+    ]
+
+    capped = simulate(
+        ["AAA", "BBB", "CCC"], series,
+        [scored("d000", "AAA"), scored("d000", "BBB"), scored("d002", "CCC")],
+        alloc_config(max_turnover=1 / 3),
+    )
+    # d000 reaches 1/6 each (1.0 requested, 1/3 allowed). d002 requests AAA
+    # and BBB 1/6 -> 1/3 and CCC 0 -> 1/3: turnover 2/3, so every change halves.
+    assert [t[1:4] for t in trail(capped) if t[0] == "d002"] == [
+        ("AAA", "buy", round(100_000 / 12 / 100, 6)),
+        ("BBB", "buy", round(100_000 / 12 / 100, 6)),
+        ("CCC", "buy", round(100_000 / 6 / 100, 6)),
+    ]
+
+
+def test_a_next_open_order_keeps_its_signal_time_quantity():
+    # Target set at d001's close of 100: 1000 shares. The d002 open is 80;
+    # re-sizing there would buy 1250.
+    prices = [100.0, 100.0, 80.0, 80.0]
+    series = {"AAA": bars(prices, opens=prices)}
+    result = simulate(
+        ["AAA"], series, [scored("d001", "AAA")], alloc_config(fill_timing="next_open")
+    )
+    (fill,) = result.fills
+    assert (fill.date, fill.qty, fill.price, fill.reason) == ("d002", 1000.0, 80.0, "rebalance")
+
+
+def test_a_capacity_limited_rebalance_keeps_its_signal_time_quantity():
+    prices = [100.0, 100.0, 90.0, 80.0, 70.0, 60.0, 50.0]
+    series = {"AAA": volume_bars(prices, [1_000] * len(prices))}
+    result = simulate(
+        ["AAA"], series, [scored("d000", "AAA")],
+        alloc_config(max_volume_participation=0.25, order_expiry_days=20),
+    )
+    assert [round(f.qty, 6) for f in result.fills] == [250.0, 250.0, 250.0, 250.0]
+    assert {f.reason for f in result.fills} == {"rebalance"}
+    assert result.summary.volume_limited_fills >= 3
+
+
+def test_deferred_orders_reduce_before_they_increase():
+    """Under next_open the sell that funds the buy is queued ahead of it."""
+    series = {"AAA": bars([100.0] * 5), "BBB": bars([100.0] * 5)}
+    result = simulate(
+        ["AAA", "BBB"], series,
+        [scored("d000", "AAA"), scored("d002", "BBB")],
+        alloc_config(fill_timing="next_open"),
+    )
+    assert trail(result) == [
+        ("d001", "AAA", "buy", 1000.0, "rebalance"),
+        ("d003", "AAA", "sell", 500.0, "rebalance"),
+        ("d003", "BBB", "buy", 500.0, "rebalance"),
+    ]
+
+
+def test_a_strategy_exit_replaces_a_pending_rebalance_remainder():
+    series = {"AAA": volume_bars([100.0] * 5, [1_000] * 5)}
+    result = simulate(
+        ["AAA"], series,
+        [scored("d001", "AAA"), decision("d002", "exit", "bearish")],
+        alloc_config(fill_timing="next_open", max_volume_participation=0.1),
+    )
+    # 100 shares fill on d002's open; the exit at d002's close cancels the
+    # 900-share remainder and closes the 100 held, at d003's open.
+    assert [(f.date, f.side, f.qty, f.reason) for f in result.fills] == [
+        ("d002", "buy", 100.0, "rebalance"),
+        ("d003", "sell", 100.0, "signal"),
+    ]
+    assert result.summary.unfilled_orders == 0
+
+
+def _synthetic_pair(n=160):
+    return {"AAA": _synthetic(3, n), "BBB": _synthetic(5, n)}
+
+
+def _scored_stream(n=160):
+    out = []
+    for i in range(30, n - 5, 9):
+        out.append(scored(f"d{i:04d}", "AAA", 0.5 + (i % 2) / 2))
+        out.append(scored(f"d{i + 2:04d}", "BBB", 1.0 if i % 3 else 0.5))
+        if i % 4 == 0:
+            out.append(decision(f"d{i + 4:04d}", "exit", "bearish", "BBB"))
+    return out
+
+
+@pytest.mark.parametrize("mode", ALLOCATION_SIZING)
+def test_truncating_future_bars_changes_no_earlier_fill(mode):
+    series = _synthetic_pair()
+    decisions = _scored_stream()
+    config = alloc_config(
+        mode, fill_timing="next_open", commission_bps=1.0, slippage_bps=5.0,
+        rebalance_frequency="daily", atr_period=10,
+    )
+    full = simulate(["AAA", "BBB"], series, decisions, config)
+    cut = "d0100"
+    truncated = simulate(
+        ["AAA", "BBB"],
+        {s: [b for b in rows if b.date <= cut] for s, rows in series.items()},
+        [d for d in decisions if d.date <= cut],
+        config,
+    )
+    assert full.fills, "the fixture must trade"
+    assert [f for f in full.fills if f.date <= cut] == truncated.fills
+    assert [p for p in full.equity if p.date <= cut] == truncated.equity
+
+
+@pytest.mark.parametrize("mode", ALLOCATION_SIZING)
+def test_streaming_and_batch_allocation_runs_are_identical(mode):
+    series = _synthetic_pair()
+    decisions = _scored_stream()
+    config = alloc_config(
+        mode, fill_timing="next_open", atr_period=10, max_volume_participation=0.5,
+        stop_loss_pct=0.04, max_positions=1,
+    )
+    batch = ExecutionSimulator(["AAA", "BBB"], series, config)
+    batch_days = list(batch.iter_days(decisions))
+    streamed = ExecutionSimulator(
+        ["AAA", "BBB"], {s: rows[:60] for s, rows in series.items()}, config
+    )
+    by_date: dict[str, list] = {}
+    for d in decisions:
+        by_date.setdefault(d.date, []).append(d)
+    streamed_days = []
+    for i in range(160):
+        if i >= 60:
+            for symbol in ("AAA", "BBB"):
+                streamed.ingest(symbol, series[symbol][i])
+        date = f"d{i:04d}"
+        streamed_days.append(streamed.step_day(date, by_date.get(date, [])))
+    assert batch.fills, "the fixture must trade"
+    assert [(d.date, d.equity, d.cash, d.fills) for d in streamed_days] == [
+        (d.date, d.equity, d.cash, d.fills) for d in batch_days
+    ]
+    assert streamed.trades() == batch.trades()
+    assert streamed.summary() == batch.summary()
+
+
+def test_legacy_sizing_ignores_the_score():
+    series = {"AAA": bars([100.0, 101.0, 99.0, 103.0, 104.0])}
+    plain = [decision("d001", "entry", "bullish"), decision("d003", "exit", "bearish")]
+    with_scores = [scored("d001", "AAA", 0.25), decision("d003", "exit", "bearish")]
+    for config in (
+        idealized_config(),
+        idealized_config(position_sizing="fixed_fraction", sizing_value=0.3),
+    ):
+        a = simulate(["AAA"], series, plain, config)
+        b = simulate(["AAA"], series, with_scores, config)
+        assert (a.fills, a.equity, a.trades, a.summary) == (b.fills, b.equity, b.trades, b.summary)
+
+
+def test_an_invalid_score_makes_the_signal_ineligible():
+    series = {"AAA": bars([100.0] * 4), "BBB": bars([100.0] * 4)}
+    result = simulate(
+        ["AAA", "BBB"], series,
+        [scored("d001", "AAA", 1.5), scored("d001", "BBB", 1.0)],
+        alloc_config("signal_strength"),
+    )
+    assert [(f.symbol, f.qty) for f in result.fills] == [("BBB", 1000.0)]
+
+
+def test_costs_are_charged_on_rebalance_fills():
+    series = {"AAA": bars([100.0] * 4)}
+    result = simulate(
+        ["AAA"], series, [scored("d001", "AAA")],
+        alloc_config(commission_bps=10.0, slippage_bps=10.0),
+    )
+    (fill,) = result.fills
+    assert fill.price == pytest.approx(100.1)
+    assert fill.commission == pytest.approx(fill.value * 0.001)
+    assert result.summary.total_commission == pytest.approx(fill.commission)
