@@ -36,6 +36,13 @@ _DIRECTIONS = ("bullish", "bearish")
 #: competes for either. ``both`` can do either job and sorts with the closers.
 _KIND_ORDER = {"exit": 0, "both": 1, "entry": 2}
 
+#: ``trigger_values`` key carrying an entry's normalized conviction, in (0, 1].
+#: It is the weight of the entry components that agreed over the weight of
+#: every entry component, so a lone rule or a unanimous ``all`` scores 1.
+#: Written on ``entry`` and ``both`` decisions only; filters and exit
+#: components never count toward it.
+SCORE_KEY = "_score"
+
 
 @dataclass(frozen=True)
 class _Firing:
@@ -154,18 +161,30 @@ def _members(
 
 
 def _combine(
-    active: list[_Firing], total: int, weights: list[float], logic: str, threshold: float
-) -> bool:
-    """Reduce the components active in one direction to a yes or a no."""
+    active: list[_Firing],
+    total: int,
+    weights: list[float],
+    logic: str,
+    threshold: float,
+    total_weight: float,
+) -> tuple[bool, float]:
+    """Reduce the components active in one direction to a yes or a no.
+
+    Also returns the normalized score: the active components' weight over
+    ``total_weight``, the weight of every component in the role. The score is
+    computed from ``component.weight`` whatever the logic, so it means the same
+    thing across ``all``/``any``/``majority``/``weighted``.
+    """
     if total == 0 or not active:
-        return False
+        return False, 0.0
+    score = sum(weights) / total_weight if total_weight > 0 else 0.0
     if logic == "all":
-        return len(active) == total
+        return len(active) == total, score
     if logic == "any":
-        return True
+        return True, score
     if logic == "majority":
-        return len(active) * 2 > total
-    return sum(weights) >= threshold
+        return len(active) * 2 > total, score
+    return sum(weights) >= threshold, score
 
 
 def compose(
@@ -189,6 +208,8 @@ def compose(
     entries = [(i, c) for i, c in enumerate(spec.components) if c.role == "entry"]
     exits = [(i, c) for i, c in enumerate(spec.components) if c.role == "exit"]
     filters = [(i, c) for i, c in enumerate(spec.components) if c.role == "filter"]
+    entry_weight = sum(c.weight for _, c in entries)
+    exit_weight = sum(c.weight for _, c in exits)
 
     decisions: list[Decision] = []
     dates_evaluated = 0
@@ -221,16 +242,19 @@ def compose(
             entry_members = _members(entries, active_by_component, date)
             exit_members = _members(exits, active_by_component, date)
 
-            wants_entry = {
+            entry_votes = {
                 direction: _combine(
                     [f for _, _, f in entry_members[direction]],
                     len(entries),
                     [c.weight for _, c, _ in entry_members[direction]],
                     spec.entry_logic,
                     spec.entry_threshold,
+                    entry_weight,
                 )
                 for direction in _DIRECTIONS
             }
+            wants_entry = {d: ok for d, (ok, _) in entry_votes.items()}
+            entry_score = {d: score for d, (_, score) in entry_votes.items()}
             wants_exit = {
                 direction: _combine(
                     [f for _, _, f in exit_members[direction]],
@@ -238,7 +262,8 @@ def compose(
                     [c.weight for _, c, _ in exit_members[direction]],
                     spec.exit_logic,
                     spec.exit_threshold,
-                )
+                    exit_weight,
+                )[0]
                 for direction in _DIRECTIONS
             }
 
@@ -271,6 +296,7 @@ def compose(
                         date, symbol, kind, direction, members,
                         filters if kind != "exit" else (),
                         active_by_component, spec,
+                        entry_score[direction] if kind != "exit" else None,
                     )
                 )
 
@@ -293,6 +319,7 @@ def _decision(
     filters: Iterable[tuple[int, StrategyComponent]],
     active_by_component: dict[int, dict[str, dict[str, _Firing]]],
     spec: StrategySpec,
+    score: float | None = None,
 ) -> Decision:
     """Build one decision, carrying why it fired.
 
@@ -316,6 +343,10 @@ def _decision(
 
     trigger["_logic"] = spec.exit_logic if kind == "exit" else spec.entry_logic
     trigger["_components"] = [component.rule_name for _, component, _ in members]
+    if score is not None:
+        # Only the entry members count -- on a ``both`` decision the exit
+        # members are listed in ``_components`` but carry no conviction.
+        trigger[SCORE_KEY] = score
 
     # data_window_end can never exceed the decision date: every contributing
     # firing is dated on or before it, and each carries a window end no later
