@@ -11,12 +11,15 @@ from __future__ import annotations
 from quantlab.execution import adjustments
 from quantlab.execution.adjustments import PRICE_ADJUSTMENT, CorporateAction
 from quantlab.execution.config import (
+    ALLOCATION_SIZING,
     BPS,
     DEFAULT_EXECUTION,
     EXIT_REASONS,
     FILL_TIMING,
     INITIAL_CAPITAL,
     POSITION_SIZING,
+    REBALANCE_FREQUENCY,
+    AllocationSettings,
     ExecutionConfig,
 )
 from quantlab.execution.engine import (
@@ -32,6 +35,8 @@ from quantlab.execution.engine import (
 )
 
 __all__ = [
+    "ALLOCATION_SIZING",
+    "AllocationSettings",
     "BPS",
     "PRICE_ADJUSTMENT",
     "CorporateAction",
@@ -41,6 +46,7 @@ __all__ = [
     "FILL_TIMING",
     "INITIAL_CAPITAL",
     "POSITION_SIZING",
+    "REBALANCE_FREQUENCY",
     "DayState",
     "Decision",
     "EquityPoint",

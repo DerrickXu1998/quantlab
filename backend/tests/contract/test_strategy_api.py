@@ -252,6 +252,77 @@ def test_a_strategy_round_trips_through_crud(client, token):
     ).status_code == 404
 
 
+ALLOCATION_SETTINGS = {
+    "target_exposure": 0.8,
+    "min_allocation_score": 0.5,
+    "rebalance_frequency": "weekly",
+    "rebalance_threshold": 0.02,
+    "max_turnover": 0.5,
+}
+
+
+@pytest.mark.parametrize(
+    "mode", ["equal_active", "signal_strength", "signal_inverse_volatility"]
+)
+def test_a_portfolio_allocation_strategy_round_trips_with_its_settings(client, token, mode):
+    execution = {"position_sizing": mode, "max_positions": 3, **ALLOCATION_SETTINGS}
+    body = dict(rsi_plus_adx(), execution=execution)
+    created = client.post("/api/v1/strategies", json=body, headers=auth(token))
+    assert created.status_code == 201, created.text
+    fetched = client.get(f"/api/v1/strategies/{created.json()['id']}", headers=auth(token))
+    assert fetched.status_code == 200
+    for response in (created, fetched):
+        saved = response.json()["execution"]
+        assert saved["position_sizing"] == mode
+        assert saved["sizing_value"] is None
+        assert saved["max_positions"] == 3
+        assert {key: saved[key] for key in ALLOCATION_SETTINGS} == ALLOCATION_SETTINGS
+
+
+def test_a_portfolio_allocation_strategy_defaults_its_settings(client, token):
+    body = dict(rsi_plus_adx(), execution={"position_sizing": "equal_active"})
+    created = client.post("/api/v1/strategies", json=body, headers=auth(token))
+    assert created.status_code == 201, created.text
+    fetched = client.get(f"/api/v1/strategies/{created.json()['id']}", headers=auth(token))
+    saved = fetched.json()["execution"]
+    assert saved["position_sizing"] == "equal_active"
+    assert all(saved[key] is None for key in ALLOCATION_SETTINGS)
+
+
+def test_a_legacy_strategy_reads_back_without_allocation_settings(client, token):
+    created = client.post("/api/v1/strategies", json=rsi_plus_adx(), headers=auth(token))
+    saved = created.json()["execution"]
+    assert saved["position_sizing"] == "equal_weight"
+    assert all(saved[key] is None for key in ALLOCATION_SETTINGS)
+
+
+@pytest.mark.parametrize("field", sorted(ALLOCATION_SETTINGS))
+def test_an_allocation_setting_under_legacy_sizing_is_refused_by_name(client, token, field):
+    execution = {"position_sizing": "equal_weight", field: ALLOCATION_SETTINGS[field]}
+    body = dict(rsi_plus_adx(), execution=execution)
+    response = client.post("/api/v1/strategies", json=body, headers=auth(token))
+    assert response.status_code == 422
+    assert f"{field} is only used by portfolio allocation sizing" in response.json()["detail"]
+
+
+def test_an_allocation_mode_refuses_a_sizing_value(client, token):
+    body = dict(
+        rsi_plus_adx(), execution={"position_sizing": "signal_strength", "sizing_value": 0.1}
+    )
+    response = client.post("/api/v1/strategies", json=body, headers=auth(token))
+    assert response.status_code == 422
+    assert "sizing_value is not used by signal_strength" in response.json()["detail"]
+
+
+def test_an_unknown_rebalance_frequency_is_refused(client, token):
+    body = dict(
+        rsi_plus_adx(),
+        execution={"position_sizing": "equal_active", "rebalance_frequency": "hourly"},
+    )
+    response = client.post("/api/v1/strategies", json=body, headers=auth(token))
+    assert response.status_code == 422
+
+
 def test_a_filter_cannot_be_wired_as_an_entry(client, token):
     body = dict(
         rsi_plus_adx(),
@@ -420,6 +491,30 @@ def test_an_invalid_execution_setting_is_refused_by_name(client, token, window):
     )
     assert response.status_code == 422
     assert "stop_loss_pct" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "execution, message",
+    [
+        ({"target_exposure": 0.5}, "target_exposure is only used by portfolio allocation"),
+        (
+            {"position_sizing": "fixed_fraction", "sizing_value": 0.1, "max_turnover": 0.5},
+            "max_turnover is only used by portfolio allocation",
+        ),
+        ({"position_sizing": "equal_active", "target_exposure": 1.5}, "target_exposure"),
+        ({"position_sizing": "signal_strength", "max_turnover": 3.0}, "max_turnover"),
+    ],
+)
+def test_a_run_with_an_invalid_allocation_setting_is_refused_by_name(
+    client, token, window, execution, message
+):
+    for body in (
+        run_body(window, model_name="rsi-threshold", execution=execution),
+        run_body(window, strategy=dict(rsi_plus_adx(), execution=execution)),
+    ):
+        response = client.post("/api/v1/runs", json=body, headers=auth(token))
+        assert response.status_code == 422, response.text
+        assert message in response.json()["detail"]
 
 
 def test_a_window_shorter_than_the_lookback_is_refused(client, token):

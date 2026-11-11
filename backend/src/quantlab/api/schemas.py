@@ -296,7 +296,7 @@ class Trade(BaseModel):
     #: rate hides which one is doing the work.
     exit_reason: Literal[
         "signal", "stop_loss", "take_profit", "trailing_stop", "max_holding",
-        "end_of_window",
+        "end_of_window", "rebalance",
     ] = "signal"
     pnl: float = 0.0
     fees: float = 0.0
@@ -461,11 +461,26 @@ class ExecutionConfigModel(BaseModel):
 
     initial_capital: float = 100_000.0
     position_sizing: Literal[
-        "equal_weight", "fixed_fraction", "fixed_notional", "volatility_target"
+        "equal_weight",
+        "fixed_fraction",
+        "fixed_notional",
+        "volatility_target",
+        "equal_active",
+        "signal_strength",
+        "signal_inverse_volatility",
     ] = "equal_weight"
     sizing_value: float | None = None
     max_positions: int | None = None
     max_position_pct: float = 1.0
+    #: Portfolio allocation sizing (equal_active, signal_strength,
+    #: signal_inverse_volatility) only, and refused under any other. None
+    #: means the default: 100% gross exposure, no minimum score, on_signal
+    #: rebalancing, no drift threshold, no turnover cap.
+    target_exposure: float | None = None
+    min_allocation_score: float | None = None
+    rebalance_frequency: Literal["on_signal", "daily", "weekly", "monthly"] | None = None
+    rebalance_threshold: float | None = None
+    max_turnover: float | None = None
     fill_timing: Literal[
         "signal_close", "next_open", "next_close", "next_typical", "next_vwap"
     ] = "next_open"

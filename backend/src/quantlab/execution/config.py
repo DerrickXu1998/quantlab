@@ -34,6 +34,35 @@ POSITION_SIZING: tuple[str, ...] = (
     "fixed_fraction",
     "fixed_notional",
     "volatility_target",
+    "equal_active",
+    "signal_strength",
+    "signal_inverse_volatility",
+)
+
+#: Sizing modes that share one pool of capital and keep target weights across
+#: every held position, rather than sizing each position once at entry. A new
+#: signal, a changed score or an exit elsewhere can resize positions the
+#: strategy did not signal on.
+ALLOCATION_SIZING: tuple[str, ...] = (
+    "equal_active",
+    "signal_strength",
+    "signal_inverse_volatility",
+)
+
+#: When allocation targets are recomputed and traded toward. ``on_signal``: on
+#: a session whose signals change the allocation. ``daily`` / ``weekly`` /
+#: ``monthly``: every session, the first session of each ISO week, the first
+#: session of each calendar month.
+REBALANCE_FREQUENCY: tuple[str, ...] = ("on_signal", "daily", "weekly", "monthly")
+
+#: The settings only allocation sizing reads. Each defaults to ``None`` so a
+#: legacy config is unchanged, and serialises without them (``to_dict``).
+_ALLOCATION_FIELDS: tuple[str, ...] = (
+    "target_exposure",
+    "min_allocation_score",
+    "rebalance_frequency",
+    "rebalance_threshold",
+    "max_turnover",
 )
 
 FILL_TIMING: tuple[str, ...] = (
@@ -64,6 +93,7 @@ EXIT_REASONS: tuple[str, ...] = (
     "trailing_stop",
     "max_holding",
     "end_of_window",
+    "rebalance",
 )
 
 #: One basis point as a fraction.
@@ -96,6 +126,24 @@ def _fraction(name: str, value: float | None) -> None:
 
 
 @dataclass(frozen=True)
+class AllocationSettings:
+    """The allocation settings with their defaults resolved.
+
+    ``target_exposure`` is gross (longs plus shorts) as a fraction of equity;
+    ``min_score`` the lowest signal score that is allocated; ``frequency`` one
+    of :data:`REBALANCE_FREQUENCY`; ``threshold`` the smallest weight change
+    that is traded; ``max_turnover`` the most total weight change one
+    rebalance may trade, or ``None`` for no cap.
+    """
+
+    target_exposure: float
+    min_score: float
+    frequency: str
+    threshold: float
+    max_turnover: float | None
+
+
+@dataclass(frozen=True)
 class ExecutionConfig:
     """How signals become fills. Every field is user-settable."""
 
@@ -109,6 +157,20 @@ class ExecutionConfig:
     sizing_value: float | None = None
     max_positions: int | None = None
     max_position_pct: float = 1.0
+
+    # --- portfolio allocation (ALLOCATION_SIZING only; None = the default) ---
+    #: Gross exposure targeted across all positions, a fraction in (0, 1].
+    #: Default 1.0.
+    target_exposure: float | None = None
+    #: Signals scoring below this, in [0, 1], get no allocation. Default 0.
+    min_allocation_score: float | None = None
+    #: One of REBALANCE_FREQUENCY. Default ``on_signal``.
+    rebalance_frequency: str | None = None
+    #: Weight changes smaller than this, in [0, 1), are not traded. Default 0.
+    rebalance_threshold: float | None = None
+    #: Most total absolute weight change one rebalance trades, in (0, 2].
+    #: Default: no cap.
+    max_turnover: float | None = None
 
     # --- timing and costs ---
     fill_timing: str = "next_open"
@@ -202,10 +264,10 @@ class ExecutionConfig:
         # Modes that need a value must have one; equal_weight must not, because
         # silently ignoring a number the user typed is how a run quietly does
         # something other than what the form said.
-        if self.position_sizing == "equal_weight":
+        if self.position_sizing == "equal_weight" or self.position_sizing in ALLOCATION_SIZING:
             if self.sizing_value is not None:
                 raise ValueError(
-                    "sizing_value is not used by equal_weight sizing; leave it unset"
+                    f"sizing_value is not used by {self.position_sizing} sizing; leave it unset"
                 )
         elif self.sizing_value is None:
             raise ValueError(f"sizing_value is required for {self.position_sizing} sizing")
@@ -219,6 +281,7 @@ class ExecutionConfig:
             raise ValueError("max_positions must be >= 1 when set")
         if not 0 < self.max_position_pct <= 1:
             raise ValueError("max_position_pct must be a fraction in (0, 1]")
+        self._validate_allocation()
 
         _positive("commission_bps", self.commission_bps, allow_zero=True)
         _positive("slippage_bps", self.slippage_bps, allow_zero=True)
@@ -249,6 +312,54 @@ class ExecutionConfig:
         ):
             raise ValueError("min_holding_days must be <= max_holding_days")
 
+    def _validate_allocation(self) -> None:
+        if self.position_sizing not in ALLOCATION_SIZING:
+            # Same stance as sizing_value under equal_weight: a number the
+            # user typed must not be silently ignored.
+            for name in _ALLOCATION_FIELDS:
+                if getattr(self, name) is not None:
+                    raise ValueError(
+                        f"{name} is only used by portfolio allocation sizing "
+                        f"({', '.join(ALLOCATION_SIZING)}); leave it unset"
+                    )
+            return
+        _fraction("target_exposure", self.target_exposure)
+        score = self.min_allocation_score
+        if score is not None and not 0 <= score <= 1:
+            raise ValueError("min_allocation_score must be in [0, 1]")
+        if (
+            self.rebalance_frequency is not None
+            and self.rebalance_frequency not in REBALANCE_FREQUENCY
+        ):
+            raise ValueError(
+                f"rebalance_frequency must be one of {REBALANCE_FREQUENCY}, "
+                f"got {self.rebalance_frequency!r}"
+            )
+        threshold = self.rebalance_threshold
+        if threshold is not None and not 0 <= threshold < 1:
+            raise ValueError(
+                "rebalance_threshold must be a fraction in [0, 1) -- 0.02 means 2% of equity"
+            )
+        turnover = self.max_turnover
+        if turnover is not None and not 0 < turnover <= 2:
+            # 2 is a full reversal of a fully invested book: everything sold
+            # and as much bought again.
+            raise ValueError(
+                "max_turnover must be a fraction in (0, 2] -- 0.5 means 50% of equity"
+            )
+
+    def allocation(self) -> AllocationSettings | None:
+        """The allocation settings with defaults resolved; ``None`` for legacy sizing."""
+        if self.position_sizing not in ALLOCATION_SIZING:
+            return None
+        return AllocationSettings(
+            target_exposure=1.0 if self.target_exposure is None else self.target_exposure,
+            min_score=0.0 if self.min_allocation_score is None else self.min_allocation_score,
+            frequency=self.rebalance_frequency or "on_signal",
+            threshold=0.0 if self.rebalance_threshold is None else self.rebalance_threshold,
+            max_turnover=self.max_turnover,
+        )
+
     # -- time units --------------------------------------------------------
 
     @property
@@ -268,9 +379,18 @@ class ExecutionConfig:
 
         An ATR stop is set from the ATR as at the entry bar, so a position
         opened on the first bar of the window still needs ``atr_period`` bars
-        behind it or its stop would be undefined.
+        behind it or its stop would be undefined. Inverse-volatility
+        allocation reads the trailing volatility of ``atr_period`` returns,
+        which needs the same ``atr_period + 1`` closes. (``volatility_target``
+        reads that volatility too but has never added warm-up; changing that
+        would move every stored run's window, so it is left alone.)
         """
-        return self.atr_period + 1 if self.atr_stop_multiple is not None else 0
+        if (
+            self.atr_stop_multiple is not None
+            or self.position_sizing == "signal_inverse_volatility"
+        ):
+            return self.atr_period + 1
+        return 0
 
     # -- disclosure --------------------------------------------------------
 
@@ -315,20 +435,24 @@ class ExecutionConfig:
                 f"Fixed-notional sizing: each position is opened at {self.sizing_value:,.2f} of "
                 "cash regardless of book size, from a shared cash pool."
             )
-        else:
+        elif self.position_sizing == "volatility_target":
             out.append(
                 f"Volatility-targeted sizing: each position is scaled so its own realised "
                 f"volatility contributes about {self.sizing_value:.1%} annualised, capped at "
                 f"{self.max_position_pct:.0%} of equity."
             )
 
-        if self.max_positions is not None:
-            out.append(
-                f"At most {self.max_positions} positions are held at once; a signal arriving "
-                "when the book is full is dropped, not queued."
-            )
-        if self.max_position_pct < 1.0 and self.position_sizing != "equal_weight":
-            out.append(f"No single position exceeds {self.max_position_pct:.0%} of equity.")
+        allocation = self.allocation()
+        if allocation is not None:
+            out.extend(self._allocation_assumptions(allocation))
+        else:
+            if self.max_positions is not None:
+                out.append(
+                    f"At most {self.max_positions} positions are held at once; a signal "
+                    "arriving when the book is full is dropped, not queued."
+                )
+            if self.max_position_pct < 1.0 and self.position_sizing != "equal_weight":
+                out.append(f"No single position exceeds {self.max_position_pct:.0%} of equity.")
 
         if self.fill_timing == "signal_close":
             out.append("Signal entries and exits are marked at the close of the signal date.")
@@ -465,12 +589,123 @@ class ExecutionConfig:
         out.append("No queue position, order-book depth or market impact is modelled.")
         return out
 
+    def _allocation_assumptions(self, allocation: AllocationSettings) -> list[str]:
+        out: list[str] = []
+        exposure = (
+            "Weights are normalised so gross exposure (longs plus shorts) targets "
+            f"{allocation.target_exposure:.1%} of equity"
+            + ("." if allocation.target_exposure >= 1 else "; the rest stays in cash.")
+        )
+        score = (
+            "A signal's score is the weight of the entry components that fired divided by "
+            "the weight of all entry components, so 1 means every entry component agreed; "
+            "filters and exit components do not count."
+        )
+        if self.position_sizing == "equal_active":
+            # The score does not set weights here, but it still decides who is
+            # allocated when a minimum score or a position limit applies.
+            ranks = allocation.min_score > 0 or self.max_positions is not None
+            out.append(
+                "Equal-active allocation: one shared pool of capital is split evenly across "
+                "every instrument with an active entry signal. "
+                + exposure
+                + (
+                    f" {score} The score does not change the weights, only which signals are "
+                    "allocated."
+                    if ranks
+                    else ""
+                )
+            )
+        elif self.position_sizing == "signal_strength":
+            out.append(
+                "Signal-strength allocation: one shared pool of capital is split across every "
+                "instrument with an active entry signal in proportion to that signal's score. "
+                f"{score} {exposure}"
+            )
+        else:
+            out.append(
+                "Signal-inverse-volatility allocation: one shared pool of capital is split "
+                "across every instrument with an active entry signal in proportion to that "
+                "signal's score divided by the instrument's trailing annualised volatility "
+                f"of close-to-close returns over {self.atr_period} bars, so a calmer "
+                f"instrument gets more capital. {score} An instrument whose volatility is not "
+                f"yet defined, or is zero, gets no allocation. {exposure}"
+            )
+        out.append(
+            "Capital is shared across positions: a new signal, a changed score or an exit "
+            "elsewhere changes every target, so positions the strategy did not signal on "
+            "can be bought up or trimmed. A strategy or protective exit drops the "
+            "instrument from the allocation until it signals again."
+        )
+        if allocation.min_score > 0:
+            out.append(
+                f"Signals with a score below {allocation.min_score:.2f} (under "
+                f"{allocation.min_score:.1%} of the entry-component weight agreeing) get no "
+                "allocation."
+            )
+        if self.max_positions is not None:
+            out.append(
+                f"At most {self.max_positions} positions are allocated: when more instruments "
+                "signal, the highest scores are kept (ties broken by symbol) and the rest get "
+                "nothing."
+            )
+        if self.max_position_pct < 1.0:
+            out.append(
+                f"No single position's target exceeds {self.max_position_pct:.1%} of equity; "
+                "weight above the cap is redistributed to the uncapped positions, and what "
+                "cannot be placed stays in cash."
+            )
+        when = {
+            "on_signal": "on each session whose signals change the allocation (a new "
+            "entry, a changed score or an exit)",
+            "daily": "every session",
+            "weekly": "on the first session of each ISO week",
+            "monthly": "on the first session of each calendar month",
+        }[allocation.frequency]
+        between = (
+            ""
+            if allocation.frequency in ("on_signal", "daily")
+            else " Entry signals that arrive between rebalances wait for the next one."
+        )
+        out.append(
+            f"Targets are recomputed {when}, from that session's signals, equity and closes "
+            "after its exits, and positions are traded toward them: reductions and closes "
+            "first, then increases. Strategy and protective exits are always taken when they "
+            f"happen.{between} Each rebalance order's quantity is fixed when it is created; a "
+            "deferred or volume-limited fill keeps that quantity rather than resizing to "
+            "later prices."
+        )
+        if allocation.threshold > 0:
+            out.append(
+                f"A change smaller than {allocation.threshold:.1%} of equity between a "
+                "position's current and target weight is not traded, so small drift is left "
+                "alone; strategy and protective exits are never skipped."
+            )
+        if allocation.max_turnover is not None:
+            out.append(
+                f"Each rebalance trades at most {allocation.max_turnover:.1%} of equity in "
+                "total weight change (the sum of absolute changes across positions); a larger "
+                "rebalance has every discretionary change scaled down in proportion, so the "
+                "book reaches its targets over several rebalances. Strategy and protective "
+                "exits are neither counted nor scaled."
+            )
+        return out
+
     # -- serialisation -----------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
+        """Every field, except allocation settings left unset.
+
+        Omitting those keeps a legacy config's serialisation exactly what it
+        was before they existed; ``from_dict`` restores them as ``None``.
+        """
         from dataclasses import asdict
 
-        return asdict(self)
+        out = asdict(self)
+        for name in _ALLOCATION_FIELDS:
+            if out[name] is None:
+                del out[name]
+        return out
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> ExecutionConfig:

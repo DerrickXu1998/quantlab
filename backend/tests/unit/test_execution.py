@@ -9,9 +9,16 @@ the old way still produces the old answer.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from quantlab.execution import (
+    ALLOCATION_SIZING,
+    EXIT_REASONS,
+    POSITION_SIZING,
+    REBALANCE_FREQUENCY,
+    AllocationSettings,
     Decision,
     ExecutionConfig,
     ExecutionSimulator,
@@ -595,10 +602,71 @@ def test_the_same_inputs_produce_the_same_book_twice():
         ({"order_expiry_days": 0}, "order_expiry_days"),
         ({"atr_period": 1}, "atr_period"),
         ({"min_holding_days": 10, "max_holding_days": 5}, "min_holding_days must be <="),
+        # Portfolio allocation: settings only those modes read are refused
+        # elsewhere, and the modes take no sizing_value.
+        *[
+            ({field: value}, f"{field} is only used by portfolio allocation sizing")
+            for field, value in [
+                ("target_exposure", 0.8),
+                ("min_allocation_score", 0.5),
+                ("rebalance_frequency", "weekly"),
+                ("rebalance_threshold", 0.02),
+                ("max_turnover", 0.5),
+            ]
+        ],
+        (
+            {"position_sizing": "fixed_fraction", "sizing_value": 0.1, "target_exposure": 0.5},
+            "target_exposure is only used by portfolio allocation sizing (equal_active, "
+            "signal_strength, signal_inverse_volatility); leave it unset",
+        ),
+        (
+            {"position_sizing": "signal_strength", "sizing_value": 0.1},
+            "sizing_value is not used by signal_strength sizing",
+        ),
+        (
+            {"position_sizing": "equal_active", "target_exposure": 0.0},
+            "target_exposure must be a fraction in (0, 1]",
+        ),
+        (
+            {"position_sizing": "equal_active", "target_exposure": 1.5},
+            "target_exposure must be a fraction in (0, 1]",
+        ),
+        (
+            {"position_sizing": "signal_strength", "min_allocation_score": -0.1},
+            "min_allocation_score must be in [0, 1]",
+        ),
+        (
+            {"position_sizing": "signal_strength", "min_allocation_score": 1.1},
+            "min_allocation_score must be in [0, 1]",
+        ),
+        (
+            {"position_sizing": "equal_active", "rebalance_frequency": "hourly"},
+            "rebalance_frequency must be one of",
+        ),
+        (
+            {"position_sizing": "equal_active", "rebalance_threshold": 1.0},
+            "rebalance_threshold must be a fraction in [0, 1)",
+        ),
+        (
+            {"position_sizing": "equal_active", "rebalance_threshold": -0.01},
+            "rebalance_threshold must be a fraction in [0, 1)",
+        ),
+        (
+            {"position_sizing": "equal_active", "max_turnover": 0.0},
+            "max_turnover must be a fraction in (0, 2]",
+        ),
+        (
+            {"position_sizing": "equal_active", "max_turnover": 2.5},
+            "max_turnover must be a fraction in (0, 2]",
+        ),
+        (
+            {"position_sizing": "equal_active", "target_exposure": float("nan")},
+            "target_exposure",
+        ),
     ],
 )
 def test_invalid_configuration_is_refused_with_the_field_named(kwargs, message):
-    with pytest.raises(ValueError, match=message.replace("(", r"\(").replace(")", r"\)")):
+    with pytest.raises(ValueError, match=re.escape(message)):
         idealized_config(**kwargs)
 
 
@@ -620,6 +688,147 @@ def test_assumptions_describe_the_config_that_actually_ran():
     assert any("5 bps commission" in line for line in loud)
     assert any("Long and short" in line for line in loud)
     assert any("stop" in line for line in loud)
+
+
+# --- portfolio allocation settings ------------------------------------------
+
+
+@pytest.mark.parametrize("mode", ALLOCATION_SIZING)
+def test_allocation_modes_resolve_their_defaults(mode):
+    config = idealized_config(position_sizing=mode)
+    assert mode in POSITION_SIZING
+    assert config.allocation() == AllocationSettings(
+        target_exposure=1.0, min_score=0.0, frequency="on_signal", threshold=0.0,
+        max_turnover=None,
+    )
+
+
+def test_allocation_settings_are_carried_when_set():
+    config = idealized_config(
+        position_sizing="signal_strength",
+        target_exposure=0.8,
+        min_allocation_score=0.0,
+        rebalance_frequency="monthly",
+        rebalance_threshold=0.02,
+        max_turnover=2.0,
+    )
+    assert config.allocation() == AllocationSettings(
+        target_exposure=0.8, min_score=0.0, frequency="monthly", threshold=0.02,
+        max_turnover=2.0,
+    )
+    assert ExecutionConfig.from_dict(config.to_dict()) == config
+
+
+@pytest.mark.parametrize(
+    "mode, value", [("equal_weight", None), ("fixed_fraction", 0.1),
+                    ("fixed_notional", 5_000.0), ("volatility_target", 0.15)],
+)
+def test_legacy_modes_have_no_allocation_and_serialise_as_before(mode, value):
+    config = idealized_config(position_sizing=mode, sizing_value=value)
+    assert config.allocation() is None
+    serialised = config.to_dict()
+    # The keys a config had before allocation existed, and no others: a
+    # stored legacy config must read back -- and write out -- unchanged.
+    assert not set(serialised) & {
+        "target_exposure", "min_allocation_score", "rebalance_frequency",
+        "rebalance_threshold", "max_turnover",
+    }
+    assert ExecutionConfig.from_dict(serialised) == config
+
+
+def test_rebalance_is_an_exit_reason():
+    assert "rebalance" in EXIT_REASONS
+    assert REBALANCE_FREQUENCY == ("on_signal", "daily", "weekly", "monthly")
+
+
+def test_inverse_volatility_allocation_warms_up_its_volatility():
+    assert idealized_config(position_sizing="signal_inverse_volatility",
+                            atr_period=20).extra_lookback_days == 21
+    assert idealized_config(position_sizing="equal_active").extra_lookback_days == 0
+    assert idealized_config(position_sizing="signal_strength").extra_lookback_days == 0
+    # Legacy warm-up is untouched: volatility_target never added any.
+    assert idealized_config(position_sizing="volatility_target",
+                            sizing_value=0.15).extra_lookback_days == 0
+
+
+def _text(config) -> str:
+    return "\n".join(config.assumptions())
+
+
+def test_allocation_assumptions_state_normalisation_and_shared_capital():
+    text = _text(idealized_config(position_sizing="equal_active"))
+    assert "split evenly across every instrument with an active entry signal" in text
+    assert "targets 100.0% of equity." in text
+    assert "can be bought up or trimmed" in text
+    assert "on each session whose signals change the allocation" in text
+    assert "reductions and closes first, then increases" in text
+    # Legacy sentences that would be false here are not emitted.
+    assert "Equal-weight" not in text
+    assert "dropped, not queued" not in text
+    # Unset settings are not described.
+    assert "not traded, so small drift" not in text
+    assert "Each rebalance trades at most" not in text
+    assert "score below" not in text
+
+
+def test_signal_strength_assumptions_define_the_score():
+    text = _text(idealized_config(position_sizing="signal_strength", target_exposure=0.6))
+    assert "in proportion to that signal's score" in text
+    assert "weight of the entry components that fired divided by" in text
+    assert "targets 60.0% of equity; the rest stays in cash." in text
+
+
+def test_inverse_volatility_assumptions_name_the_lookback():
+    text = _text(idealized_config(position_sizing="signal_inverse_volatility", atr_period=20))
+    assert "divided by the instrument's trailing annualised volatility" in text
+    assert "over 20 bars" in text
+    assert "not yet defined, or is zero, gets no allocation" in text
+
+
+def test_allocation_assumptions_describe_every_setting_that_ran():
+    text = _text(
+        idealized_config(
+            position_sizing="signal_strength",
+            min_allocation_score=0.5,
+            rebalance_frequency="weekly",
+            rebalance_threshold=0.02,
+            max_turnover=0.25,
+            max_positions=3,
+            max_position_pct=0.4,
+        )
+    )
+    assert "score below 0.50 (under 50.0% of the entry-component weight" in text
+    assert "first session of each ISO week" in text
+    assert "wait for the next one" in text
+    assert "smaller than 2.0% of equity" in text
+    assert "trades at most 25.0% of equity in total weight change" in text
+    assert "scaled down in proportion" in text
+    assert "Strategy and protective exits are neither counted nor scaled" in text
+    assert "At most 3 positions are allocated" in text
+    assert "highest scores are kept (ties broken by symbol)" in text
+    assert "exceeds 40.0% of equity; weight above the cap is redistributed" in text
+    monthly = _text(idealized_config(position_sizing="equal_active",
+                                     rebalance_frequency="monthly"))
+    assert "first session of each calendar month" in monthly
+    assert "A signal's score is" not in monthly
+    ranked = _text(idealized_config(position_sizing="equal_active", max_positions=2))
+    assert "weight of the entry components that fired divided by" in ranked
+    assert "only which signals are allocated" in ranked
+    daily = _text(idealized_config(position_sizing="equal_active", rebalance_frequency="daily"))
+    assert "recomputed every session" in daily
+    assert "wait for the next one" not in daily
+
+
+def test_legacy_assumptions_are_unchanged_by_allocation():
+    config = idealized_config(
+        position_sizing="fixed_fraction", sizing_value=0.1, max_positions=2,
+        max_position_pct=0.5,
+    )
+    text = _text(config)
+    assert "At most 2 positions are held at once; a signal arriving when the book is full is " \
+        "dropped, not queued." in text
+    assert "No single position exceeds 50% of equity." in text
+    assert "allocation" not in text.lower()
 
 
 # --- parity with the engine this one replaced -------------------------------
