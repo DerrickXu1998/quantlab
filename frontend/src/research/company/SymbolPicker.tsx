@@ -1,3 +1,4 @@
+import { displaySymbol } from '../format';
 import { Search, ServerCrash, X } from 'lucide-react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { Instrument } from '../../api/client';
@@ -137,10 +138,7 @@ export function SymbolPicker({
 
   return (
     <div ref={rootRef} className="relative min-w-0 flex-1">
-      <label
-        htmlFor={`${listId}-input`}
-        className="type-label text-muted-foreground"
-      >
+      <label htmlFor={`${listId}-input`} className="type-label text-muted-foreground">
         Company
       </label>
       <div className="relative mt-1">
@@ -218,7 +216,7 @@ export function SymbolPicker({
                   )}
                 >
                   <span className="w-20 shrink-0 type-data tabular-nums text-primary">
-                    {instrument.symbol}
+                    {displaySymbol(instrument.symbol)}
                   </span>
                   <span className="truncate text-xs">{instrument.name}</span>
                 </li>
@@ -240,7 +238,11 @@ function placeholderFor(status: ReadStatus, total: number, chosen: Instrument | 
   if (status === 'loading') return 'Loading the instrument catalogue…';
   if (status === 'unsupported') return 'The instrument catalogue is not served here';
   if (status === 'error') return 'The instrument catalogue could not be read';
-  if (chosen) return `${chosen.symbol} — ${chosen.name}`;
+  if (chosen) {
+    return chosen.name === chosen.symbol
+      ? displaySymbol(chosen.symbol)
+      : `${displaySymbol(chosen.symbol)} — ${chosen.name}`;
+  }
   return `Search ${total.toLocaleString('en-US')} instruments by symbol or name`;
 }
 
@@ -252,7 +254,7 @@ function captionFor(status: ReadStatus, message: string | null, chosen: Instrume
   if (status === 'error') {
     return `The catalogue could not be read${message ? `: ${message}` : '.'}`;
   }
-  if (chosen) return chosen.name;
+  if (chosen && chosen.name !== chosen.symbol) return chosen.name;
   return '';
 }
 

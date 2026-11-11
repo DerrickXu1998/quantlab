@@ -1,3 +1,4 @@
+import { displaySymbol } from '../research/format';
 import type { Signal } from '../api/client';
 import { navigate } from '../chrome/router';
 import { Button } from './ui/button';
@@ -103,7 +104,9 @@ export function SignalTable({
                     }
                     onClick={() => onSelect(signal)}
                   >
-                    <TableCell className="font-mono text-xs">{signal.symbol}</TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {displaySymbol(signal.symbol)}
+                    </TableCell>
                     <TableCell className="font-mono text-xs tabular-nums">{signal.date}</TableCell>
                     <TableCell className="text-xs">
                       {signal.rule_name} v{signal.rule_version}

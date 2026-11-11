@@ -1,20 +1,14 @@
 import { useCallback, useSyncExternalStore } from 'react';
 
 /**
- * The app's six destinations, addressed by hash.
+ * The app's five destinations, addressed by hash.
  *
- * A hash, not a router library: there are six flat destinations and a small
+ * A hash, not a router library: there are five flat destinations and a small
  * set of handoff parameters, and pulling in react-router would add a
  * dependency and force every test into a MemoryRouter for no gain. The hash
  * still gives deep links, refresh-safe state, and a working back button.
  */
-export type Destination =
-  | 'overview'
-  | 'research'
-  | 'strategies'
-  | 'replay'
-  | 'market'
-  | 'execution';
+export type Destination = 'overview' | 'research' | 'strategies' | 'replay' | 'market';
 
 export const DESTINATIONS: readonly Destination[] = [
   'overview',
@@ -22,7 +16,6 @@ export const DESTINATIONS: readonly Destination[] = [
   'strategies',
   'replay',
   'market',
-  'execution',
 ];
 
 export interface Route {
@@ -37,6 +30,8 @@ export interface Route {
 const LEGACY: Record<string, Destination> = {
   '': 'overview',
   lab: 'overview',
+  // Execution was a simulated order book with no backend behind it.
+  execution: 'overview',
 };
 
 export function hashFor(destination: Destination, params?: Record<string, string>): string {

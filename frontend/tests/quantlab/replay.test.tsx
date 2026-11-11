@@ -96,6 +96,13 @@ class FakeStream {
   }
 }
 
+// The panel shows the run's stored curve before Play. That read goes through
+// the same stubbed fetch as the stream, so it is held idle here: these tests
+// are about the stream, and count its connections.
+vi.mock('../../src/quantlab/data/useRunPerformance', () => ({
+  useRunPerformance: () => ({ status: 'idle' }),
+}));
+
 vi.stubGlobal(
   'fetch',
   vi.fn((url: string, init: RequestInit) => Promise.resolve(new FakeStream(url, init).response())),

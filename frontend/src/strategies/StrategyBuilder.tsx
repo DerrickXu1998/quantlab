@@ -102,6 +102,7 @@ export function StrategyBuilder({
   seed = null,
   clone = null,
   onShowRun,
+  openLatest = false,
 }: {
   instruments: Instrument[];
   seed?: StrategySeed | null;
@@ -109,6 +110,11 @@ export function StrategyBuilder({
   clone?: RunClone | null;
   /** Open a submitted run in Runs. Defaults to navigating there. */
   onShowRun?: (runId: string) => void;
+  /**
+   * Open on the most recently saved strategy, or the first template when
+   * there is none, instead of an empty builder. Skipped for a handoff.
+   */
+  openLatest?: boolean;
 }) {
   const { catalog, modelsStatus, runError, submitStrategyRun, submitting, allRuns } = useRuns();
   const library = useStrategyLibrary();
@@ -234,6 +240,32 @@ export function StrategyBuilder({
       `${model.name} added as ${ROLE_LABELS[component.role].toLowerCase()} with the parameters it fired with. Add more signals, widen the universe, then submit.`,
     );
   }, [seed, catalog, modelsStatus]);
+
+  const openedLatest = useRef(false);
+  useEffect(() => {
+    if (!openLatest || openedLatest.current) return;
+    if (modelsStatus !== 'ready' || library.status !== 'ready' || templates.status === 'loading') {
+      return;
+    }
+    openedLatest.current = true;
+    if (seed || clone || draft.components.length > 0) return;
+    const latest = [...library.items].sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0];
+    if (latest) {
+      const loaded = specToDraft(latest, catalog);
+      setDraft(loaded);
+      markClean(loaded);
+      setServerWarnings(latest.warnings ?? []);
+      return;
+    }
+    const template = templates.items[0];
+    if (template) {
+      const { draft: loaded } = templateToDraft(template, catalog);
+      setDraft(loaded);
+      markClean(loaded);
+    }
+    // Once, when the library and registry have both arrived.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openLatest, modelsStatus, library.status, templates.status]);
 
   // Clone to editor: the run's strategy, universe and window, as an unsaved
   // copy -- editing it must never overwrite whatever strategy it came from.
@@ -822,7 +854,7 @@ export function StrategyBuilder({
           onNameChange={(name) => setDraft((current) => ({ ...current, name }))}
           saved={Boolean(draft.id)}
           dirty={dirty}
-          pristine={!dirty && draft.components.length === 0 && symbols.length === 0}
+          pristine={!dirty && symbols.length === 0}
           saving={saving}
           onSave={() => void save(false)}
           onSaveAsCopy={() => void save(true)}
