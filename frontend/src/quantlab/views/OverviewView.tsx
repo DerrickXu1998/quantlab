@@ -263,14 +263,7 @@ export function OverviewView() {
               </CascadeItem>
 
               <CascadeItem index={3} className="flex min-h-0 flex-col bg-background">
-                <Panel
-                  title="Open positions"
-                  fill
-                  scroll
-                  className="border-0"
-                  bodyClassName="p-0"
-                  simulated="The live column re-marks against the simulated feed."
-                >
+                <Panel title="Open positions" fill scroll className="border-0" bodyClassName="p-0">
                   <PositionsTable trades={performance.performance.trades} />
                 </Panel>
               </CascadeItem>

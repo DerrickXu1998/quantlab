@@ -145,15 +145,31 @@ export const METRIC_FORMAT = {
     render: formatDollars,
     hint: 'Tiingo daily: market cap + debt − cash',
   },
-  pe_ratio: { label: 'P/E (Tiingo)', render: formatMultiple, hint: 'Tiingo daily price ÷ earnings; a loss-maker has none' },
-  pb_ratio: { label: 'P/B (Tiingo)', render: formatMultiple, hint: 'Tiingo daily price ÷ book value; none on negative book' },
+  pe_ratio: {
+    label: 'P/E (Tiingo)',
+    render: formatMultiple,
+    hint: 'Tiingo daily price ÷ earnings; a loss-maker has none',
+  },
+  pb_ratio: {
+    label: 'P/B (Tiingo)',
+    render: formatMultiple,
+    hint: 'Tiingo daily price ÷ book value; none on negative book',
+  },
   peg_ratio_1y: {
     label: 'PEG 1y',
     render: formatRatio,
     hint: 'Tiingo daily: P/E ÷ trailing 1-year EPS growth; none when negative',
   },
-  roe_reported: { label: 'ROE (Tiingo)', render: formatPercent, hint: 'Tiingo quarterly: net income ÷ equity' },
-  roa_reported: { label: 'ROA (Tiingo)', render: formatPercent, hint: 'Tiingo quarterly: net income ÷ total assets' },
+  roe_reported: {
+    label: 'ROE (Tiingo)',
+    render: formatPercent,
+    hint: 'Tiingo quarterly: net income ÷ equity',
+  },
+  roa_reported: {
+    label: 'ROA (Tiingo)',
+    render: formatPercent,
+    hint: 'Tiingo quarterly: net income ÷ total assets',
+  },
   gross_margin_reported: {
     label: 'Gross margin (Tiingo)',
     render: formatPercent,
@@ -169,8 +185,16 @@ export const METRIC_FORMAT = {
     render: formatRatio,
     hint: 'Tiingo quarterly: total debt ÷ equity; none on negative equity',
   },
-  revenue_qoq: { label: 'Revenue QoQ', render: formatPercent, hint: 'Tiingo quarterly: revenue growth on the prior quarter' },
-  eps_qoq: { label: 'EPS QoQ', render: formatPercent, hint: 'Tiingo quarterly: EPS growth on the prior quarter' },
+  revenue_qoq: {
+    label: 'Revenue QoQ',
+    render: formatPercent,
+    hint: 'Tiingo quarterly: revenue growth on the prior quarter',
+  },
+  eps_qoq: {
+    label: 'EPS QoQ',
+    render: formatPercent,
+    hint: 'Tiingo quarterly: EPS growth on the prior quarter',
+  },
   piotroski_f_score: {
     label: 'Piotroski F',
     render: formatScore,
@@ -219,7 +243,9 @@ export function formatStatementValue(value: number | null | undefined, units?: s
   if (units === '%') return formatPercent(value);
   if (units === '$') {
     // Per-share figures (EPS, book value per share) are small; keep the cents.
-    return Math.abs(value) < 1000 ? `$${value.toFixed(2)}`.replace('$-', '-$') : formatDollars(value);
+    return Math.abs(value) < 1000
+      ? `$${value.toFixed(2)}`.replace('$-', '-$')
+      : formatDollars(value);
   }
   return Math.abs(value) >= 1e4 ? formatCompact(value) : formatRatio(value);
 }
@@ -264,7 +290,12 @@ export function conceptLabel(concept: string): string {
  * Share counts are magnitudes like revenue but carry no currency, and showing
  * `USD` beside a share count is simply wrong.
  */
-const SHARE_CONCEPTS = new Set(['shares_outstanding', 'short_volume', 'short_exempt_volume', 'total_volume']);
+const SHARE_CONCEPTS = new Set([
+  'shares_outstanding',
+  'short_volume',
+  'short_exempt_volume',
+  'total_volume',
+]);
 
 export function formatFactValue(concept: string, value: number, unit?: string | null): string {
   const scaled = formatCompact(value);
@@ -325,4 +356,14 @@ export function formatStaleness(days: number | null | undefined): string {
   if (whole < 365) return `${months} months ago`;
   const years = whole / 365.25;
   return years < 2 ? `${years.toFixed(1)} years ago` : `${Math.round(years)} years ago`;
+}
+
+/**
+ * A symbol as a person reads it. The warehouse keys US listings as `AAPL.US`;
+ * the suffix is the default market and says nothing on screen, so it is
+ * dropped. Any other suffix (`AAL.LON`) is real information and stays. Display
+ * only: requests and URLs keep the stored symbol.
+ */
+export function displaySymbol(symbol: string): string {
+  return symbol.endsWith('.US') ? symbol.slice(0, -3) : symbol;
 }

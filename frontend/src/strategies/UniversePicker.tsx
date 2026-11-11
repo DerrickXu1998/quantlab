@@ -1,3 +1,4 @@
+import { displaySymbol } from '../research/format';
 import { Bookmark, Plus, Search, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { getUniverseMembers, type Instrument, type Universe } from '../api/client';
@@ -186,10 +187,7 @@ export function UniversePicker({
 
       {saved.length > 0 ? (
         <div className="flex flex-wrap items-center gap-2">
-          <label
-            htmlFor="saved-universe"
-            className="type-label text-muted-foreground"
-          >
+          <label htmlFor="saved-universe" className="type-label text-muted-foreground">
             Saved universes
           </label>
           <Select
@@ -263,7 +261,9 @@ export function UniversePicker({
                   onClick={() => add(instrument.symbol)}
                   className="flex min-h-11 w-full items-center justify-between gap-3 px-3 py-2 text-left hover:bg-accent/40 focus-visible:bg-accent/40 focus-visible:outline-none lg:min-h-9"
                 >
-                  <span className="font-mono text-sm text-foreground">{instrument.symbol}</span>
+                  <span className="font-mono text-sm text-foreground">
+                    {displaySymbol(instrument.symbol)}
+                  </span>
                   <span className="truncate text-sm text-muted-foreground">
                     {instrument.name !== instrument.symbol ? instrument.name : instrument.currency}
                   </span>
@@ -296,7 +296,7 @@ export function UniversePicker({
                   aria-label={`Remove ${symbol}`}
                   className="flex h-9 items-center gap-1 border border-border bg-card px-2 font-mono text-xs text-foreground transition-colors hover:border-destructive/60 lg:h-7"
                 >
-                  {symbol}
+                  {displaySymbol(symbol)}
                   <X
                     size={16}
                     strokeWidth={1.5}
@@ -324,12 +324,7 @@ export function UniversePicker({
         {selected.length > 0 ? (
           <div className="space-y-2 border-t border-border pt-3" data-testid="universe-save">
             {!editing ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => setEditing(true)}
-              >
+              <Button type="button" size="sm" variant="outline" onClick={() => setEditing(true)}>
                 <Bookmark size={16} strokeWidth={1.5} aria-hidden="true" className="mr-1.5" />
                 Save as universe
               </Button>

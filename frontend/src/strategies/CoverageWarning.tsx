@@ -1,3 +1,4 @@
+import { displaySymbol } from '../research/format';
 import { FileClock, Hourglass, ScanSearch, TriangleAlert } from 'lucide-react';
 import { useMemo } from 'react';
 import type { CatalogModel, FundamentalsCoverage } from '../api/types';
@@ -56,10 +57,7 @@ export function CoverageWarning({
   /** Opens a name that cannot trade in Research, showing what it had filed by then. */
   onInspect: (symbol: string) => void;
 }) {
-  const components = useMemo(
-    () => fundamentalComponents(draft, catalog),
-    [draft, catalog],
-  );
+  const components = useMemo(() => fundamentalComponents(draft, catalog), [draft, catalog]);
   const concepts = useMemo(() => requiredConcepts(draft, catalog), [draft, catalog]);
   const gap = useMemo(
     () => coverageGap(symbols, concepts, coverage),
@@ -178,7 +176,7 @@ export function CoverageWarning({
                   title={`Open ${symbol} in Research to see what it had filed`}
                   className="border border-border px-1.5 py-px type-data tracking-[0.06em] text-muted-foreground transition-colors hover:text-foreground"
                 >
-                  {symbol}
+                  {displaySymbol(symbol)}
                 </button>
               </li>
             ))}
@@ -196,7 +194,11 @@ export function CoverageWarning({
           {starved.map((concept) => {
             const entry = conceptCoverage(coverage, concept);
             return (
-              <li key={concept} role="alert" className="flex gap-2 border border-border p-2 text-xs">
+              <li
+                key={concept}
+                role="alert"
+                className="flex gap-2 border border-border p-2 text-xs"
+              >
                 <TriangleAlert
                   size={16}
                   strokeWidth={1.5}

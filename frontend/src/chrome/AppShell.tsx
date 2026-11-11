@@ -1,26 +1,14 @@
-import {
-  Activity,
-  ArrowLeftRight,
-  ChartLine,
-  CircleDot,
-  FlaskConical,
-  History,
-  LayoutDashboard,
-  Search,
-} from 'lucide-react';
+import { ChartLine, FlaskConical, History, LayoutDashboard, Search } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { UserMenu } from '../auth/UserMenu';
 import { GlossaryButton } from '../glossary/GlossaryButton';
 import { DataSourceBanner } from '../components/DataSourceBanner';
 import { Button } from '../components/ui/button';
-import { StatusBadge } from '../components/ui/status-badge';
 import { ResearchPage } from '../pages/ResearchPage';
 import { GrainOverlay } from '../quantlab/chrome/GrainOverlay';
-import { useWatchlist } from '../quantlab/data/useWatchlist';
-import { FeedProvider, useFeedStatus } from '../quantlab/feed/FeedProvider';
+import { FEATURED_SYMBOLS, useWatchlist } from '../quantlab/data/useWatchlist';
 import { LiveFeedProvider } from '../quantlab/feed/LiveFeedProvider';
 import { TickerTape } from '../quantlab/panels/TickerTape';
-import { ExecutionView } from '../quantlab/views/ExecutionView';
 import { MarketView } from '../quantlab/views/MarketView';
 import { OverviewView } from '../quantlab/views/OverviewView';
 import { ReplayView } from '../quantlab/views/ReplayView';
@@ -41,14 +29,6 @@ const NAV: NavItem[] = [
   { id: 'strategies', label: 'Strategies', icon: FlaskConical },
   { id: 'replay', label: 'Replay', icon: History },
   { id: 'market', label: 'Market', icon: ChartLine },
-  {
-    id: 'execution',
-    label: 'Execution',
-    icon: ArrowLeftRight,
-    // The one destination that is entirely a simulation — marked on the nav
-    // item itself, not only on its panels.
-    simulated: 'There is no execution backend; everything in Execution is simulated.',
-  },
 ];
 
 function Clock() {
@@ -64,25 +44,6 @@ function Clock() {
   );
 }
 
-function FeedStatus() {
-  const status = useFeedStatus();
-  return (
-    <span
-      data-testid="feed-status"
-      className="flex items-center gap-1.5 text-xs text-muted-foreground"
-      title="Simulated market data — QuantLab has no streaming feed"
-    >
-      {status === 'live' ? (
-        <CircleDot size={16} strokeWidth={1.5} className="text-primary" />
-      ) : (
-        <Activity size={16} strokeWidth={1.5} />
-      )}
-      <span className="font-mono uppercase tracking-[0.12em]">{status}</span>
-      <StatusBadge tone="simulated">sim</StatusBadge>
-    </span>
-  );
-}
-
 /**
  * The one shell: product mark, six destinations, the dataset disclosure and
  * theme toggle on the right; the disclaimer and ticker tape along the bottom.
@@ -90,7 +51,7 @@ function FeedStatus() {
  */
 export function AppShell() {
   const route = useRoute();
-  const { instruments, seeds, error } = useWatchlist();
+  const { instruments, quotes, error } = useWatchlist();
   // Rendered once, in one place or the other. See useMediaQuery: two
   // copies hidden by CSS would be two nodes in the accessibility tree.
   // The full header row where it fits, the hamburger wherever it does not:
@@ -114,7 +75,6 @@ export function AppShell() {
       {/* Above the grain, which is the whole point of the grain. */}
       <div className="relative z-10 flex min-h-0 flex-1 flex-col">
         <LiveFeedProvider>
-        <FeedProvider seeds={seeds}>
           {/* The header is the whole app's width floor, so it is where the
               phone layout is won or lost: at 390px the desktop row measured
               1,190px of content, and every destination inherited that sideways
@@ -145,18 +105,13 @@ export function AppShell() {
                       size="sm"
                       aria-current={route.destination === item.id ? 'page' : undefined}
                       // The label is hidden below `lg`, so the name has to come
-                      // from here. It carries the simulated marker too: an
-                      // aria-label overrides the element's contents, and without
-                      // this the `sim` badge would drop out of the accessible
-                      // name that previously included it.
+                      // from here.
                       aria-label={
-                        item.simulated
-                          ? `${item.label} (simulated)`
-                          : item.id === 'strategies' && activeRuns > 0
-                            ? `${item.label}, ${activeRuns} backtest${activeRuns === 1 ? '' : 's'} running or queued`
-                            : item.label
+                        item.id === 'strategies' && activeRuns > 0
+                          ? `${item.label}, ${activeRuns} backtest${activeRuns === 1 ? '' : 's'} running or queued`
+                          : item.label
                       }
-                      title={item.simulated ?? item.label}
+                      title={item.label}
                       onClick={() => navigate(item.id)}
                       className={cn(
                         // 44px of touch target below `lg` -- the floor a finger
@@ -178,15 +133,6 @@ export function AppShell() {
                           {activeRuns}
                         </span>
                       ) : null}
-                      {item.simulated ? (
-                        <StatusBadge
-                          tone="simulated"
-                          title={item.simulated}
-                          className="hidden lg:inline-flex"
-                        >
-                          sim
-                        </StatusBadge>
-                      ) : null}
                     </Button>
                   ))}
                 </nav>
@@ -195,7 +141,6 @@ export function AppShell() {
               <div className="flex shrink-0 items-center gap-2 lg:gap-4">
                 {isDesktop ? (
                   <>
-                    <FeedStatus />
                     <Clock />
                     <DatasetBadge />
                   </>
@@ -225,16 +170,18 @@ export function AppShell() {
             <div className="flex min-h-0 flex-1 flex-col">
               <ReplayView />
             </div>
-          ) : route.destination === 'market' ? (
-            <MarketView instruments={instruments} feedError={error} />
           ) : (
-            <ExecutionView instruments={instruments} feedError={error} />
+            <MarketView
+              instruments={instruments}
+              feedError={error}
+              defaultSymbol={FEATURED_SYMBOLS[0]}
+            />
           )}
 
           <RunNotices />
 
           <footer className="shrink-0">
-            <TickerTape />
+            <TickerTape quotes={quotes} />
             {/* Where the header's disclosures go on a phone. They are not
                 decoration: `sim` and the dataset badge are the difference
                 between a demo number and a traded one, so they stay on screen
@@ -243,12 +190,10 @@ export function AppShell() {
                 showing them twice would be noise. */}
             {isDesktop ? null : (
               <div className="flex items-center justify-center gap-3 border-t border-border px-3 py-1.5">
-                <FeedStatus />
                 <DatasetBadge />
               </div>
             )}
           </footer>
-        </FeedProvider>
         </LiveFeedProvider>
       </div>
     </div>

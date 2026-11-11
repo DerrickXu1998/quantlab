@@ -1,29 +1,14 @@
+import { displaySymbol } from '../../research/format';
 import { Numeric } from '../chrome/Numeric';
-import { useFeedSymbols, useTick } from '../feed/FeedProvider';
-
-function Item({ symbol }: { symbol: string }) {
-  const tick = useTick(symbol);
-  return (
-    <span className="flex items-center gap-2 whitespace-nowrap px-4">
-      <span className="type-data text-muted-foreground">{symbol}</span>
-      <Numeric value={tick?.price} format="price" className="text-xs" />
-      <Numeric
-        value={tick?.changePct}
-        format="signedPercent"
-        tone="signed"
-        className="text-xs"
-      />
-    </span>
-  );
-}
+import type { Quote } from '../data/useWatchlist';
 
 /**
- * The strip across the bottom. It scrolls nothing and blinks nothing: the
- * values simply update in place, because a moving marquee would be a second
- * continuous animation and the budget is one.
+ * The watchlist's last stored closes along the bottom of the shell. Real
+ * end-of-day prices: each item carries the date of its bar on hover, and
+ * nothing ticks.
  */
-export function TickerTape() {
-  const symbols = useFeedSymbols();
+export function TickerTape({ quotes }: { quotes: Record<string, Quote> }) {
+  const symbols = Object.keys(quotes);
   if (symbols.length === 0) return null;
 
   return (
@@ -31,9 +16,26 @@ export function TickerTape() {
       data-testid="ticker-tape"
       className="flex items-center overflow-x-auto border-t border-border bg-card py-1.5"
     >
-      {symbols.map((symbol) => (
-        <Item key={symbol} symbol={symbol} />
-      ))}
+      {symbols.map((symbol) => {
+        const quote = quotes[symbol];
+        if (!quote) return null;
+        return (
+          <span
+            key={symbol}
+            title={`Close on ${quote.date}`}
+            className="flex items-center gap-2 whitespace-nowrap px-4"
+          >
+            <span className="type-data text-muted-foreground">{displaySymbol(symbol)}</span>
+            <Numeric value={quote.price} format="price" className="text-xs" />
+            <Numeric
+              value={quote.changePct}
+              format="signedPercent"
+              tone="signed"
+              className="text-xs"
+            />
+          </span>
+        );
+      })}
     </div>
   );
 }

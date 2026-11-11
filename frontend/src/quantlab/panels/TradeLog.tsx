@@ -1,3 +1,4 @@
+import { displaySymbol } from '../../research/format';
 import { FileSearch } from 'lucide-react';
 import type { ExitReason, TradeV2 } from '../../api/types';
 import { EXIT_REASON_LABELS } from '../../api/types';
@@ -66,7 +67,7 @@ export function TradeLog({ trades }: { trades: TradeV2[] }) {
                 key={`${trade.symbol}-${trade.entry_date}-${index}`}
                 className="border-t border-border"
               >
-                <td className="px-3 py-1.5 type-data">{trade.symbol}</td>
+                <td className="px-3 py-1.5 type-data">{displaySymbol(trade.symbol)}</td>
                 <td className="px-3 py-1.5 type-data uppercase text-muted-foreground">
                   {trade.side ?? '—'}
                 </td>
@@ -103,12 +104,7 @@ export function TradeLog({ trades }: { trades: TradeV2[] }) {
                   />
                 </td>
                 <td className="px-3 py-1.5 text-right">
-                  <Numeric
-                    value={trade.fees}
-                    format="price"
-                    tone="muted"
-                    className="text-xs"
-                  />
+                  <Numeric value={trade.fees} format="price" tone="muted" className="text-xs" />
                 </td>
                 <td className="px-3 py-1.5 text-right">
                   <Numeric

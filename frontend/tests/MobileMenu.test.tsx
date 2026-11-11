@@ -1,6 +1,6 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { ArrowLeftRight, LayoutDashboard, Search } from 'lucide-react';
+import { ChartLine, LayoutDashboard, Search } from 'lucide-react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MobileHeader, type NavItem } from '../src/chrome/MobileMenu';
 import { ThemeProvider } from '../src/theme/ThemeProvider';
@@ -9,12 +9,7 @@ import { mockSystemPrefersDark } from './mocks/match-media';
 const ITEMS: NavItem[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'research', label: 'Research', icon: Search },
-  {
-    id: 'execution',
-    label: 'Execution',
-    icon: ArrowLeftRight,
-    simulated: 'Everything in Execution is simulated.',
-  },
+  { id: 'market', label: 'Market', icon: ChartLine },
 ];
 
 function renderHeader(onNavigate = vi.fn()) {
@@ -48,17 +43,16 @@ describe('MobileHeader', () => {
     );
   });
 
-  it('lists every destination with its label, the sim marker and the theme switch', async () => {
+  it('lists every destination with its label and the theme switch', async () => {
     const user = userEvent.setup();
     renderHeader();
 
     await user.click(screen.getByRole('button', { name: 'Open menu' }));
 
     const nav = screen.getByRole('navigation', { name: 'Destinations' });
-    for (const label of ['Overview', 'Research', 'Execution']) {
+    for (const label of ['Overview', 'Research', 'Market']) {
       expect(within(nav).getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
     }
-    expect(within(nav).getByRole('button', { name: /execution/i })).toHaveTextContent('sim');
     expect(within(nav).getByRole('button', { name: /research/i })).toHaveAttribute(
       'aria-current',
       'page',

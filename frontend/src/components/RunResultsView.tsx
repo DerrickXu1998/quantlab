@@ -1,3 +1,4 @@
+import { displaySymbol } from '../research/format';
 import { AlertTriangle, Ban, Hourglass, Info, TriangleAlert } from 'lucide-react';
 import { useState } from 'react';
 import type { Run } from '../api/client';
@@ -423,9 +424,7 @@ export function RunResultsView({ run }: { run: RunDetailV2 }) {
               </Panel>
             </div>
           ) : (
-            <p className="mt-4 type-label text-muted-foreground">
-              Computing…
-            </p>
+            <p className="mt-4 type-label text-muted-foreground">Computing…</p>
           )}
 
           <div className="mt-4">
@@ -441,7 +440,9 @@ export function RunResultsView({ run }: { run: RunDetailV2 }) {
               <TableBody>
                 {run.signals.map((signal, index) => (
                   <TableRow key={`${signal.symbol}-${signal.date}-${index}`}>
-                    <TableCell className="font-mono text-xs">{signal.symbol}</TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {displaySymbol(signal.symbol)}
+                    </TableCell>
                     <TableCell className="font-mono text-xs tabular-nums">{signal.date}</TableCell>
                     <TableCell className="text-xs">{signal.direction}</TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">
@@ -498,9 +499,7 @@ function StrategyProvenance({ run }: { run: RunDetailV2 }) {
       aria-label="Strategy executed"
       className="mt-3 border border-border bg-card p-3"
     >
-      <p className="type-label text-muted-foreground">
-        Strategy executed
-      </p>
+      <p className="type-label text-muted-foreground">Strategy executed</p>
       <p className="mt-1 text-xs">{strategy.name}</p>
       <ul className="mt-2 space-y-1">
         {strategy.components.map((component, index) => (

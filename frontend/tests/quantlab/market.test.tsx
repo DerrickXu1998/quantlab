@@ -203,7 +203,7 @@ describe('Market view', () => {
     renderMarket();
     const list = await screen.findByTestId('universe-list');
 
-    await user.click(within(list).getByRole('checkbox', { name: /AAPL\.US/ }));
+    await user.click(within(list).getByRole('checkbox', { name: /AAPL/ }));
     let grid = await screen.findByTestId('market-grid');
     expect(grid).toHaveAttribute('data-count', '1');
     expect(grid).toHaveClass('grid-cols-1');
@@ -250,7 +250,7 @@ describe('Market view', () => {
     window.location.hash = '#/market?symbols=AAPL.US';
     renderMarket();
 
-    const card = await screen.findByRole('region', { name: /AAPL\.US · Company 0/ });
+    const card = await screen.findByRole('region', { name: /AAPL · Company 0/ });
     await within(card).findByTestId('market-chart');
     const last = BARS[BARS.length - 1].date;
 
@@ -272,7 +272,7 @@ describe('Market view', () => {
     vi.mocked(apiClient.getPrices).mockResolvedValue({ total: mixed.length, items: mixed });
     window.location.hash = '#/market?symbols=AAPL.US&range=1M';
     renderMarket();
-    const card = await screen.findByRole('region', { name: /AAPL\.US/ });
+    const card = await screen.findByRole('region', { name: /AAPL/ });
     await within(card).findByTestId('market-chart');
 
     expect(within(card).getByTestId('fact-source')).toHaveTextContent(/Yahoo Finance \d+ · Tiingo 5 \(ingested EOD\)/);
@@ -283,7 +283,7 @@ describe('Market view', () => {
     vi.mocked(apiClient.getPrices).mockResolvedValue({ total: generated.length, items: generated });
     window.location.hash = '#/market?symbols=AAPL.US';
     renderMarket();
-    const card = await screen.findByRole('region', { name: /AAPL\.US/ });
+    const card = await screen.findByRole('region', { name: /AAPL/ });
     await within(card).findByTestId('market-chart');
 
     expect(within(card).getByTestId('provenance-synthetic')).toHaveTextContent(/synthetic/i);
@@ -300,7 +300,7 @@ describe('Market view', () => {
     vi.mocked(apiClient.getPrices).mockResolvedValue({ total: bare.length, items: bare });
     window.location.hash = '#/market?symbols=AAPL.US';
     renderMarket();
-    const card = await screen.findByRole('region', { name: /AAPL\.US/ });
+    const card = await screen.findByRole('region', { name: /AAPL/ });
     await within(card).findByTestId('market-chart');
 
     expect(within(card).getByTestId('fact-source')).toHaveTextContent('provider not reported');
@@ -310,7 +310,7 @@ describe('Market view', () => {
     window.location.hash = '#/market?symbols=AAPL.US&range=ALL';
     const user = userEvent.setup();
     renderMarket();
-    const card = await screen.findByRole('region', { name: /AAPL\.US/ });
+    const card = await screen.findByRole('region', { name: /AAPL/ });
     await within(card).findByTestId('market-chart');
 
     await user.click(screen.getByRole('button', { name: '1W' }));
@@ -324,7 +324,7 @@ describe('Market view', () => {
   it('draws added studies on the same chart: overlays on price, oscillators in panes', async () => {
     window.location.hash = '#/market?symbols=AAPL.US&studies=sma20,rsi,macd';
     renderMarket();
-    const card = await screen.findByRole('region', { name: /AAPL\.US/ });
+    const card = await screen.findByRole('region', { name: /AAPL/ });
     await within(card).findByTestId('market-chart');
 
     // One chart per card, however many studies are on.
@@ -430,7 +430,7 @@ describe('Market view', () => {
         volume: 5000,
       });
 
-      const card = await screen.findByRole('region', { name: /AAPL\.US/ });
+      const card = await screen.findByRole('region', { name: /AAPL/ });
       const chart = await within(card).findByTestId('market-chart');
       expect(chart).toHaveAttribute('data-mode', 'live');
       await vi.waitFor(() => expect(within(card).getByTestId('provenance-live')).toHaveTextContent('Live · IBKR'));
@@ -476,7 +476,7 @@ describe('Market view', () => {
       act(() => streams[0].handlers.onOpen?.());
       send(HEARTBEAT, { event: 'status', symbol: 'AAPL.US', status: 'over_budget', detail: '' });
 
-      const card = await screen.findByRole('region', { name: /AAPL\.US/ });
+      const card = await screen.findByRole('region', { name: /AAPL/ });
       await vi.waitFor(() => expect(within(card).getByTestId('provenance-live')).toHaveTextContent('Not subscribed'));
       expect(within(card).getByTestId('provenance-live')).toHaveAttribute('title', expect.stringMatching(/line budget/i));
     });
@@ -490,7 +490,7 @@ describe('Market view', () => {
         await vi.waitFor(() => expect(streams).toHaveLength(1));
         act(() => streams[0].handlers.onEnd(503, 'live bus unreachable: broker down'));
 
-        const card = await screen.findByRole('region', { name: /AAPL\.US/ });
+        const card = await screen.findByRole('region', { name: /AAPL/ });
         await vi.waitFor(() => expect(within(card).getByTestId('provenance-live')).toHaveTextContent('Feed offline'));
         await act(async () => {
           await vi.advanceTimersByTimeAsync(1100);
@@ -510,7 +510,7 @@ describe('Market view', () => {
       act(() => streams[0].handlers.onOpen?.());
       send({ ...HEARTBEAT, fake: true });
 
-      const card = await screen.findByRole('region', { name: /AAPL\.US/ });
+      const card = await screen.findByRole('region', { name: /AAPL/ });
       await vi.waitFor(() => expect(within(card).getByTestId('simulated-tag')).toBeInTheDocument());
       expect(within(card).getByTestId('fact-source')).toHaveTextContent(/FAKE feed/);
     });
