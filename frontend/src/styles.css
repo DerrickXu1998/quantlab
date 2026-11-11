@@ -124,6 +124,24 @@ body {
 }
 
 /*
+  Native dropdowns, drawn like the rest of the fields. The control stays a real
+  <select> (keyboard, screen readers and phone pickers all come free); only the
+  browser's own arrow is replaced, with one chevron that reads on both themes.
+  List boxes (`size` / `multiple`) keep their native look.
+*/
+@layer base {
+  select:not([size]):not([multiple]) {
+    appearance: none;
+    padding-right: 2rem;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%237C8591' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.5rem center;
+    background-size: 16px 16px;
+    cursor: pointer;
+  }
+}
+
+/*
   The type scale, by role. Every piece of text on the surface is one of these
   or a stock Tailwind size; arbitrary `text-[Npx]` is rejected by the design
   audit. They are component classes rather than theme font sizes so that
