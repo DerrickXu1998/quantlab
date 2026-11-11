@@ -3,15 +3,22 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as apiClient from '../../src/api/client';
 import type { Instrument } from '../../src/api/client';
-import type { StrategySpec } from '../../src/api/types';
+import type { CombineLogic, ExecutionConfig, StrategySpec } from '../../src/api/types';
+import { DEFAULT_EXECUTION } from '../../src/api/types';
 import { RunsProvider } from '../../src/runs/RunsContext';
 import { StrategyBuilder } from '../../src/strategies/StrategyBuilder';
 import {
+  allocationBlockers,
   canFillRole,
   componentFor,
+  describeAllocation,
   describeStrategy,
+  draftBlockers,
+  draftToSpec,
+  draftWarnings,
   emptyDraft,
   roleRefusal,
+  specToDraft,
 } from '../../src/strategies/strategyModel';
 import { adxFilter, catalog, macdCrossover, rsiThreshold, templates } from './fixtures';
 
@@ -165,6 +172,169 @@ describe('the plain-English summary', () => {
     expect(describeStrategy({ ...base, combine_window_days: 3 }, catalog)).toMatch(
       /within 3 bars of each other/,
     );
+  });
+});
+
+describe('portfolio allocation in the draft', () => {
+  const twoEntries = (execution: Partial<ExecutionConfig>, logic: CombineLogic = 'any') => ({
+    ...emptyDraft('Test'),
+    components: [
+      { ...componentFor(rsiThreshold, 'entry'), weight: 2 },
+      componentFor(macdCrossover, 'entry'),
+    ],
+    entry_logic: logic,
+    execution: { ...DEFAULT_EXECUTION, ...execution },
+  });
+
+  it('reads the allocation as English, and says nothing for independent sizing', () => {
+    expect(describeAllocation(DEFAULT_EXECUTION)).toBeNull();
+    expect(
+      describeAllocation({ ...DEFAULT_EXECUTION, position_sizing: 'fixed_fraction', sizing_value: 0.1 }),
+    ).toBeNull();
+
+    expect(describeAllocation({ ...DEFAULT_EXECUTION, position_sizing: 'equal_active' })).toBe(
+      'Shares 100% of the book equally across every active signal, rebalancing open positions whenever a signal opens, changes or closes — so one signal can resize the other positions.',
+    );
+
+    const sentence = describeAllocation({
+      ...DEFAULT_EXECUTION,
+      position_sizing: 'signal_inverse_volatility',
+      max_positions: 5,
+      max_position_pct: 0.25,
+      atr_period: 20,
+      target_exposure: 0.9,
+      min_allocation_score: 0.5,
+      rebalance_frequency: 'monthly',
+      rebalance_threshold: 0.02,
+      max_turnover: 0.5,
+    });
+    expect(sentence).toMatch(
+      /Shares 90% of the book across at most 5 active signals \(strongest first, ties by symbol\)/,
+    );
+    expect(sentence).toMatch(/signal strength divided by trailing 20-bar volatility/);
+    expect(sentence).toMatch(/at most 25% in any one name/);
+    expect(sentence).toMatch(/ignoring signals scoring below 50%/);
+    expect(sentence).toMatch(/on the first session of each month, skipping drifts under 2%/);
+    expect(sentence).toMatch(/at most 50% turnover at a time/);
+
+    const draft = twoEntries({ position_sizing: 'signal_strength' });
+    expect(describeStrategy(draft, catalog)).toMatch(/in proportion to signal strength/);
+  });
+
+  it('refuses the combinations the engine refuses, at its ranges', () => {
+    // Allocation fields under an independent mode.
+    expect(allocationBlockers({ ...DEFAULT_EXECUTION, target_exposure: 0.5 })).toEqual([
+      expect.stringMatching(/Target exposure only applies to portfolio allocation sizing/),
+    ]);
+    expect(
+      allocationBlockers({ ...DEFAULT_EXECUTION, rebalance_frequency: 'weekly', max_turnover: 1 })[0],
+    ).toMatch(/Rebalance and Max turnover only apply/);
+    // Null is unset, under every mode.
+    expect(allocationBlockers({ ...DEFAULT_EXECUTION, target_exposure: null })).toEqual([]);
+
+    const allocated = { ...DEFAULT_EXECUTION, position_sizing: 'signal_strength' as const };
+    expect(allocationBlockers(allocated)).toEqual([]);
+    expect(allocationBlockers({ ...allocated, sizing_value: 0.1 })[0]).toMatch(/no sizing value/);
+
+    // The edges C1 accepts.
+    expect(
+      allocationBlockers({
+        ...allocated,
+        target_exposure: 1,
+        min_allocation_score: 1,
+        rebalance_threshold: 0,
+        max_turnover: 2,
+      }),
+    ).toEqual([]);
+    expect(
+      allocationBlockers({ ...allocated, min_allocation_score: 0, rebalance_threshold: 0.99 }),
+    ).toEqual([]);
+
+    // And just past them.
+    for (const [patch, message] of [
+      [{ target_exposure: 0 }, /Target exposure/],
+      [{ target_exposure: 1.01 }, /Target exposure/],
+      [{ min_allocation_score: -0.1 }, /Min allocation score/],
+      [{ min_allocation_score: 1.5 }, /Min allocation score/],
+      [{ rebalance_threshold: 1 }, /Rebalance threshold/],
+      [{ max_turnover: 0 }, /Max turnover/],
+      [{ max_turnover: 2.5 }, /Max turnover/],
+      [{ position_sizing: 'signal_inverse_volatility', atr_period: 1 }, /Volatility lookback/],
+    ] as const) {
+      expect(allocationBlockers({ ...allocated, ...patch }), JSON.stringify(patch)).toEqual([
+        expect.stringMatching(message),
+      ]);
+    }
+  });
+
+  it('warns when every signal will score the same, so strength cannot differ', () => {
+    const single = {
+      ...emptyDraft('Test'),
+      components: [componentFor(rsiThreshold, 'entry'), componentFor(macdCrossover, 'exit')],
+      execution: { ...DEFAULT_EXECUTION, position_sizing: 'signal_strength' as const },
+    };
+    expect(draftWarnings(single).join(' ')).toMatch(/exactly like equal active weight/);
+    expect(draftWarnings(twoEntries({ position_sizing: 'signal_strength' }, 'all')).join(' ')).toMatch(
+      /ALL must agree/,
+    );
+    // A weighted threshold that needs every weight is ALL by another name.
+    const needsAll = { ...twoEntries({ position_sizing: 'signal_strength' }, 'weighted'), entry_threshold: 3 };
+    expect(draftWarnings(needsAll).join(' ')).toMatch(/scores 100%/);
+    const needsOne = { ...needsAll, entry_threshold: 1 };
+    expect(draftWarnings(needsOne).join(' ')).not.toMatch(/scores 100%/);
+    expect(draftWarnings(twoEntries({ position_sizing: 'signal_strength' }, 'any'))).toEqual([
+      expect.stringMatching(/No exit signal/),
+    ]);
+  });
+
+  it('never lets a hidden weight tilt the allocation score', () => {
+    const legacy = draftToSpec(twoEntries({}), catalog);
+    expect(legacy.components.map((component) => component.weight)).toEqual([
+      undefined,
+      undefined,
+    ]);
+    expect(legacy.execution).toEqual(DEFAULT_EXECUTION);
+
+    // The weight 2 is not on screen under ANY logic, so it is not sent.
+    const allocated = draftToSpec(
+      twoEntries({ position_sizing: 'signal_strength', target_exposure: 0.8 }),
+      catalog,
+    );
+    expect(allocated.components.map((component) => component.weight)).toEqual([
+      undefined,
+      undefined,
+    ]);
+    const weighted = draftToSpec(
+      twoEntries({ position_sizing: 'signal_strength' }, 'weighted'),
+      catalog,
+    );
+    expect(weighted.components.map((component) => component.weight)).toEqual([2, 1]);
+    expect(allocated.execution).toMatchObject({
+      position_sizing: 'signal_strength',
+      target_exposure: 0.8,
+    });
+  });
+
+  it('round-trips a saved allocation strategy, and an old one keeps its mode', () => {
+    const saved: StrategySpec = {
+      ...draftToSpec(twoEntries({}), catalog),
+      execution: {
+        ...DEFAULT_EXECUTION,
+        position_sizing: 'signal_inverse_volatility',
+        rebalance_frequency: 'weekly',
+        max_turnover: 0.4,
+      },
+    };
+    expect(specToDraft(saved, catalog).execution).toMatchObject({
+      position_sizing: 'signal_inverse_volatility',
+      rebalance_frequency: 'weekly',
+      max_turnover: 0.4,
+    });
+
+    const old = { ...saved, execution: { ...DEFAULT_EXECUTION, position_sizing: 'fixed_fraction' as const, sizing_value: 0.1 } };
+    const draft = specToDraft(old, catalog);
+    expect(draft.execution).toEqual(old.execution);
+    expect(draftBlockers(draft)).toEqual([]);
   });
 });
 
@@ -424,6 +594,59 @@ describe('StrategyBuilder', () => {
     expect(screen.queryByTestId('strategy-blockers')).not.toBeInTheDocument();
     expect(run).toBeEnabled();
     expect(apiClient.createStrategyRun).not.toHaveBeenCalled();
+  });
+
+  it('submits a portfolio allocation, refusing an out-of-range one beside Submit', async () => {
+    vi.mocked(apiClient.createStrategyRun).mockRejectedValue(
+      new apiClient.ApiError(0, 'no backend'),
+    );
+    const person = await openBuilder();
+    await person.click(addFrom('rsi-threshold', 'Entry'));
+    await person.type(screen.getByLabelText(/add tickers/i), 'ZZTRND{Enter}');
+
+    await person.selectOptions(screen.getByLabelText(/position sizing/i), 'signal_strength');
+    expect(screen.getByTestId('execution-summary')).toHaveTextContent(/signal strength allocation/);
+    expect(screen.getByTestId('strategy-summary')).toHaveTextContent(
+      /in proportion to signal strength/,
+    );
+
+    await person.type(screen.getByLabelText(/target exposure/i), '150');
+    const run = screen.getByRole('button', { name: /submit backtest/i });
+    expect(run).toBeDisabled();
+    expect(screen.getByTestId('strategy-blockers')).toHaveTextContent(/target exposure/i);
+
+    await person.clear(screen.getByLabelText(/target exposure/i));
+    await person.type(screen.getByLabelText(/target exposure/i), '80');
+    expect(run).toBeEnabled();
+    await person.click(run);
+
+    await waitFor(() => expect(apiClient.createStrategyRun).toHaveBeenCalledTimes(1));
+    const body = vi.mocked(apiClient.createStrategyRun).mock.calls[0][0];
+    expect(body.strategy?.execution).toMatchObject({
+      position_sizing: 'signal_strength',
+      sizing_value: null,
+      target_exposure: 0.8,
+    });
+  });
+
+  it('keeps a template on its own sizing mode, with no allocation fields', async () => {
+    vi.mocked(apiClient.createStrategyRun).mockRejectedValue(
+      new apiClient.ApiError(0, 'no backend'),
+    );
+    const person = await openBuilder();
+    await showList(person, 'Templates');
+    await screen.findByTestId('template-list');
+    await person.click(
+      screen.getByRole('button', { name: /load the rsi mean reversion template/i }),
+    );
+    await person.type(screen.getByLabelText(/add tickers/i), 'ZZTRND{Enter}');
+    await person.click(screen.getByRole('button', { name: /submit backtest/i }));
+
+    await waitFor(() => expect(apiClient.createStrategyRun).toHaveBeenCalledTimes(1));
+    const execution = vi.mocked(apiClient.createStrategyRun).mock.calls[0][0].strategy?.execution;
+    expect(execution?.position_sizing).toBe('equal_weight');
+    expect(Object.keys(execution ?? {})).not.toContain('target_exposure');
+    expect(Object.keys(execution ?? {})).not.toContain('rebalance_frequency');
   });
 
   it('runs on the bars chosen in Universe & window', async () => {

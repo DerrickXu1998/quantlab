@@ -92,6 +92,23 @@ describe('units', () => {
     expect(paramUnit('macro-risk-off', 'hy_window')).toBe('trading-days');
   });
 
+  it('defines the portfolio allocation vocabulary the builder labels', () => {
+    for (const id of [
+      'portfolio_allocation',
+      'target_exposure',
+      'allocation_score',
+      'realised_volatility',
+      'rebalance',
+      'rebalance_threshold',
+      'max_turnover',
+    ] as const) {
+      expect(TERMS[id].group, id).toBe('Execution');
+    }
+    expect(TERMS.portfolio_allocation.short).toMatch(/shrink another position/);
+    expect(TERMS.max_turnover.short).toMatch(/exits are never delayed/);
+    expect(TERMS.position_sizing.short).toMatch(/portfolio allocation/);
+  });
+
   it('gives every glossary term a label and a short explanation', () => {
     for (const [id, entry] of Object.entries(TERMS)) {
       expect(entry.label, id).toBeTruthy();

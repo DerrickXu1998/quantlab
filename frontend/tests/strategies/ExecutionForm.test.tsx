@@ -275,3 +275,127 @@ describe('ExecutionForm', () => {
     ).toHaveTextContent(/bearish entry opens a short/i);
   });
 });
+
+describe('ExecutionForm: portfolio allocation', () => {
+  const sizing = () => screen.getByLabelText(/position sizing/i);
+  const allocationGroup = () => screen.queryByRole('group', { name: /^portfolio allocation$/i });
+
+  it('groups the shared-capital modes apart from the independent ones', () => {
+    render(<Harness />);
+    const groups = sizing().querySelectorAll('optgroup');
+    expect([...groups].map((group) => group.label)).toEqual([
+      'Independent sizing',
+      'Portfolio allocation (shared capital)',
+    ]);
+    expect([...groups[1].querySelectorAll('option')].map((option) => option.value)).toEqual([
+      'equal_active',
+      'signal_strength',
+      'signal_inverse_volatility',
+    ]);
+  });
+
+  it('shows the allocation subsection only under an allocation mode, with its explainer', async () => {
+    const person = userEvent.setup();
+    render(<Harness />);
+    expect(allocationGroup()).not.toBeInTheDocument();
+
+    await person.selectOptions(sizing(), 'signal_strength');
+
+    expect(allocationGroup()).toBeInTheDocument();
+    const explainer = screen.getByTestId('allocation-explainer');
+    expect(explainer).toHaveTextContent(/share one pool of capital/i);
+    expect(explainer).toHaveTextContent(/trim positions in others/i);
+    expect(explainer).toHaveTextContent(/own sleeve/i);
+    // The targets set the size: there is no sizing value to enter.
+    expect(screen.queryByTestId('execution-sizing-value')).not.toBeInTheDocument();
+    // Unset fields stay unset; the backend resolves their defaults.
+    expect(screen.getByLabelText(/target exposure/i)).toHaveValue(null);
+    expect(screen.getByLabelText(/^rebalance$/i)).toHaveValue('on_signal');
+    expect(config()).not.toHaveProperty('target_exposure');
+    // Only inverse volatility reads a volatility lookback.
+    expect(screen.queryByTestId('execution-volatility-lookback')).not.toBeInTheDocument();
+
+    await person.selectOptions(sizing(), 'signal_inverse_volatility');
+    expect(screen.getByTestId('execution-volatility-lookback')).toHaveValue(14);
+  });
+
+  it('takes percentages on screen and stores fractions', async () => {
+    const person = userEvent.setup();
+    render(<Harness />);
+    await person.selectOptions(sizing(), 'equal_active');
+
+    await person.type(screen.getByLabelText(/target exposure/i), '80');
+    await person.type(screen.getByLabelText(/min allocation score/i), '50');
+    await person.type(screen.getByLabelText(/rebalance threshold/i), '2.5');
+    await person.type(screen.getByLabelText(/max turnover/i), '150');
+    await person.selectOptions(screen.getByLabelText(/^rebalance$/i), 'weekly');
+
+    expect(config()).toMatchObject({
+      position_sizing: 'equal_active',
+      sizing_value: null,
+      target_exposure: 0.8,
+      min_allocation_score: 0.5,
+      rebalance_threshold: 0.025,
+      max_turnover: 1.5,
+      rebalance_frequency: 'weekly',
+    });
+
+    // Blank is the default, never zero.
+    await person.clear(screen.getByLabelText(/max turnover/i));
+    expect(config().max_turnover).toBeNull();
+  });
+
+  it('clears a stale sizing value and the allocation fields when the mode changes', async () => {
+    const person = userEvent.setup();
+    render(<Harness />);
+
+    await person.selectOptions(sizing(), 'fixed_fraction');
+    expect(config().sizing_value).toBe(0.2);
+
+    await person.selectOptions(sizing(), 'signal_strength');
+    expect(config().sizing_value).toBeNull();
+    await person.type(screen.getByLabelText(/target exposure/i), '60');
+
+    // Between allocation modes the shared settings carry over.
+    await person.selectOptions(sizing(), 'equal_active');
+    expect(config().target_exposure).toBe(0.6);
+
+    // A legacy mode refuses every allocation field, so none is left behind.
+    await person.selectOptions(sizing(), 'equal_weight');
+    const legacy = config();
+    for (const field of [
+      'target_exposure',
+      'min_allocation_score',
+      'rebalance_frequency',
+      'rebalance_threshold',
+      'max_turnover',
+    ]) {
+      expect(legacy).not.toHaveProperty(field);
+    }
+    expect(allocationGroup()).not.toBeInTheDocument();
+  });
+
+  it('does not read a cash amount as a fraction', async () => {
+    const person = userEvent.setup();
+    render(
+      <Harness
+        initial={{ ...DEFAULT_EXECUTION, position_sizing: 'fixed_notional', sizing_value: 25000 }}
+      />,
+    );
+
+    await person.selectOptions(sizing(), 'fixed_fraction');
+    expect(config().sizing_value).toBe(0.2);
+  });
+
+  it('keeps an old legacy config exactly as it was', () => {
+    const initial: ExecutionConfig = {
+      ...DEFAULT_EXECUTION,
+      position_sizing: 'volatility_target',
+      sizing_value: 0.15,
+    };
+    render(<Harness initial={initial} />);
+    expect(sizing()).toHaveValue('volatility_target');
+    expect(config()).toEqual(initial);
+    expect(allocationGroup()).not.toBeInTheDocument();
+  });
+});

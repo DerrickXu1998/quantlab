@@ -1,7 +1,7 @@
 import { render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as apiClient from '../../src/api/client';
-import type { RunDetailV2, RunPerformanceV2 } from '../../src/api/types';
+import type { ExecutionConfig, RunDetailV2, RunPerformanceV2 } from '../../src/api/types';
 import { DEFAULT_EXECUTION } from '../../src/api/types';
 import { RunResultsView } from '../../src/components/RunResultsView';
 import { RunsProvider } from '../../src/runs/RunsContext';
@@ -232,6 +232,45 @@ describe('run results, with execution criteria', () => {
     expect(within(provenance).getByTestId('run-execution')).toHaveTextContent(
       /fills next open.*5 bps commission.*5% stop/,
     );
+  });
+
+  it('keeps an independent-sizing run reading as it always has', async () => {
+    renderResults(runWithStrategy());
+    const execution = await screen.findByTestId('run-execution');
+    expect(execution).toHaveTextContent('equal weight sizing');
+    expect(execution).not.toHaveTextContent(/allocation|rebalance/);
+  });
+
+  it('names the allocation a shared-capital run steered to, and its rebalance fills', async () => {
+    // Cast until schema.d.ts is regenerated with the allocation modes and the
+    // rebalance reason: the generated run types still carry the older enums.
+    const performance = performanceV2();
+    vi.mocked(apiClient.getRunPerformance).mockResolvedValue({
+      ...performance,
+      trades: [{ ...performance.trades[0], exit_reason: 'rebalance' }, performance.trades[1]],
+      exit_reasons: { rebalance: 1, stop_loss: 1 },
+    } as unknown as RunPerformanceV2);
+    const run = runWithStrategy();
+    const allocated: ExecutionConfig = {
+      ...DEFAULT_EXECUTION,
+      ...(run.execution as ExecutionConfig),
+      position_sizing: 'signal_strength',
+      target_exposure: 0.9,
+      rebalance_frequency: 'weekly',
+      rebalance_threshold: 0.02,
+      max_turnover: 0.5,
+    };
+    renderResults({ ...run, execution: allocated } as unknown as RunDetailV2);
+
+    const execution = await screen.findByTestId('run-execution');
+    expect(execution).toHaveTextContent(
+      /signal strength allocation · 90% gross exposure · rebalance weekly · rebalance drift ≥ 2% · turnover ≤ 50% a rebalance/,
+    );
+    expect(execution).not.toHaveTextContent(/sizing/);
+
+    const log = await screen.findByTestId('trade-log');
+    expect(within(within(log).getAllByRole('row')[1]).getByText('Rebalance')).toBeInTheDocument();
+    expect(within(screen.getByTestId('exit-breakdown')).getByText('Rebalance')).toBeInTheDocument();
   });
 
   it('stays readable for a run recorded before execution criteria existed', async () => {
