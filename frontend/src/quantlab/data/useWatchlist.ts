@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
-import { getPrices, listInstruments, type Instrument } from '../../api/client';
+import type { Instrument } from '../../api/client';
+import { loadInstruments } from '../../research/company/useCompany';
+import { loadBars } from '../market/useMarketData';
 
 /** The last stored close of one instrument, and its move on the day. */
 export interface Quote {
@@ -60,15 +62,15 @@ export function useWatchlist(size = WATCHLIST_SIZE): WatchlistState {
   useEffect(() => {
     let cancelled = false;
 
-    listInstruments()
-      .then(async (list) => {
-        const instruments = pickWatchlist(list.items, size);
+    loadInstruments()
+      .then(async (all) => {
+        const instruments = pickWatchlist(all, size);
         const loaded = await Promise.all(
           instruments.map(async (instrument) => {
             try {
-              const bars = await getPrices(instrument.symbol);
-              const last = bars.items[bars.items.length - 1];
-              const previous = bars.items[bars.items.length - 2];
+              const bars = await loadBars(instrument.symbol);
+              const last = bars[bars.length - 1];
+              const previous = bars[bars.length - 2];
               if (!last || !(last.close > 0)) return null;
               const quote: Quote = {
                 price: last.close,

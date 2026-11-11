@@ -107,9 +107,7 @@ export function clearReadCache() {
 function useKeyedRead<T>(key: string | null, load: () => Promise<T>, empty: T): Read<T> {
   const cachedAtMount = key ? readCache.get(key) : undefined;
   const [data, setData] = useState<T>(cachedAtMount ? (cachedAtMount.data as T) : empty);
-  const [status, setStatus] = useState<ReadStatus>(
-    !key || cachedAtMount ? 'ready' : 'loading',
-  );
+  const [status, setStatus] = useState<ReadStatus>(!key || cachedAtMount ? 'ready' : 'loading');
   const [message, setMessage] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
   // A nonce the effect has not seen yet is an explicit reload.
@@ -166,6 +164,15 @@ function useKeyedRead<T>(key: string | null, load: () => Promise<T>, empty: T): 
 }
 
 const NO_INSTRUMENTS: Instrument[] = [];
+
+/**
+ * The instrument catalogue through the same shared read as `useInstruments`,
+ * for callers outside a component. One request serves the shell, the search
+ * palette and Research.
+ */
+export function loadInstruments(): Promise<Instrument[]> {
+  return readShared('instruments:all', () => listInstruments().then((list) => list.items));
+}
 const NO_BARS: PriceBar[] = [];
 
 /**
@@ -176,11 +183,7 @@ const NO_BARS: PriceBar[] = [];
  * this screen feel immediate rather than network-bound.
  */
 export function useInstruments(): Read<Instrument[]> {
-  return useKeyedRead<Instrument[]>(
-    'instruments:all',
-    () => listInstruments().then((list) => list.items),
-    NO_INSTRUMENTS,
-  );
+  return useKeyedRead<Instrument[]>('instruments:all', loadInstruments, NO_INSTRUMENTS);
 }
 
 /** Everything filed about one name, as of one date. */

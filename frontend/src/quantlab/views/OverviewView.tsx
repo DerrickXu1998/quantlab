@@ -5,6 +5,7 @@ import { navigate, useRoute } from '../../chrome/router';
 import { Button } from '../../components/ui/button';
 import { EmptyState } from '../../components/ui/empty-state';
 import { Numeric } from '../../components/ui/numeric';
+import { Skeleton } from '../../components/ui/skeleton';
 import { RunsRail } from '../../components/RunsRail';
 import { DatasetBadge } from '../../workbench/DatasetBadge';
 import { useRuns } from '../../runs/RunsContext';
@@ -88,6 +89,34 @@ function FirstRun() {
  * curve and the open positions. With nothing saved it degrades to the latest
  * completed run; with no runs at all it is the first-run guide.
  */
+/**
+ * The Overview's outline while a run loads: the headline figure, the stat row
+ * and the chart area, so nothing moves when the numbers arrive.
+ */
+function OverviewSkeleton() {
+  return (
+    <div role="status" data-testid="overview-loading" className="flex min-h-0 flex-1 flex-col">
+      <span className="sr-only">Loading…</span>
+      <div className="px-2 py-10 sm:px-8">
+        <Skeleton className="h-3 w-24" />
+        <Skeleton className="mt-4 h-12 w-64" />
+        <Skeleton className="mt-6 h-4 w-96 max-w-full" />
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col gap-6 border-t border-border p-3">
+        <div className="flex flex-wrap gap-8">
+          {[0, 1, 2, 3].map((index) => (
+            <div key={index}>
+              <Skeleton className="h-3 w-20" />
+              <Skeleton className="mt-2 h-6 w-24" />
+            </div>
+          ))}
+        </div>
+        <Skeleton className="min-h-[12rem] flex-1" />
+      </div>
+    </div>
+  );
+}
+
 export function OverviewView() {
   const { allRuns, runsStatus, latestCompleted, activeRun, select } = useRuns();
   const route = useRoute();
@@ -133,7 +162,7 @@ export function OverviewView() {
           empty ground under its instruments reads as broken, not as airy. */}
       <div className="flex min-h-0 min-w-0 flex-col overflow-y-auto">
         {runsStatus === 'loading' ? (
-          <EmptyState icon={Hourglass} title="Loading…" role="status" />
+          <OverviewSkeleton />
         ) : allRuns.length === 0 ? (
           <FirstRun />
         ) : !targetId ? (
@@ -143,7 +172,7 @@ export function OverviewView() {
             detail="Every recorded run failed. Run a backtest in Strategies to produce a result."
           />
         ) : !run ? (
-          <EmptyState icon={Hourglass} title="Loading…" role="status" />
+          <OverviewSkeleton />
         ) : run.status === 'failed' ? (
           <EmptyState
             testId="overview-run-failed"
@@ -277,7 +306,7 @@ export function OverviewView() {
             </div>
           </>
         ) : (
-          <EmptyState icon={Hourglass} title="Loading…" role="status" />
+          <OverviewSkeleton />
         )}
       </div>
     </div>
