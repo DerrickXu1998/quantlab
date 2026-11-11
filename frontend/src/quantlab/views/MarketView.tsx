@@ -186,7 +186,7 @@ export function MarketView({
   return (
     <div
       data-testid="market-view"
-      className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,22rem)_minmax(0,1fr)] overflow-hidden lg:grid-cols-[300px_minmax(0,1fr)] lg:grid-rows-1"
+      className="min-h-0 flex-1 overflow-y-auto lg:grid lg:grid-cols-[300px_minmax(0,1fr)] lg:grid-rows-1 lg:overflow-hidden"
     >
       <aside
         aria-label="Universe"
@@ -344,7 +344,7 @@ export function MarketView({
             data-testid="market-grid"
             data-count={selected.length}
             className={cn(
-              'grid min-h-0 flex-1 gap-3 overflow-y-auto p-3 lg:overflow-hidden',
+              'grid gap-3 p-3 lg:min-h-0 lg:flex-1 lg:overflow-hidden',
               gridClasses(selected.length),
             )}
           >
@@ -352,7 +352,10 @@ export function MarketView({
               <div
                 key={symbol}
                 data-testid="market-cell"
-                className={cn('flex min-h-0 min-w-0 flex-col', cellClasses(index, selected.length))}
+                className={cn(
+                  'flex min-h-0 min-w-0 flex-col max-lg:h-[26rem]',
+                  cellClasses(index, selected.length),
+                )}
               >
                 <MarketChartCard
                   symbol={symbol}
