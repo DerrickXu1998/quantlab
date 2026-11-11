@@ -44,7 +44,7 @@ export function TradeLog({ trades }: { trades: TradeV2[] }) {
     <div className="max-h-72 overflow-y-auto">
       <table data-testid="trade-log" className="w-full">
         <thead className="sticky top-0 bg-card">
-          <tr className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          <tr className="type-label text-muted-foreground">
             <th className={head}>Symbol</th>
             <th className={head}>Side</th>
             <th className={head}>In</th>
@@ -66,14 +66,14 @@ export function TradeLog({ trades }: { trades: TradeV2[] }) {
                 key={`${trade.symbol}-${trade.entry_date}-${index}`}
                 className="border-t border-border"
               >
-                <td className="px-3 py-1.5 font-mono text-[11px]">{trade.symbol}</td>
-                <td className="px-3 py-1.5 font-mono text-[11px] uppercase text-muted-foreground">
+                <td className="px-3 py-1.5 type-data">{trade.symbol}</td>
+                <td className="px-3 py-1.5 type-data uppercase text-muted-foreground">
                   {trade.side ?? '—'}
                 </td>
-                <td className="px-3 py-1.5 font-mono text-[11px] tabular-nums text-muted-foreground">
+                <td className="px-3 py-1.5 type-data tabular-nums text-muted-foreground">
                   {trade.entry_date}
                 </td>
-                <td className="px-3 py-1.5 font-mono text-[11px] tabular-nums text-muted-foreground">
+                <td className="px-3 py-1.5 type-data tabular-nums text-muted-foreground">
                   {trade.exit_date ?? <StatusBadge tone="active">Open</StatusBadge>}
                   {/* Present only when minute bars placed the exit in the session. */}
                   {trade.exit_date && trade.exit_time ? ` ${trade.exit_time}` : null}

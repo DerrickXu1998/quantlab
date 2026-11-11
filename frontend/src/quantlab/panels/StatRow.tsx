@@ -17,7 +17,7 @@ function Stat({
 }) {
   return (
     <div className="flex flex-col gap-1" title={term ? undefined : hint}>
-      <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+      <span className="type-label text-muted-foreground">
         {term ? <Term id={term}>{label}</Term> : label}
       </span>
       <span className="text-lg">{children}</span>
@@ -34,7 +34,7 @@ function Stat({
 export function StatRow({ metrics }: { metrics: PerformanceMetrics }) {
   return (
     <div data-testid="stat-row">
-      <StatGrid>
+      <StatGrid min="8rem">
         <Stat label="Total return" term="total_return">
           <Numeric value={metrics.total_return} format="signedPercent" tone="signed" />
         </Stat>

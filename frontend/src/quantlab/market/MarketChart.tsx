@@ -480,7 +480,7 @@ export function MarketChart({
           was half of what made the old one confusing. */}
       <div
         data-testid="chart-readout"
-        className="shrink-0 border-b border-border px-3 py-1.5 font-mono text-[11px] tabular-nums text-card-foreground"
+        className="shrink-0 border-b border-border px-3 py-1.5 type-data tabular-nums text-card-foreground"
       >
         <div className="flex flex-wrap items-center gap-x-2 text-muted-foreground">
           {bar ? (

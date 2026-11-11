@@ -27,7 +27,7 @@ export const Label = forwardRef<HTMLLabelElement, LabelHTMLAttributes<HTMLLabelE
     <label
       ref={ref}
       className={cn(
-        'flex flex-col gap-1 font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground',
+        'flex flex-col gap-1 type-label text-muted-foreground',
         className,
       )}
       {...props}

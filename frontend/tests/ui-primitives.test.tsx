@@ -5,17 +5,14 @@ import { formatNumeric, Numeric } from '../src/components/ui/numeric';
 import { StatusBadge } from '../src/components/ui/status-badge';
 
 describe('Button', () => {
-  it('follows the terminal grammar: square, hairline, mono uppercase label', () => {
+  it('follows the terminal grammar: square, hairline, the control type role', () => {
     render(<Button>Run backtest</Button>);
 
     const button = screen.getByRole('button', { name: /run backtest/i });
-    expect(button).toHaveClass(
-      'rounded-sm',
-      'border',
-      'font-mono',
-      'uppercase',
-      'tracking-[0.12em]',
-    );
+    expect(button).toHaveClass('rounded-sm', 'border', 'type-control');
+    // Sentence case in the UI face: small caps are for labels, not for things
+    // you press.
+    expect(button.className).not.toMatch(/\buppercase\b|\bfont-mono\b/);
     expect(button.className).not.toMatch(/rounded-(md|lg|full)|shadow-/);
   });
 
@@ -73,16 +70,10 @@ describe('Numeric', () => {
 });
 
 describe('StatusBadge', () => {
-  it('uses the canonical mono uppercase label spec in every tone', () => {
+  it('uses the label type role in every tone', () => {
     render(<StatusBadge tone="active">Live</StatusBadge>);
 
-    expect(screen.getByText('Live')).toHaveClass(
-      'rounded-sm',
-      'font-mono',
-      'text-[11px]',
-      'uppercase',
-      'tracking-[0.12em]',
-    );
+    expect(screen.getByText('Live')).toHaveClass('rounded-sm', 'type-label');
   });
 
   it('absorbed the simulated tag as a tone, with the reason on hover', () => {

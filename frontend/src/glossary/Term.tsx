@@ -32,7 +32,7 @@ export function GlossaryFrequency({
   return <FrequencyContext.Provider value={frequency}>{children}</FrequencyContext.Provider>;
 }
 
-const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
+const MICRO = 'type-label text-muted-foreground';
 const WIDTH = 288;
 const GAP = 6;
 

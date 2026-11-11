@@ -24,7 +24,7 @@ export function PortfolioSummary({
 
   return (
     <div data-testid="portfolio-summary" className="px-2 py-10 sm:px-8">
-      <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+      <p className="type-label text-muted-foreground">
         Book value
       </p>
 
@@ -57,9 +57,7 @@ export function PortfolioSummary({
           vs benchmark
           <Numeric value={excess} format="signedPercent" tone="signed" />
         </span>
-        <StatusBadge tone={run.dataset === 'warehouse' ? 'good' : 'idle'}>
-          {run.dataset === 'warehouse' ? 'Live history' : 'Demo data'}
-        </StatusBadge>
+        {run.dataset === 'warehouse' ? null : <StatusBadge tone="idle">Demo data</StatusBadge>}
       </div>
     </div>
   );

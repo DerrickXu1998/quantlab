@@ -89,7 +89,7 @@ export function AsFiledPanel({
       fill
       aside={
         status === 'ready' && rows.length > 0 ? (
-          <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          <span className="type-label text-muted-foreground">
             {formatCount(inForce.length)} in force
             {superseded > 0 ? ` · ${formatCount(superseded)} superseded` : ''}
           </span>
@@ -139,18 +139,18 @@ export function AsFiledPanel({
                       )}
                     </span>
                   </TableCell>
-                  <TableCell className="text-right font-mono text-[11px] tabular-nums">
+                  <TableCell className="text-right type-data tabular-nums">
                     {formatFactValue(row.concept, row.value, row.unit)}
                   </TableCell>
-                  <TableCell className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                  <TableCell className="type-data tabular-nums text-muted-foreground">
                     {row.filed_at}
                   </TableCell>
-                  <TableCell className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                  <TableCell className="type-data tabular-nums text-muted-foreground">
                     {row.period_end}
                   </TableCell>
                   <TableCell className="text-right">
                     <span className="flex items-center justify-end gap-2">
-                      <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                      <span className="type-data tabular-nums text-muted-foreground">
                         {formatStaleness(row.days_stale)}
                       </span>
                       {row.days_stale > MAX_STALE_DAYS ? (

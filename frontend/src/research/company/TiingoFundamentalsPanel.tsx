@@ -77,7 +77,7 @@ export function TiingoFundamentalsPanel({
       testId="tiingo-fundamentals"
       aside={
         status === 'ready' && data?.releases.length ? (
-          <label className="flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
+          <label className="flex items-center gap-1.5 type-data text-muted-foreground">
             Releases
             <select
               aria-label="How many releases"
@@ -154,7 +154,7 @@ function Profile({ profile }: { profile: NonNullable<CompanyFundamentals['profil
       <dl className="grid grid-cols-[repeat(auto-fill,minmax(10rem,1fr))] gap-x-4 gap-y-2">
         {items.map(([label, value]) => (
           <div key={label} className="min-w-0">
-            <dt className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+            <dt className="type-label text-muted-foreground">
               {label}
             </dt>
             <dd className="mt-0.5 truncate text-sm" title={value ?? undefined}>
@@ -163,7 +163,7 @@ function Profile({ profile }: { profile: NonNullable<CompanyFundamentals['profil
           </div>
         ))}
       </dl>
-      <p className="font-mono text-[11px] text-muted-foreground">
+      <p className="type-data text-muted-foreground">
         Statements updated by Tiingo {shortDate(profile.statement_last_updated)} · daily{' '}
         {shortDate(profile.daily_last_updated)} · profile read {profile.fetched_at ?? NOT_APPLICABLE}
       </p>
@@ -180,7 +180,7 @@ function ProfileLink({ href, label }: { href: string; label: string }) {
       className="inline-flex items-center gap-1 text-xs text-primary underline-offset-2 hover:underline"
     >
       {label}
-      <ExternalLink size={12} strokeWidth={1.5} aria-hidden="true" />
+      <ExternalLink size={16} strokeWidth={1.5} aria-hidden="true" />
     </a>
   );
 }
@@ -219,7 +219,7 @@ function Valuation({ daily }: { daily: DailyFundamentals[] }) {
             type="button"
             aria-pressed={item === metric}
             onClick={() => setMetric(item)}
-            className={`border px-2 py-0.5 font-mono text-[11px] transition-colors ${
+            className={`border px-2 py-0.5 type-data transition-colors ${
               item === metric
                 ? 'border-primary bg-primary/10 text-primary'
                 : 'border-border text-muted-foreground hover:text-foreground'
@@ -292,21 +292,21 @@ function LineChart({
         className="stroke-border"
         strokeDasharray="2 3"
       />
-      <text x={CHART.left - 6} y={y(max) + 4} textAnchor="end" className="fill-muted-foreground font-mono text-[10px]">
+      <text x={CHART.left - 6} y={y(max) + 4} textAnchor="end" className="fill-muted-foreground type-micro">
         {render(max)}
       </text>
-      <text x={CHART.left - 6} y={y(min) + 4} textAnchor="end" className="fill-muted-foreground font-mono text-[10px]">
+      <text x={CHART.left - 6} y={y(min) + 4} textAnchor="end" className="fill-muted-foreground type-micro">
         {render(min)}
       </text>
-      <path d={path} fill="none" className="stroke-primary" strokeWidth={1.25} />
-      <text x={CHART.left} y={CHART.height - 6} className="fill-muted-foreground font-mono text-[10px]">
+      <path d={path} fill="none" className="stroke-primary" strokeWidth={1.5} />
+      <text x={CHART.left} y={CHART.height - 6} className="fill-muted-foreground type-micro">
         {points[0].date}
       </text>
       <text
         x={CHART.width - CHART.right}
         y={CHART.height - 6}
         textAnchor="end"
-        className="fill-muted-foreground font-mono text-[10px]"
+        className="fill-muted-foreground type-micro"
       >
         {points[points.length - 1].date}
       </text>
@@ -371,7 +371,7 @@ function Statements({ data }: { data: CompanyFundamentals }) {
         <table className="w-full border-collapse text-xs" data-testid="tiingo-statement-table">
           <thead>
             <tr className="border-b border-border">
-              <th className="sticky left-0 z-10 min-w-[12rem] bg-card py-1.5 pr-3 text-left font-mono text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground">
+              <th className="sticky left-0 z-10 min-w-[12rem] bg-card py-1.5 pr-3 text-left type-data font-normal uppercase tracking-[0.12em] text-muted-foreground">
                 Field
               </th>
               {data.releases.map((release) => (
@@ -380,8 +380,8 @@ function Statements({ data }: { data: CompanyFundamentals }) {
                   className="whitespace-nowrap px-2 py-1.5 text-right font-normal"
                   title={`Posted to the SEC ${release.filed_at}`}
                 >
-                  <span className="block font-mono text-[11px] text-foreground">{release.label}</span>
-                  <span className="block font-mono text-[10px] text-muted-foreground">{release.filed_at}</span>
+                  <span className="block type-data text-foreground">{release.label}</span>
+                  <span className="block type-micro text-muted-foreground">{release.filed_at}</span>
                 </th>
               ))}
             </tr>
@@ -402,7 +402,7 @@ function Statements({ data }: { data: CompanyFundamentals }) {
                     title={line.description ? `${line.description} (${line.code})` : line.code}
                   >
                     <span className="text-foreground">{line.label}</span>
-                    <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">{line.code}</span>
+                    <span className="ml-1.5 type-micro text-muted-foreground">{line.code}</span>
                   </th>
                   {line.values.map((value, index) => (
                     <td

@@ -40,9 +40,7 @@ export function EmptyState({
         className={`h-5 w-5 ${error ? 'text-destructive' : 'text-muted-foreground'}`}
       />
       <p
-        className={`font-mono text-[11px] uppercase tracking-[0.12em] ${
-          error ? 'text-destructive' : 'text-muted-foreground'
-        }`}
+        className={`type-title ${error ? 'text-destructive' : 'text-foreground'}`}
       >
         {title}
       </p>

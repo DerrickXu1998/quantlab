@@ -32,14 +32,13 @@ export const MODE_DEFINITIONS: Record<ResearchMode, ModeDefinition> = {
     id: 'company',
     label: 'Ticker',
     icon: Building2,
-    purpose:
-      'Load one ticker and study it: its price history, models applied to it and marked on the chart, its accounts as filed, and every signal it has fired.',
+    purpose: 'One company: price, filings as of a date, and signals.',
   },
   screen: {
     id: 'screen',
     label: 'Screen',
     icon: Filter,
-    purpose: 'Find tickers by the ratios companies actually filed, then open any one of them.',
+    purpose: 'Find companies by the ratios they filed.',
   },
 };
 
@@ -100,14 +99,14 @@ export function ResearchShell({ mode, onModeChange, actions, children }: Researc
       <header className="shrink-0 border-b border-border px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 flex-wrap items-center gap-2 lg:gap-4">
-            <h1 className="font-display text-sm uppercase tracking-[0.18em] text-muted-foreground">
+            <h1 className="font-display text-base tracking-[-0.02em]">
               Research
             </h1>
             <ModeSwitcher mode={mode} onChange={onModeChange} />
+            <p className="text-xs text-muted-foreground">{definition.purpose}</p>
           </div>
           {actions ? <div className="flex items-center gap-2">{actions}</div> : null}
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">{definition.purpose}</p>
       </header>
 
       {/* A flex column, not a plain block.

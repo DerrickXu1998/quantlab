@@ -12,7 +12,6 @@ import { useEffect, useState } from 'react';
 import { UserMenu } from '../auth/UserMenu';
 import { GlossaryButton } from '../glossary/GlossaryButton';
 import { DataSourceBanner } from '../components/DataSourceBanner';
-import { DataDisclaimer } from '../components/DataDisclaimer';
 import { Button } from '../components/ui/button';
 import { StatusBadge } from '../components/ui/status-badge';
 import { ResearchPage } from '../pages/ResearchPage';
@@ -59,8 +58,8 @@ function Clock() {
     return () => window.clearInterval(timer);
   }, []);
   return (
-    <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
-      {now.toISOString().slice(11, 19)} UTC
+    <span className="type-data tabular-nums text-muted-foreground">
+      {now.toISOString().slice(11, 16)} UTC
     </span>
   );
 }
@@ -174,7 +173,7 @@ export function AppShell() {
                       {item.id === 'strategies' && activeRuns > 0 ? (
                         <span
                           data-testid="nav-active-runs"
-                          className="rounded-sm border border-primary/50 px-1 font-mono text-[10px] tabular-nums text-primary"
+                          className="rounded-sm border border-primary/50 px-1 type-micro tabular-nums text-primary"
                         >
                           {activeRuns}
                         </span>
@@ -248,9 +247,6 @@ export function AppShell() {
                 <DatasetBadge />
               </div>
             )}
-            <div className="border-t border-border px-4 py-1.5 text-center text-xs text-muted-foreground">
-              <DataDisclaimer />
-            </div>
           </footer>
         </FeedProvider>
         </LiveFeedProvider>

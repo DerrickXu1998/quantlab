@@ -5,7 +5,7 @@ function Item({ symbol }: { symbol: string }) {
   const tick = useTick(symbol);
   return (
     <span className="flex items-center gap-2 whitespace-nowrap px-4">
-      <span className="font-mono text-[11px] text-muted-foreground">{symbol}</span>
+      <span className="type-data text-muted-foreground">{symbol}</span>
       <Numeric value={tick?.price} format="price" className="text-xs" />
       <Numeric
         value={tick?.changePct}

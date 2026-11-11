@@ -177,11 +177,12 @@ describe('Overview', () => {
   it('falls back to the latest completed run when nothing is saved', async () => {
     renderApp();
 
-    // The rail's saved view is empty and says how to fix it…
-    expect(await screen.findByTestId('runs-rail-empty')).toHaveTextContent(
-      /run and save an experiment/i,
-    );
-    // …while the main view still reports on the latest completed run.
+    // With nothing saved the rail opens on every run rather than an empty
+    // "saved" list…
+    await screen.findByTestId('portfolio-summary');
+    expect(screen.queryByTestId('runs-rail-empty')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'all' })).toHaveAttribute('aria-pressed', 'true');
+    // …and the main view reports on the latest completed run.
     const summary = await screen.findByTestId('portfolio-summary');
     expect(within(summary).getByText(/\$112,000/)).toBeInTheDocument();
     expect(within(summary).getByText('+12.00%')).toBeInTheDocument();
@@ -440,7 +441,7 @@ describe('Strategies', () => {
 
     expect(screen.queryByRole('tab', { name: /signal lab/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: /point-in-time/i })).not.toBeInTheDocument();
-    expect(screen.getByText(/combine several signals/i)).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /configure/i })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('draws its universe from the whole catalogue, not the eight-name watchlist', async () => {
@@ -550,16 +551,14 @@ describe('cross-destination run state', () => {
 });
 
 describe('Composition', () => {
-  it('breaks the grid once, on purpose', async () => {
-    // The brief asks for a deliberate overlap rather than a column of cards.
-    // Pinned by a test because it is the kind of detail a later refactor
-    // flattens without noticing.
+  it('keeps the run facts in the equity panel header, not over its edge', async () => {
+    // These chips used to overlap the panel's top border on purpose. In use it
+    // read as a layout fault, so they sit in the header beside the title.
     const { container } = renderApp();
     await screen.findByTestId('stat-row');
 
-    const chips = container.querySelector('.-top-3');
-    expect(chips).not.toBeNull();
-    // It overlaps the panel edge, so it must not block what is underneath.
-    expect(chips).toHaveClass('pointer-events-none');
+    expect(container.querySelector('.-top-3')).toBeNull();
+    const panel = screen.getByRole('region', { name: 'Equity curve' });
+    expect(within(panel.querySelector('header') as HTMLElement).getByText('Trades')).toBeInTheDocument();
   });
 });

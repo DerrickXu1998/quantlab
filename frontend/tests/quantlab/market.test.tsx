@@ -264,7 +264,7 @@ describe('Market view', () => {
     // The readout is on without a hover: latest bar, its weekday and T-0.
     expect(within(card).getByTestId('readout-date')).toHaveTextContent(last);
     expect(within(card).getByTestId('readout-offset')).toHaveTextContent('T-0');
-    expect(screen.getByTestId('market-provenance')).toHaveTextContent(/historical .* not real-time/i);
+    expect(screen.getByTestId('market-provenance')).toHaveTextContent(/end-of-day bars.*not real-time/i);
   });
 
   it('splits the source by provider when a window mixes them', async () => {

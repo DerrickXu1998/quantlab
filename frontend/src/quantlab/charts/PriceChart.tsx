@@ -99,7 +99,7 @@ export function PriceChart({
           {series.length} ticks, last at {formatNumeric(last ?? 0, 'price')}.
         </p>
         {!supported ? (
-          <div className="flex h-full items-center justify-center font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          <div className="flex h-full items-center justify-center type-label text-muted-foreground">
             {formatNumeric(last ?? 0, 'price')}
           </div>
         ) : null}

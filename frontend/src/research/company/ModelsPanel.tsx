@@ -392,7 +392,7 @@ export function ModelsPanel({
         ) : null}
 
         <fieldset className="space-y-3 border-t border-border pt-3" aria-label="Execution">
-          <legend className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          <legend className="type-label text-muted-foreground">
             Execution
           </legend>
           <Label htmlFor="model-accuracy">

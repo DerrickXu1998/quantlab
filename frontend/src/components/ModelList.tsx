@@ -54,8 +54,8 @@ export function ModelList({
               }`}
             >
               <span className="flex items-baseline justify-between gap-2">
-                <span className="truncate font-mono text-[12px]">{model.name}</span>
-                <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                <span className="truncate font-mono text-xs">{model.name}</span>
+                <span className="shrink-0 type-data text-muted-foreground">
                   v{model.version}
                 </span>
               </span>

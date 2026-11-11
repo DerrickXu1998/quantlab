@@ -218,9 +218,9 @@ describe('StrategyBuilder', () => {
   it('rewrites the plain-English summary as the strategy is assembled', async () => {
     const person = await openBuilder();
 
-    expect(screen.getByTestId('strategy-summary')).toHaveTextContent(
-      /nothing opens a position yet/i,
-    );
+    // Nothing built, nothing to summarise: the sentence appears with the
+    // first component rather than describing an empty strategy.
+    expect(screen.queryByTestId('strategy-summary')).not.toBeInTheDocument();
 
     await person.click(addFrom('rsi-threshold', 'Entry'));
     expect(screen.getByTestId('strategy-summary')).toHaveTextContent(

@@ -11,7 +11,7 @@ import { useRuns } from '../../runs/RunsContext';
 import { EquityCurve } from '../charts/EquityCurve';
 import { FillColumn } from '../../components/ui/layout';
 import { CascadeItem } from '../chrome/Cascade';
-import { Chip, FloatingChips } from '../chrome/FloatingChips';
+import { Chip } from '../chrome/FloatingChips';
 import { Panel } from '../chrome/Panel';
 import { useRunPerformance } from '../data/useRunPerformance';
 import { Assumptions } from '../panels/Assumptions';
@@ -32,7 +32,7 @@ function FirstRun() {
       <Panel title="No runs yet" className="border-0">
         <ol className="space-y-4">
           <li className="flex items-start gap-3">
-            <span className="font-mono text-[11px] text-muted-foreground">01</span>
+            <span className="type-data text-muted-foreground">01</span>
             <div>
               <p className="flex items-center gap-2 text-xs">
                 Know your data <DatasetBadge />
@@ -43,7 +43,7 @@ function FirstRun() {
             </div>
           </li>
           <li className="flex items-start gap-3">
-            <span className="font-mono text-[11px] text-muted-foreground">02</span>
+            <span className="type-data text-muted-foreground">02</span>
             <div>
               <Button type="button" size="sm" onClick={() => navigate('strategies')}>
                 Run your first backtest
@@ -54,9 +54,14 @@ function FirstRun() {
             </div>
           </li>
           <li className="flex items-start gap-3">
-            <span className="font-mono text-[11px] text-muted-foreground">03</span>
+            <span className="type-data text-muted-foreground">03</span>
             <div>
-              <Button type="button" size="sm" variant="outline" onClick={() => navigate('research')}>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => navigate('research')}
+              >
                 Explore stored signals
               </Button>
               <p className="mt-1 text-xs text-muted-foreground">
@@ -170,67 +175,74 @@ export function OverviewView() {
             </CascadeItem>
 
             <div className="grid min-h-0 flex-1 grid-cols-1 gap-px bg-border xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
-              <CascadeItem index={2} className="relative flex min-h-0 flex-col bg-background">
-                {/* Deliberately crossing the panel's top edge. */}
-                <FloatingChips>
-                  <Chip label="Bars" title="Sessions marked in the reported window">
-                    <Numeric
-                      value={performance.performance.equity.length}
-                      format="integer"
-                      className="text-xs"
-                    />
-                  </Chip>
-                  <Chip label="Trades">
-                    <Numeric
-                      value={performance.performance.metrics.trade_count}
-                      format="integer"
-                      className="text-xs"
-                    />
-                  </Chip>
-                  <Chip label="Book">
-                    <Numeric
-                      value={performance.performance.initial_capital}
-                      format="currency"
-                      tone="muted"
-                      className="text-xs"
-                    />
-                  </Chip>
-                  {/* Compact here, full on the run detail: the curve is this
-                      screen's subject, and three numbers say how much of it is
-                      simply the benchmark. */}
-                  {performance.performance.regression ? (
-                    <Chip
-                      label="Beta"
-                      // Laptop only: on a phone a sixth chip wraps the row over
-                      // the panel title. The run detail carries the full panel.
-                      className="hidden lg:flex"
-                      title={`Against buy & hold of the same names: alpha ${(
-                        performance.performance.regression.alpha * 100
-                      ).toFixed(1)}% a year, R² ${performance.performance.regression.r_squared.toFixed(2)}`}
-                    >
-                      <Numeric
-                        value={performance.performance.regression.beta}
-                        format="ratio"
-                        className="text-xs"
-                      />
-                    </Chip>
-                  ) : null}
-                  {performance.performance.regression ? (
-                    <Chip
-                      label="Alpha"
-                      className="hidden lg:flex"
-                      title="Annualised alpha against buy & hold of the same names"
-                    >
-                      <Numeric
-                        value={performance.performance.regression.alpha}
-                        format="signedPercent"
-                        tone="signed"
-                        className="text-xs"
-                      />
-                    </Chip>
-                  ) : null}
-                </FloatingChips>
-                <Panel title="Equity curve" fill className="border-0">
+              <CascadeItem index={2} className="flex min-h-0 flex-col bg-background">
+                <Panel
+                  title="Equity curve"
+                  fill
+                  className="border-0"
+                  actions={
+                    <div className="flex flex-wrap items-center justify-end gap-1.5">
+                      <Chip label="Bars" title="Sessions marked in the reported window">
+                        <Numeric
+                          value={performance.performance.equity.length}
+                          format="integer"
+                          className="text-xs"
+                        />
+                      </Chip>
+                      <Chip label="Trades">
+                        <Numeric
+                          value={performance.performance.metrics.trade_count}
+                          format="integer"
+                          className="text-xs"
+                        />
+                      </Chip>
+                      <Chip label="Book">
+                        <Numeric
+                          value={performance.performance.initial_capital}
+                          format="currency"
+                          tone="muted"
+                          className="text-xs"
+                        />
+                      </Chip>
+                      {/* Compact here, full on the run detail: the curve is this
+                          screen's subject, and three numbers say how much of it is
+                          simply the benchmark. */}
+                      {performance.performance.regression ? (
+                        <Chip
+                          label="Beta"
+                          // Laptop only: on a phone a sixth chip wraps the row over
+                          // the panel title. The run detail carries the full panel.
+                          className="hidden lg:flex"
+                          title={`Against buy & hold of the same names: alpha ${(
+                            performance.performance.regression.alpha * 100
+                          ).toFixed(
+                            1,
+                          )}% a year, R² ${performance.performance.regression.r_squared.toFixed(2)}`}
+                        >
+                          <Numeric
+                            value={performance.performance.regression.beta}
+                            format="ratio"
+                            className="text-xs"
+                          />
+                        </Chip>
+                      ) : null}
+                      {performance.performance.regression ? (
+                        <Chip
+                          label="Alpha"
+                          className="hidden lg:flex"
+                          title="Annualised alpha against buy & hold of the same names"
+                        >
+                          <Numeric
+                            value={performance.performance.regression.alpha}
+                            format="signedPercent"
+                            tone="signed"
+                            className="text-xs"
+                          />
+                        </Chip>
+                      ) : null}
+                    </div>
+                  }
+                >
                   <StatRow metrics={performance.performance.metrics} />
                   <FillColumn className="mt-6">
                     <EquityCurve

@@ -40,7 +40,7 @@ function builtIns(instruments: Instrument[]): UniverseOption[] {
   return options;
 }
 
-const labelClass = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
+const labelClass = 'type-label text-muted-foreground';
 
 export function UniverseRail({
   instruments,
@@ -153,11 +153,11 @@ export function UniverseRail({
               GO
             </Button>
           </div>
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             One to {MAX_TICKERS}, separated by spaces or commas. Replaces the current charts.
           </p>
           {feedback ? (
-            <p role="status" data-testid="market-command-feedback" className="text-[11px] text-destructive">
+            <p role="status" data-testid="market-command-feedback" className="text-xs text-destructive">
               {feedback}
             </p>
           ) : null}
@@ -185,7 +185,7 @@ export function UniverseRail({
                     type="button"
                     onClick={() => onToggle(symbol)}
                     aria-label={`Remove ${symbol}`}
-                    className="flex h-11 items-center gap-1 rounded-sm border border-primary/50 bg-primary/10 px-2 font-mono text-[11px] text-primary lg:h-7"
+                    className="flex h-11 items-center gap-1 rounded-sm border border-primary/50 bg-primary/10 px-2 type-data text-primary lg:h-7"
                   >
                     {symbol}
                     <X size={16} strokeWidth={1.5} aria-hidden="true" />
@@ -194,7 +194,7 @@ export function UniverseRail({
               ))}
             </ul>
           ) : (
-            <p className="text-[11px] text-muted-foreground">Nothing charted yet.</p>
+            <p className="text-xs text-muted-foreground">Nothing charted yet.</p>
           )}
           {selected.length > 1 ? (
             <Button
@@ -277,7 +277,7 @@ export function UniverseRail({
                 value={draftTickers}
                 onChange={(event) => setDraftTickers(event.target.value)}
               />
-              {draftError ? <p className="text-[11px] text-destructive">{draftError}</p> : null}
+              {draftError ? <p className="text-xs text-destructive">{draftError}</p> : null}
               <div className="flex gap-1">
                 <Button type="submit" size="sm">
                   Save list
@@ -286,7 +286,7 @@ export function UniverseRail({
                   Cancel
                 </Button>
               </div>
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 Saved in this browser. Any size — you chart up to {MAX_TICKERS} of it at a time.
               </p>
             </form>
@@ -344,7 +344,7 @@ export function UniverseRail({
                       {checked ? <Check size={16} strokeWidth={1.5} className="h-3 w-3" /> : null}
                     </span>
                     <span className="flex min-w-0 flex-col">
-                      <span className="font-mono text-[11px] tracking-[0.08em]">{instrument.symbol}</span>
+                      <span className="type-data tracking-[0.08em]">{instrument.symbol}</span>
                       {instrument.name && instrument.name !== instrument.symbol ? (
                         <span className="truncate text-xs text-muted-foreground">{instrument.name}</span>
                       ) : null}
@@ -356,12 +356,12 @@ export function UniverseRail({
           </ul>
         )}
         {matches.length > ROW_LIMIT ? (
-          <p className="px-3 py-2 text-center text-[11px] text-muted-foreground">
+          <p className="px-3 py-2 text-center text-xs text-muted-foreground">
             Showing {ROW_LIMIT} of {matches.length.toLocaleString()} — search to narrow.
           </p>
         ) : null}
       </div>
-      <p className="shrink-0 border-t border-border px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+      <p className="shrink-0 border-t border-border px-3 py-1.5 type-data text-muted-foreground">
         {members.length.toLocaleString()} in universe · {bySymbol.size.toLocaleString()} total
       </p>
     </div>

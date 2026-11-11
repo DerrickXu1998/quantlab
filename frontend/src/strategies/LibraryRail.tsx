@@ -11,7 +11,7 @@ import type { useStrategyTemplates } from './templates';
 import type { useStrategyLibrary } from './useStrategyLibrary';
 import type { useFundamentalsCoverage } from './useFundamentals';
 
-const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
+const MICRO = 'type-label text-muted-foreground';
 
 export type LibraryList = 'mine' | 'templates' | 'signals';
 
@@ -165,7 +165,7 @@ function SavedStrategies({
           type="search"
           aria-label="Search your strategies"
           placeholder="Search your strategies"
-          className="h-8 w-full rounded-sm border border-border bg-card px-2 font-mono text-[11px] focus-visible:border-primary focus-visible:outline-none"
+          className="h-8 w-full rounded-sm border border-border bg-card px-2 type-data focus-visible:border-primary focus-visible:outline-none"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
@@ -180,7 +180,7 @@ function SavedStrategies({
               onClick={() => onLoad(strategy)}
             >
               <span className="flex items-center gap-2">
-                <span className="min-w-0 flex-1 truncate font-mono text-[11px]">{strategy.name}</span>
+                <span className="min-w-0 flex-1 truncate type-data">{strategy.name}</span>
                 <StrategyStatusBadge status={statusOf(strategy.name, runNames)} />
               </span>
               <span className="block text-xs text-muted-foreground">
@@ -255,7 +255,7 @@ function TemplateShelves({ templates, onLoad }: { templates: Templates; onLoad: 
           >
             <div className="flex items-baseline justify-between gap-2">
               <h3 className={MICRO}>{shelf.label}</h3>
-              <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+              <span className="type-data tabular-nums text-muted-foreground">
                 {items.length}
               </span>
             </div>
@@ -264,7 +264,7 @@ function TemplateShelves({ templates, onLoad }: { templates: Templates; onLoad: 
               {items.map((template) => (
                 <li key={template.id} className="border border-border p-2">
                   <div className="flex items-start justify-between gap-2">
-                    <p className="font-mono text-[11px]">{template.name}</p>
+                    <p className="type-data">{template.name}</p>
                     <Button
                       type="button"
                       size="sm"

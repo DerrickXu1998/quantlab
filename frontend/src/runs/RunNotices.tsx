@@ -56,7 +56,7 @@ function Toast({ notice, onDismiss }: { notice: RunNotice; onDismiss: () => void
       <p className="min-w-0 flex-1">{notice.text}</p>
       <button
         type="button"
-        className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground hover:text-foreground"
+        className="type-label text-muted-foreground hover:text-foreground"
         onClick={() => {
           navigate('strategies', { tab: 'runs', run: notice.runId });
           onDismiss();

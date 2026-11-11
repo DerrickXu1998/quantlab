@@ -66,7 +66,6 @@ describe('SymbolPicker', () => {
     renderPicker();
     const input = screen.getByRole('combobox');
     expect(input).toHaveAttribute('placeholder', expect.stringMatching(/search 4 instruments/i));
-    expect(screen.getByText(/type a ticker or part of a company name/i)).toBeInTheDocument();
   });
 
   it('selects by keyboard: type, arrow down, enter', async () => {
@@ -148,7 +147,7 @@ describe('SymbolPicker', () => {
 
   it('names the selected company so a reader can see they landed on the right one', () => {
     renderPicker({ selected: 'CAT' });
-    expect(screen.getByText(/showing caterpillar inc\./i)).toBeInTheDocument();
+    expect(screen.getByText('Caterpillar Inc.')).toBeInTheDocument();
   });
 
   it('distinguishes a catalogue that is not served from one that failed', () => {

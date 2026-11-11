@@ -38,7 +38,7 @@ import type { TermId } from '../glossary/terms';
  * price, a return or an indicator (Constitution V).
  */
 
-const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
+const MICRO = 'type-label text-muted-foreground';
 
 const SIZING_LABELS: Record<PositionSizing, string> = {
   equal_weight: 'Equal weight',

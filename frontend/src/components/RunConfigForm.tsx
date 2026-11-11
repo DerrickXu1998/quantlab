@@ -81,7 +81,7 @@ export function RunConfigForm({
     });
   };
 
-  const label = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
+  const label = 'type-label text-muted-foreground';
 
   return (
     <form onSubmit={submit} className="space-y-4" data-testid="run-config">

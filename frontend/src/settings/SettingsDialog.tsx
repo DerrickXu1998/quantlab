@@ -11,7 +11,7 @@ import { Input, Select } from '../components/ui/field';
 import { ButtonGroup } from '../components/ui/layout';
 import { useSettings } from './SettingsProvider';
 
-const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
+const MICRO = 'type-label text-muted-foreground';
 
 function Section({
   title,
@@ -218,7 +218,7 @@ function Body({
               {settings.market.lists.map((list) => (
                 <li key={list.name} className="flex items-center gap-2 px-2 py-1 text-sm">
                   <span className="min-w-0 flex-1 truncate">{list.name}</span>
-                  <span className="font-mono text-[11px] text-muted-foreground">
+                  <span className="type-data text-muted-foreground">
                     {list.symbols.length} tickers
                   </span>
                   <Button

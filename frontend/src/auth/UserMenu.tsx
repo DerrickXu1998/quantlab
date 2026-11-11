@@ -2,6 +2,7 @@ import { LogOut, Settings, UserRound } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useDataset } from '../api/DatasetProvider';
 import { Button } from '../components/ui/button';
+import { DataDisclaimer } from '../components/DataDisclaimer';
 import { SettingsDialog } from '../settings/SettingsDialog';
 import { useOptionalAuth } from './AuthProvider';
 
@@ -113,6 +114,7 @@ export function UserMenu() {
               {busy ? 'Signing out…' : 'Sign out'}
             </Button>
           ) : null}
+          <DataDisclaimer className="mt-2 border-t border-border px-1 pt-2 text-xs text-muted-foreground" />
         </div>
       ) : null}
       {settingsOpen ? <SettingsDialog onClose={() => setSettingsOpen(false)} /> : null}

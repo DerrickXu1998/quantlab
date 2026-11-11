@@ -124,6 +124,41 @@ body {
 }
 
 /*
+  The type scale, by role. Every piece of text on the surface is one of these
+  or a stock Tailwind size; arbitrary `text-[Npx]` is rejected by the design
+  audit. They are component classes rather than theme font sizes so that
+  tailwind-merge leaves them alone and a utility beside them still wins.
+
+    type-label    field labels, table headers, tags: the terminal's small caps
+    type-data     an identifier or figure set small: symbols, dates, versions
+    type-micro    the one size below that, for counts inside a control
+    type-control  anything pressed: buttons, tabs, navigation
+    type-title    the name of a panel or a state
+*/
+@layer components {
+  .type-label {
+    @apply font-mono uppercase tracking-[0.12em];
+    font-size: 0.6875rem;
+  }
+  .type-data {
+    @apply font-mono;
+    font-size: 0.6875rem;
+  }
+  .type-micro {
+    @apply font-mono;
+    font-size: 0.625rem;
+  }
+  .type-control {
+    @apply font-sans font-medium;
+    font-size: 0.8125rem;
+  }
+  .type-title {
+    @apply font-sans font-medium;
+    font-size: 0.8125rem;
+  }
+}
+
+/*
   Film grain: one static SVG noise tile at 3% over the background only. Sits
   under everything interactive and never receives a pointer event.
 */

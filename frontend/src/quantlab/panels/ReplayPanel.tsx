@@ -58,7 +58,7 @@ function progressPercent(current: string | null, run: Run): number | null {
 function BookStat({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+      <span className="type-label text-muted-foreground">
         {label}
       </span>
       <span className="text-sm">{children}</span>
@@ -136,12 +136,12 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
     >
       <Panel title="Replay" fill scroll bodyClassName="flex flex-col gap-4 p-3">
         <label className="flex flex-col gap-1.5">
-          <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          <span className="type-label text-muted-foreground">
             Run
           </span>
           <select
             data-testid="replay-run-select"
-            className="h-8 rounded-sm border border-border bg-card px-2 font-mono text-[11px]"
+            className="h-8 rounded-sm border border-border bg-card px-2 type-data"
             value={run?.id ?? ''}
             onChange={(event) => setSelectedId(event.target.value)}
           >
@@ -157,12 +157,15 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
           className="flex flex-col gap-1.5"
           title="Applies from the next play; a running stream keeps its pace."
         >
-          <legend className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          <legend className="type-label text-muted-foreground">
             Speed
           </legend>
           {/* One control, not two: the group wraps as a unit rather than
               orphaning `100 ms` onto a line of its own. */}
-          <ButtonGroup label="Replay speed">
+          <ButtonGroup
+            label="Replay speed"
+            title="One step is one trading day. Speed is the pause between days."
+          >
             {SPEEDS.map((preset) => (
               <Button
                 key={preset.intervalMs}
@@ -176,13 +179,6 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
               </Button>
             ))}
           </ButtonGroup>
-          {/* The question this answers used to go unasked: one step is one
-              stored end-of-day bar, never a minute aggregate, and the speed is
-              only the wall-clock pause between steps. */}
-          <p data-testid="replay-granularity" className="text-[11px] text-muted-foreground">
-            One step = one trading day (end-of-day bar). Speed is the pause between days, not
-            the bar size.
-          </p>
         </fieldset>
 
         <div className="flex items-center gap-2">
@@ -241,7 +237,7 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
             >
               <div className="h-full bg-primary" style={{ width: `${percent ?? 0}%` }} />
             </div>
-            <p className="font-mono text-[11px] text-muted-foreground">
+            <p className="type-data text-muted-foreground">
               {state.currentDate ?? '—'} of {run.start_date} → {run.end_date}
             </p>
             {state.status === 'paused' ? (
@@ -287,7 +283,7 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
           {Object.keys(state.closes).length > 0 ? (
             <p
               data-testid="replay-prices"
-              className="mt-3 font-mono text-[11px] text-muted-foreground"
+              className="mt-3 type-data text-muted-foreground"
             >
               {Object.entries(state.closes)
                 .map(([symbol, price]) => `${symbol} ${price.toFixed(2)}`)
@@ -317,17 +313,17 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
             scroll
             bodyClassName="p-0"
             actions={
-              <span className="font-mono text-[11px] text-muted-foreground">
+              <span className="type-data text-muted-foreground">
                 {state.fills.length > 0 ? `latest ${state.fills.length}` : ''}
               </span>
             }
           >
             {state.fills.length === 0 ? (
-              <p className="p-3 font-mono text-[11px] text-muted-foreground">No fills yet.</p>
+              <p className="p-3 type-data text-muted-foreground">No fills yet.</p>
             ) : (
               <table data-testid="replay-fills" className="w-full">
                 <thead className="sticky top-0 bg-card">
-                  <tr className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+                  <tr className="type-label text-muted-foreground">
                     <th className="px-3 py-1.5 text-left font-normal">Date</th>
                     <th className="px-3 py-1.5 text-left font-normal">Symbol</th>
                     <th className="px-3 py-1.5 text-left font-normal">Side</th>
@@ -341,10 +337,10 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
                       key={`${fill.date}-${fill.symbol}-${index}`}
                       className="border-t border-border"
                     >
-                      <td className="px-3 py-1.5 font-mono text-[11px] tabular-nums text-muted-foreground">
+                      <td className="px-3 py-1.5 type-data tabular-nums text-muted-foreground">
                         {fill.date}
                       </td>
-                      <td className="px-3 py-1.5 font-mono text-[11px]">{fill.symbol}</td>
+                      <td className="px-3 py-1.5 type-data">{fill.symbol}</td>
                       <td className="px-3 py-1.5">
                         <StatusBadge tone={fill.side === 'buy' ? 'active' : 'idle'}>
                           {fill.side}
@@ -365,11 +361,11 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
 
           <Panel title="Signals" fill scroll bodyClassName="p-0">
             {state.signals.length === 0 ? (
-              <p className="p-3 font-mono text-[11px] text-muted-foreground">No signals yet.</p>
+              <p className="p-3 type-data text-muted-foreground">No signals yet.</p>
             ) : (
               <table data-testid="replay-signals" className="w-full">
                 <thead className="sticky top-0 bg-card">
-                  <tr className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+                  <tr className="type-label text-muted-foreground">
                     <th className="px-3 py-1.5 text-left font-normal">Date</th>
                     <th className="px-3 py-1.5 text-left font-normal">Symbol</th>
                     <th className="px-3 py-1.5 text-left font-normal">Direction</th>
@@ -382,16 +378,16 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
                       key={`${signal.date}-${signal.symbol}-${index}`}
                       className="border-t border-border"
                     >
-                      <td className="px-3 py-1.5 font-mono text-[11px] tabular-nums text-muted-foreground">
+                      <td className="px-3 py-1.5 type-data tabular-nums text-muted-foreground">
                         {signal.date}
                       </td>
-                      <td className="px-3 py-1.5 font-mono text-[11px]">{signal.symbol}</td>
+                      <td className="px-3 py-1.5 type-data">{signal.symbol}</td>
                       <td className="px-3 py-1.5">
                         <StatusBadge tone={signal.direction === 'bullish' ? 'active' : 'idle'}>
                           {signal.direction}
                         </StatusBadge>
                       </td>
-                      <td className="px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+                      <td className="px-3 py-1.5 type-data text-muted-foreground">
                         {Object.entries(signal.trigger_values)
                           .map(([key, value]) => `${key}=${String(value)}`)
                           .join(', ')}

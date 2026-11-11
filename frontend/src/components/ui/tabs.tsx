@@ -81,7 +81,7 @@ export function TabBar<T extends string>({
             className={cn(
               // 44px of target on a phone, the original dense row at `lg`.
               'inline-flex h-11 items-center gap-2 rounded-sm border px-3 lg:h-auto lg:py-1.5',
-              'font-mono text-[11px] uppercase tracking-[0.12em] transition-colors',
+              'type-control transition-colors',
               'focus-visible:outline-none focus-visible:border-primary',
               active
                 ? 'border-primary bg-primary text-primary-foreground'
@@ -103,7 +103,7 @@ function TabCount({ active, children }: { active: boolean; children: ReactNode }
     <span
       data-testid="tab-count"
       className={cn(
-        'rounded-sm border px-1 tabular-nums tracking-normal',
+        'rounded-sm border px-1 type-micro tabular-nums',
         active ? 'border-primary-foreground/40' : 'border-primary/50 text-primary',
       )}
     >

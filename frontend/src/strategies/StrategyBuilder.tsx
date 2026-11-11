@@ -49,7 +49,7 @@ import {
 import { executedStrategyNames } from './StrategyStatus';
 import { useStrategyLibrary } from './useStrategyLibrary';
 
-const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
+const MICRO = 'type-label text-muted-foreground';
 
 const LOGIC_LABELS: Record<CombineLogic, string> = {
   all: 'All must fire',
@@ -446,16 +446,15 @@ export function StrategyBuilder({
                 {/* The single most important element on the screen: the assembled
                   strategy in a sentence, regenerated on every edit. It is how a
                   non-expert checks they built what they meant. */}
-                <div className="border border-primary/40 bg-primary/5 p-3">
-                  <p className={MICRO}>In plain English</p>
+                {draft.components.length > 0 ? (
                   <p
                     data-testid="strategy-summary"
                     aria-live="polite"
-                    className="mt-1 text-sm leading-relaxed"
+                    className="border-l-2 border-primary pl-3 text-sm leading-relaxed"
                   >
                     {sentence}
                   </p>
-                </div>
+                ) : null}
 
                 {/* Directly under the sentence, and above the ordinary warnings:
                   this one says the strategy cannot do what the sentence just
@@ -476,7 +475,7 @@ export function StrategyBuilder({
                   }
                 />
 
-                {warnings.length > 0 ? (
+                {warnings.length > 0 && draft.components.length > 0 ? (
                   <ul data-testid="strategy-warnings" className="space-y-1">
                     {warnings.map((warning) => (
                       <li
@@ -575,6 +574,7 @@ export function StrategyBuilder({
                   <Select
                     id="entry-logic"
                     value={draft.entry_logic}
+                    title={LOGIC_EXPLAINERS[draft.entry_logic]}
                     onChange={(event) =>
                       setDraft((current) => ({
                         ...current,
@@ -588,9 +588,6 @@ export function StrategyBuilder({
                       </option>
                     ))}
                   </Select>
-                  <p className="text-xs text-muted-foreground">
-                    {LOGIC_EXPLAINERS[draft.entry_logic]}
-                  </p>
                 </div>
 
                 <div className="space-y-1">
@@ -600,6 +597,7 @@ export function StrategyBuilder({
                   <Select
                     id="exit-logic"
                     value={draft.exit_logic}
+                    title={LOGIC_EXPLAINERS[draft.exit_logic]}
                     onChange={(event) =>
                       setDraft((current) => ({
                         ...current,
@@ -613,9 +611,6 @@ export function StrategyBuilder({
                       </option>
                     ))}
                   </Select>
-                  <p className="text-xs text-muted-foreground">
-                    {LOGIC_EXPLAINERS[draft.exit_logic]}
-                  </p>
                 </div>
 
                 {/* Thresholds only mean something to weighted logic. */}
@@ -827,6 +822,7 @@ export function StrategyBuilder({
           onNameChange={(name) => setDraft((current) => ({ ...current, name }))}
           saved={Boolean(draft.id)}
           dirty={dirty}
+          pristine={!dirty && draft.components.length === 0 && symbols.length === 0}
           saving={saving}
           onSave={() => void save(false)}
           onSaveAsCopy={() => void save(true)}
@@ -835,7 +831,7 @@ export function StrategyBuilder({
           symbolsCount={symbols.length}
           blockers={blockers}
           hasErrors={hasErrors}
-          warningCount={warnings.length}
+          warningCount={draft.components.length > 0 ? warnings.length : 0}
           runError={runError}
           submitting={submitting}
           canSubmit={canSubmit}

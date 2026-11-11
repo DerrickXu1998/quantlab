@@ -139,7 +139,7 @@ export function SymbolPicker({
     <div ref={rootRef} className="relative min-w-0 flex-1">
       <label
         htmlFor={`${listId}-input`}
-        className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground"
+        className="type-label text-muted-foreground"
       >
         Company
       </label>
@@ -187,9 +187,9 @@ export function SymbolPicker({
         ) : null}
       </div>
 
-      <p className="mt-1 text-xs text-muted-foreground">
-        {captionFor(status, message, chosen)}
-      </p>
+      {captionFor(status, message, chosen) ? (
+        <p className="mt-1 text-xs text-muted-foreground">{captionFor(status, message, chosen)}</p>
+      ) : null}
 
       {open && !disabled ? (
         <div className="absolute left-0 right-0 top-full z-20 mt-1 max-h-80 overflow-y-auto rounded-sm border border-border bg-card">
@@ -217,7 +217,7 @@ export function SymbolPicker({
                     index === active ? 'bg-accent text-accent-foreground' : 'text-foreground',
                   )}
                 >
-                  <span className="w-20 shrink-0 font-mono text-[11px] tabular-nums text-primary">
+                  <span className="w-20 shrink-0 type-data tabular-nums text-primary">
                     {instrument.symbol}
                   </span>
                   <span className="truncate text-xs">{instrument.name}</span>
@@ -226,7 +226,7 @@ export function SymbolPicker({
             </ul>
           )}
           {matches.length > shown.length ? (
-            <p className="border-t border-border px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+            <p className="border-t border-border px-3 py-1.5 type-label text-muted-foreground">
               {shown.length} of {matches.length.toLocaleString('en-US')} matches — keep typing
             </p>
           ) : null}
@@ -252,8 +252,8 @@ function captionFor(status: ReadStatus, message: string | null, chosen: Instrume
   if (status === 'error') {
     return `The catalogue could not be read${message ? `: ${message}` : '.'}`;
   }
-  if (chosen) return `Showing ${chosen.name}. Type to look up another.`;
-  return 'Type a ticker or part of a company name, then press Enter.';
+  if (chosen) return chosen.name;
+  return '';
 }
 
 /**
@@ -275,7 +275,7 @@ export function SymbolPickerRetry({
     <button
       type="button"
       onClick={onRetry}
-      className="mt-5 inline-flex h-9 items-center gap-1.5 rounded-sm border border-border px-3 font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground transition-colors hover:text-foreground"
+      className="mt-5 inline-flex h-9 items-center gap-1.5 rounded-sm border border-border px-3 type-label text-muted-foreground transition-colors hover:text-foreground"
     >
       <ServerCrash size={16} strokeWidth={1.5} />
       Retry

@@ -34,7 +34,7 @@ export function CoverageLine({
 
   return (
     <div data-testid={`coverage-${metric}`} className="space-y-1">
-      <p className="font-mono text-[11px] tabular-nums tracking-[0.04em] text-muted-foreground">
+      <p className="type-data tabular-nums tracking-[0.04em] text-muted-foreground">
         {label} — {formatCount(coverage.measured)} of {formatCount(coverage.universe)}{' '}
         names measured
         <span className="ml-1.5 text-foreground">({formatPercent(share, 0)})</span>
@@ -74,7 +74,7 @@ function Figure({
 }) {
   return (
     <div data-testid={testId}>
-      <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+      <p className="type-label text-muted-foreground">
         {label}
       </p>
       <p
