@@ -29,7 +29,7 @@ export function FillsTable({ fills }: { fills: Fill[] }) {
   return (
     <table data-testid="fills-table" className="w-full">
       <thead className="sticky top-0 z-10 bg-card">
-        <tr className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+        <tr className="type-label text-muted-foreground">
           <th className="px-3 py-1.5 text-left font-normal">Time</th>
           <th className="px-3 py-1.5 text-left font-normal">Symbol</th>
           <th className="px-3 py-1.5 text-left font-normal">Side</th>
@@ -40,8 +40,8 @@ export function FillsTable({ fills }: { fills: Fill[] }) {
       <tbody>
         {[...fills].reverse().map((fill) => (
           <tr key={fill.id} className="border-t border-border">
-            <td className="px-3 py-1.5 font-mono text-[11px] text-muted-foreground">{fill.time}</td>
-            <td className="px-3 py-1.5 font-mono text-[11px]">{fill.symbol}</td>
+            <td className="px-3 py-1.5 type-data text-muted-foreground">{fill.time}</td>
+            <td className="px-3 py-1.5 type-data">{fill.symbol}</td>
             <td className="px-3 py-1.5">
               <StatusBadge tone={fill.side === 'BUY' ? 'active' : 'idle'}>{fill.side}</StatusBadge>
             </td>

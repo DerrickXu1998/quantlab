@@ -46,11 +46,11 @@ export function Assumptions({
             aria-hidden="true"
             className="text-muted-foreground group-open:rotate-90"
           />
-          <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          <span className="type-label text-muted-foreground">
             What this run assumed
           </span>
         </span>
-        <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+        <span className="type-data tabular-nums text-muted-foreground">
           {assumptions.length}
         </span>
       </summary>

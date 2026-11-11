@@ -29,7 +29,7 @@ import {
   useInstrumentCatalog,
 } from '../market/useMarketData';
 
-const labelClass = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
+const labelClass = 'type-label text-muted-foreground';
 
 /**
  * The view settings, in the address alongside the tickers, so a layout a
@@ -44,7 +44,9 @@ function useMarketSettings() {
   // A link that says wins; otherwise the user's own default (settings).
   const settings = useSettings();
   const preferred =
-    settings?.load.status === 'ready' ? settings.load.document.settings.market.default_data : 'historical';
+    settings?.load.status === 'ready'
+      ? settings.load.document.settings.market.default_data
+      : 'historical';
   const mode: DataMode =
     data === 'live' || data === 'sim' ? 'live' : data === 'historical' ? 'historical' : preferred;
   const interval = (INTERVALS.find((i) => i.id === params.get('bar'))?.id ?? '1D') as Interval;
@@ -84,7 +86,12 @@ function useMarketSettings() {
       const next = new Set(studies);
       if (next.has(id)) next.delete(id);
       else next.add(id);
-      update('studies', STUDIES.filter((s) => next.has(s.id)).map((s) => s.id).join(','));
+      update(
+        'studies',
+        STUDIES.filter((s) => next.has(s.id))
+          .map((s) => s.id)
+          .join(','),
+      );
     },
   };
 }
@@ -148,10 +155,7 @@ export function MarketView({
       ? liveConnection.load.connection
       : null;
 
-  const instruments = useMemo(
-    () => (catalog.status === 'ready' ? catalog.data : []),
-    [catalog],
-  );
+  const instruments = useMemo(() => (catalog.status === 'ready' ? catalog.data : []), [catalog]);
   const bySymbol = useMemo(() => new Map(instruments.map((i) => [i.symbol, i])), [instruments]);
 
   if (catalog.status === 'error') {
@@ -207,8 +211,17 @@ export function MarketView({
             value={settings.mode}
             onChange={settings.setMode}
             options={[
-              { id: 'historical', label: 'Historical', title: 'Stored end-of-day bars from the warehouse' },
-              { id: 'live', label: 'Live intraday', title: "Today's IBKR prices, about one tick a second — provisional; Tiingo's end-of-day bars are the record" },
+              {
+                id: 'historical',
+                label: 'Historical',
+                title: 'Stored end-of-day bars from the warehouse',
+              },
+              {
+                id: 'live',
+                label: 'Live intraday',
+                title:
+                  "Today's IBKR prices, about one tick a second — provisional; Tiingo's end-of-day bars are the record",
+              },
             ]}
           />
           <Segment<Interval>
@@ -225,7 +238,11 @@ export function MarketView({
             onChange={settings.setRange}
             disabled={!historical}
             disabledTitle="Live charts show today's session from the open"
-            options={RANGES.map((r) => ({ id: r, label: r, title: `Window ending at the latest stored bar: ${r}` }))}
+            options={RANGES.map((r) => ({
+              id: r,
+              label: r,
+              title: `Window ending at the latest stored bar: ${r}`,
+            }))}
           />
           <div className="flex flex-wrap items-center gap-2">
             <span className={labelClass}>Studies</span>
@@ -252,37 +269,44 @@ export function MarketView({
           </div>
         </div>
 
-        {/* The one line that answers "is this real, and is it now?" -- on the
-            page itself, not in a tooltip. */}
+        {/* Says whether the chart is stored history or today's feed. Short on
+            the page; the full provenance is the hover text. */}
         <div
           data-testid="market-provenance"
           data-mode={settings.mode}
           role="note"
-          className={cn(
-            'flex shrink-0 items-center gap-2 border-b border-border px-4 py-1.5 font-mono text-[11px] uppercase tracking-[0.12em]',
-            historical ? 'text-primary' : 'text-foreground',
-          )}
+          title={
+            historical
+              ? `Historical: end-of-day bars ingested from market data providers. Each bar = ${INTERVALS.find((i) => i.id === settings.interval)?.detail.toLowerCase()}. Not real-time.`
+              : "Live: today's IBKR prices, 1-minute candles from the open, the newest forming tick by tick. Provisional; Tiingo's end-of-day bars are the record."
+          }
+          className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-1.5 text-xs text-muted-foreground"
         >
           {historical ? (
             <History size={16} strokeWidth={1.5} aria-hidden="true" />
           ) : (
-            <Radio size={16} strokeWidth={1.5} aria-hidden="true" />
+            <Radio size={16} strokeWidth={1.5} aria-hidden="true" className="text-primary" />
           )}
           {historical
-            ? `Historical · end-of-day bars ingested from market data providers · each bar = ${INTERVALS.find((i) => i.id === settings.interval)?.detail.toLowerCase()} · not real-time`
-            : "Live · today's IBKR prices · 1-minute candles from the open, the newest forming tick by tick · provisional — Tiingo's end-of-day bars are the record"}
+            ? 'Stored end-of-day bars. Not real-time.'
+            : 'Live IBKR prices, 1-minute candles. Provisional until the end-of-day load.'}
         </div>
 
         {!historical && connectedAs ? (
           <div
             data-testid="live-conn-bar"
-            className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-1.5 font-mono text-[11px] text-muted-foreground"
+            className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-1.5 type-data text-muted-foreground"
           >
             <span>
-              IBKR · <span className="text-foreground">{connectedAs.ib_username}</span> ({connectedAs.trading_mode}) · your
-              own login, your own prices
+              IBKR · <span className="text-foreground">{connectedAs.ib_username}</span> (
+              {connectedAs.trading_mode}) · your own login, your own prices
             </span>
-            <Button type="button" variant="ghost" size="sm" onClick={() => void liveConnection.disconnect()}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => void liveConnection.disconnect()}
+            >
               Disconnect
             </Button>
           </div>

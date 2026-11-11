@@ -38,7 +38,7 @@ function Toggle<T extends string>({
           // BUY/SELL and market/limit are the two choices on this screen a
           // mis-tap actually costs something for, so they get the full 44px on
           // touch even though the ticket is compact everywhere else.
-          className={`h-11 px-2 font-mono text-[11px] uppercase tracking-[0.12em] transition-colors lg:h-auto lg:py-1.5 ${
+          className={`h-11 px-2 type-label transition-colors lg:h-auto lg:py-1.5 ${
             value === option
               ? option === 'SELL'
                 ? // SELL is a side, not a loss — muted, not red.
@@ -98,7 +98,7 @@ export function OrderTicket({
       }}
     >
       <label className="flex flex-col gap-1">
-        <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+        <span className="type-label text-muted-foreground">
           Symbol
         </span>
         <select
@@ -122,7 +122,7 @@ export function OrderTicket({
       />
 
       <label className="flex flex-col gap-1">
-        <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+        <span className="type-label text-muted-foreground">
           Quantity
         </span>
         <input
@@ -149,7 +149,7 @@ export function OrderTicket({
 
       {type === 'limit' ? (
         <label className="flex flex-col gap-1">
-          <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          <span className="type-label text-muted-foreground">
             Limit price
           </span>
           <input
@@ -163,7 +163,7 @@ export function OrderTicket({
         </label>
       ) : null}
 
-      <div className="flex items-center justify-between font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+      <div className="flex items-center justify-between type-label text-muted-foreground">
         <span>{type === 'market' ? 'Est. fill' : 'Fill price'}</span>
         <Numeric value={fillPrice} className="text-xs text-foreground" />
       </div>

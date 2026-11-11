@@ -77,7 +77,7 @@ export function MobileHeader({
       <div className="flex min-w-0 items-baseline gap-2">
         <span className="font-display text-sm tracking-[-0.02em]">QuantLab</span>
         {currentItem ? (
-          <span className="truncate font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          <span className="truncate type-label text-muted-foreground">
             {currentItem.label}
           </span>
         ) : null}

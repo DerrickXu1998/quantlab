@@ -4,7 +4,7 @@ import { Button } from '../components/ui/button';
 import { TERMS, type TermDefinition, type TermGroup } from './terms';
 import { describeUnit } from './units';
 
-const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
+const MICRO = 'type-label text-muted-foreground';
 const GROUPS: TermGroup[] = ['Results', 'Benchmark', 'Execution', 'Strategy', 'Data'];
 
 /**
@@ -88,7 +88,7 @@ function GlossaryDialog({ onClose }: { onClose: () => void }) {
             type="search"
             aria-label="Search terms"
             placeholder="Search terms"
-            className="h-8 min-w-0 flex-1 rounded-sm border border-border bg-background px-2 font-mono text-[11px] focus-visible:border-primary focus-visible:outline-none"
+            className="h-8 min-w-0 flex-1 rounded-sm border border-border bg-background px-2 type-data focus-visible:border-primary focus-visible:outline-none"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
@@ -118,7 +118,7 @@ function GlossaryDialog({ onClose }: { onClose: () => void }) {
                         key={entry.label}
                         className="grid gap-1 py-2 sm:grid-cols-[11rem_minmax(0,1fr)] sm:gap-4"
                       >
-                        <dt className="font-mono text-[11px] uppercase tracking-[0.12em]">
+                        <dt className="type-label">
                           {entry.label}
                         </dt>
                         <dd className="space-y-1 text-xs leading-relaxed">

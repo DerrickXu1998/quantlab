@@ -42,7 +42,7 @@ import {
   type RunStatus,
 } from './status';
 
-const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
+const MICRO = 'type-label text-muted-foreground';
 
 /** What "Clone to editor" hands Configure: a run's recorded configuration. */
 export interface RunClone {
@@ -346,7 +346,7 @@ function RunsTable({
             type="search"
             aria-label="Search runs by name or ticker"
             placeholder="Name or ticker"
-            className="h-9 w-full rounded-sm border border-border bg-card px-2 font-mono text-[11px] focus-visible:border-primary focus-visible:outline-none"
+            className="h-9 w-full rounded-sm border border-border bg-card px-2 type-data focus-visible:border-primary focus-visible:outline-none"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
@@ -571,19 +571,19 @@ function RunRow({
           </span>
         ) : null}
       </TableCell>
-      <TableCell className="font-mono text-[11px]">{BAR_FREQUENCY_LABELS[barsOf(run)]}</TableCell>
+      <TableCell className="type-data">{BAR_FREQUENCY_LABELS[barsOf(run)]}</TableCell>
       <TableCell className="max-w-[12rem] truncate text-xs" title={run.symbols.join(', ')}>
         <span className="tabular-nums">{run.symbols.length}</span> ·{' '}
         {run.symbols.slice(0, 3).join(' ')}
         {run.symbols.length > 3 ? '…' : ''}
       </TableCell>
-      <TableCell className="whitespace-nowrap font-mono text-[11px] tabular-nums">
+      <TableCell className="whitespace-nowrap type-data tabular-nums">
         {run.start_date} → {run.end_date}
       </TableCell>
-      <TableCell className="whitespace-nowrap font-mono text-[11px] tabular-nums">
+      <TableCell className="whitespace-nowrap type-data tabular-nums">
         {submittedAt(run.created_at)}
       </TableCell>
-      <TableCell className="whitespace-nowrap font-mono text-[11px] tabular-nums">
+      <TableCell className="whitespace-nowrap type-data tabular-nums">
         {durationCell(run)}
       </TableCell>
       <TableCell className="text-right">

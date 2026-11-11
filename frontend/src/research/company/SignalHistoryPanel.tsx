@@ -58,7 +58,7 @@ export function SignalHistoryPanel({
       fill
       aside={
         status === 'ready' && ordered.length > 0 ? (
-          <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          <span className="type-label text-muted-foreground">
             {formatCount(total)} signals
           </span>
         ) : null
@@ -93,11 +93,11 @@ export function SignalHistoryPanel({
             <TableBody>
               {ordered.map((row) => (
                 <TableRow key={row.rule_name}>
-                  <TableCell className="truncate font-mono text-[11px]">{row.rule_name}</TableCell>
-                  <TableCell className="text-right font-mono text-[11px] tabular-nums">
+                  <TableCell className="truncate type-data">{row.rule_name}</TableCell>
+                  <TableCell className="text-right type-data tabular-nums">
                     {formatCount(row.count)}
                   </TableCell>
-                  <TableCell className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                  <TableCell className="type-data tabular-nums text-muted-foreground">
                     {row.last_date ?? NOT_APPLICABLE}
                   </TableCell>
                   <TableCell>
@@ -120,7 +120,7 @@ export function SignalHistoryPanel({
                         {row.last_direction}
                       </StatusBadge>
                     ) : (
-                      <span className="font-mono text-[11px] text-muted-foreground">
+                      <span className="type-data text-muted-foreground">
                         {NOT_APPLICABLE}
                       </span>
                     )}

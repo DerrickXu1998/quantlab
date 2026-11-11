@@ -42,7 +42,7 @@ export function CoveragePanel({
       fill
       aside={
         status === 'ready' ? (
-          <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          <span className="type-label text-muted-foreground">
             {formatCount(available.length)} / {formatCount(available.length + missing.length)}
           </span>
         ) : null
@@ -64,7 +64,7 @@ export function CoveragePanel({
               data-testid="company-coverage-none"
               className="rounded-sm border border-dashed border-border px-3 py-4"
             >
-              <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+              <p className="type-label text-muted-foreground">
                 No fundamentals at all
               </p>
               <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
@@ -119,7 +119,7 @@ function ConceptGroup({
   const Icon = tone === 'filed' ? Check : Ban;
   return (
     <div data-testid={testId}>
-      <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+      <p className="type-label text-muted-foreground">
         {title}
       </p>
       <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{blurb}</p>

@@ -12,7 +12,7 @@ function PositionRow({ position }: { position: Position }) {
 
   return (
     <tr className="border-t border-border">
-      <td className="px-3 py-1.5 font-mono text-[11px]">{position.symbol}</td>
+      <td className="px-3 py-1.5 type-data">{position.symbol}</td>
       <td className="px-3 py-1.5 text-right">
         <Numeric value={position.qty} format="integer" className="text-xs" />
       </td>
@@ -53,7 +53,7 @@ export function ExecutionPositions({ positions }: { positions: Position[] }) {
   return (
     <table data-testid="execution-positions" className="w-full">
       <thead className="sticky top-0 z-10 bg-card">
-        <tr className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+        <tr className="type-label text-muted-foreground">
           <th className="px-3 py-1.5 text-left font-normal">Symbol</th>
           <th className="px-3 py-1.5 text-right font-normal">Qty</th>
           <th className="px-3 py-1.5 text-right font-normal">Avg cost</th>

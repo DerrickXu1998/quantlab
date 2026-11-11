@@ -72,7 +72,7 @@ export function ScreenTable({
             onClick={() => onSelectSymbol(row.symbol)}
             className="cursor-pointer hover:bg-accent/40"
           >
-            <TableCell className="text-right font-mono text-[11px] tabular-nums text-muted-foreground">
+            <TableCell className="text-right type-data tabular-nums text-muted-foreground">
               {index + 1}
             </TableCell>
             <TableCell className="py-1">
@@ -82,7 +82,7 @@ export function ScreenTable({
                   event.stopPropagation();
                   onSelectSymbol(row.symbol);
                 }}
-                className="font-mono text-[12px] text-foreground transition-colors hover:text-primary"
+                className="font-mono text-xs text-foreground transition-colors hover:text-primary"
                 title={`Open ${row.symbol} in Company`}
               >
                 {row.symbol}
@@ -97,7 +97,7 @@ export function ScreenTable({
               return (
                 <TableCell
                   key={metric}
-                  className={`text-right font-mono text-[11px] tabular-nums ${
+                  className={`text-right type-data tabular-nums ${
                     absent ? 'text-muted-foreground' : 'text-foreground'
                   }`}
                   title={absent ? 'Never filed for this name — not a zero.' : undefined}

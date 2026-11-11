@@ -70,11 +70,6 @@ export function StrategyLabView({ instruments }: { instruments: Instrument[] }) 
             },
           ]}
         />
-        <p className="min-w-0 flex-1 text-sm text-muted-foreground">
-          {tab === 'configure'
-            ? 'Combine several signals into one set of rules, choose a universe of tickers and submit a backtest. It runs in the background; results land in Runs. To study a single ticker, use Research.'
-            : 'Every backtest, its status and its results. Open one to see its trades, or clone it back into Configure to change it.'}
-        </p>
       </div>
 
       <div

@@ -12,7 +12,7 @@ import { conceptCoverage, conceptLabel } from './fundamentals';
 import { canFillRole, componentErrors, describeComponent, roleRefusal } from './strategyModel';
 import type { DraftComponent } from './strategyModel';
 
-const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
+const MICRO = 'type-label text-muted-foreground';
 
 const ROLE_TONE: Record<StrategyRole, 'active' | 'good' | 'idle'> = {
   entry: 'active',
@@ -58,7 +58,7 @@ export function StrategyComponentEditor({
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="truncate font-mono text-[12px]">{component.rule_name}</p>
+          <p className="truncate font-mono text-xs">{component.rule_name}</p>
           <p className="mt-0.5 text-xs text-muted-foreground">
             {describeComponent(component, model)}
           </p>

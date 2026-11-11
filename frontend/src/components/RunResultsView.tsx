@@ -424,7 +424,7 @@ export function RunResultsView({ run }: { run: RunDetailV2 }) {
               </Panel>
             </div>
           ) : (
-            <p className="mt-4 font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+            <p className="mt-4 type-label text-muted-foreground">
               Computing…
             </p>
           )}
@@ -505,7 +505,7 @@ function StrategyProvenance({ run }: { run: RunDetailV2 }) {
       aria-label="Strategy executed"
       className="mt-3 border border-border bg-card p-3"
     >
-      <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+      <p className="type-label text-muted-foreground">
         Strategy executed
       </p>
       <p className="mt-1 text-xs">{strategy.name}</p>

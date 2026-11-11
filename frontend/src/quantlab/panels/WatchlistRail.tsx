@@ -39,7 +39,7 @@ function Row({
       }`}
     >
       <span className="flex w-full items-center justify-between gap-2">
-        <span className="truncate font-mono text-[11px] tracking-[0.12em]">
+        <span className="truncate type-data tracking-[0.12em]">
           {instrument.symbol}
         </span>
         <span className="flex shrink-0 items-center gap-2">

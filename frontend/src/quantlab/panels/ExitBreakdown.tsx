@@ -3,7 +3,7 @@ import { EXIT_REASON_LABELS } from '../../api/types';
 import { Numeric } from '../chrome/Numeric';
 import { Panel } from '../chrome/Panel';
 
-const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
+const MICRO = 'type-label text-muted-foreground';
 
 /**
  * Why the run's positions closed, and what the closing cost.

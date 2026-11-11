@@ -102,7 +102,7 @@ function messageFor(error: unknown, mode: Mode): string {
   return mode === 'login' ? 'Could not sign in.' : 'Could not create the account.';
 }
 
-const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
+const MICRO = 'type-label text-muted-foreground';
 
 function StrengthMeter({ password }: { password: string }) {
   const strength = passwordStrength(password);
@@ -195,7 +195,7 @@ export function LoginScreen() {
       aria-selected={mode === value}
       aria-controls="auth-panel"
       onClick={() => switchTo(value)}
-      className={`flex-1 border-b-2 px-3 py-2 font-mono text-[11px] uppercase tracking-[0.12em] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary ${
+      className={`flex-1 border-b-2 px-3 py-2 type-label transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary ${
         mode === value
           ? 'border-b-primary text-primary'
           : 'border-b-transparent text-muted-foreground hover:text-foreground'

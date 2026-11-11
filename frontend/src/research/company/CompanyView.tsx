@@ -156,11 +156,6 @@ export function CompanyView({ symbol, onSelectSymbol, asOf: asOfProp, onAsOfChan
         how the two controls relate, so that is what this line is for.
       */}
       <div className="shrink-0 border border-border bg-card p-3">
-        <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
-          Two controls set the question: <span className="text-foreground">which name</span>, and{' '}
-          <span className="text-foreground">as of when</span>. Everything below re-reads when either
-          moves — the same company on two dates is two different answers.
-        </p>
         <div className="flex flex-wrap items-start gap-3">
           <SymbolPicker
             instruments={instruments.data}
@@ -183,13 +178,6 @@ export function CompanyView({ symbol, onSelectSymbol, asOf: asOfProp, onAsOfChan
             detail="Type a ticker or part of a company name in the box above."
             testId="company-no-selection"
             className="my-10"
-            action={
-              <p className="mt-1 max-w-md text-xs leading-relaxed text-muted-foreground">
-                You will get its price history, the accounts that were public on your chosen date
-                with the filing date beside each figure, the rules that have fired on it, and an
-                explicit list of what it has never filed.
-              </p>
-            }
           />
         </ScrollRegion>
       ) : (
@@ -372,7 +360,7 @@ function Identity({
 function Stat({ label, value, mono = true }: { label: string; value: ReactNode; mono?: boolean }) {
   return (
     <div>
-      <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+      <p className="type-label text-muted-foreground">
         {label}
       </p>
       <p className={mono ? 'mt-0.5 font-mono text-sm tabular-nums' : 'mt-0.5 text-sm'}>{value}</p>

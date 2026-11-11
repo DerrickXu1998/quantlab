@@ -210,7 +210,7 @@ export function ScreenView({ onSelectSymbol }: ScreenViewProps): JSX.Element {
             purpose="The names that cleared every bound, ranked — beside how many were never measured at all."
             actions={
               result ? (
-                <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                <span className="type-data tabular-nums text-muted-foreground">
                   as filed on {result.as_of}
                 </span>
               ) : null
@@ -286,7 +286,7 @@ function ColumnChooser({
     );
   const group = (title: string, metrics: readonly ScreenMetric[]) => (
     <fieldset className="space-y-1">
-      <legend className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+      <legend className="type-label text-muted-foreground">
         {title}
       </legend>
       <div className="flex flex-wrap gap-x-4 gap-y-1">
@@ -307,7 +307,7 @@ function ColumnChooser({
   );
   return (
     <details className="border-t border-border pt-3" data-testid="screen-columns">
-      <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground hover:text-foreground">
+      <summary className="cursor-pointer type-label text-muted-foreground hover:text-foreground">
         Columns ({pinned.length} shown)
       </summary>
       <div className="mt-2 space-y-2">
@@ -509,7 +509,7 @@ function Results({
         */}
         {result.coverage.length > 0 ? (
           <div className="space-y-2 border-t border-border pt-3">
-            <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+            <p className="type-label text-muted-foreground">
               What could be measured at all
             </p>
             <div className="grid grid-cols-1 gap-x-8 gap-y-2 md:grid-cols-2 xl:grid-cols-3">

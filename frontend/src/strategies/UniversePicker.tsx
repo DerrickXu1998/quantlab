@@ -188,7 +188,7 @@ export function UniversePicker({
         <div className="flex flex-wrap items-center gap-2">
           <label
             htmlFor="saved-universe"
-            className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground"
+            className="type-label text-muted-foreground"
           >
             Saved universes
           </label>

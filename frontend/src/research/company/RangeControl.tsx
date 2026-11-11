@@ -57,7 +57,7 @@ export function RangeControl({ value, onChange, asOf }: RangeControlProps) {
   const start = rangeStart(asOf, value);
   return (
     <div className="w-full min-w-0 lg:w-auto lg:shrink-0">
-      <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+      <span className="type-label text-muted-foreground">
         Range
       </span>
       <div className="mt-1 flex flex-wrap items-center gap-2">
@@ -69,7 +69,7 @@ export function RangeControl({ value, onChange, asOf }: RangeControlProps) {
               aria-pressed={range.id === value}
               onClick={() => onChange(range.id)}
               className={cn(
-                'h-11 rounded-sm border px-3 font-mono text-[11px] uppercase tracking-[0.12em] transition-colors lg:h-9 lg:px-2',
+                'h-11 rounded-sm border px-3 type-label transition-colors lg:h-9 lg:px-2',
                 range.id === value
                   ? 'border-primary text-primary'
                   : 'border-border text-muted-foreground hover:text-foreground',
@@ -80,11 +80,11 @@ export function RangeControl({ value, onChange, asOf }: RangeControlProps) {
           ))}
         </ButtonGroup>
       </div>
-      <p className="mt-1 text-xs text-muted-foreground">
-        {start
-          ? `Chart and backtests cover ${start} → ${asOf}.`
-          : `Chart and backtests cover the full history up to ${asOf}.`}
-      </p>
+      {start ? (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Chart and backtests cover {start} → {asOf}.
+        </p>
+      ) : null}
     </div>
   );
 }

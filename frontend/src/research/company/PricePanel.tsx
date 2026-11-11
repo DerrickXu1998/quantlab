@@ -57,7 +57,7 @@ export function PricePanel({
       fill
       aside={
         last ? (
-          <span className="font-mono text-[11px] tabular-nums text-foreground">
+          <span className="type-data tabular-nums text-foreground">
             {formatPrice(last.close, currency ?? undefined)}
           </span>
         ) : null

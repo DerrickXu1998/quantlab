@@ -6,7 +6,7 @@ function LevelRow({ level, side }: { level: BookLevel; side: 'bid' | 'ask' }) {
   return (
     // py-0.5, not py-1: twenty levels at the looser rhythm ran ~80px past the
     // panel on a 900px viewport, and a book is meant to be dense anyway.
-    <div className="relative flex shrink-0 items-center justify-between px-3 py-0.5 font-mono text-[11px] tabular-nums">
+    <div className="relative flex shrink-0 items-center justify-between px-3 py-0.5 type-data tabular-nums">
       {/* Depth bar: a plain div, width is the level's share of its side. It is
           read against the price/size pair, so it is bounded by the measure
           below rather than by however wide the grid cell happens to be. */}
@@ -52,7 +52,7 @@ export function OrderBook({ book }: { book: OrderBook }) {
             the column header on top of its column instead of stranding it at
             the panel's top edge with the slack in between. */}
         <div className="flex flex-1 flex-col justify-end">
-          <div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          <div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-1.5 type-label text-muted-foreground">
             <span>Price</span>
             <span>Size</span>
           </div>
@@ -65,7 +65,7 @@ export function OrderBook({ book }: { book: OrderBook }) {
         </div>
         <div
           data-testid="order-book-spread"
-          className="flex shrink-0 items-center justify-between border-y border-border px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground"
+          className="flex shrink-0 items-center justify-between border-y border-border px-3 py-1.5 type-label text-muted-foreground"
         >
           <span>Spread</span>
           <Numeric value={book.spread} className="text-xs" />

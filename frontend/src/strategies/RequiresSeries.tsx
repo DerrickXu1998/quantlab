@@ -1,6 +1,6 @@
 import type { CatalogModel } from '../api/types';
 
-const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
+const MICRO = 'type-label text-muted-foreground';
 
 /**
  * The other instruments a rule reads — the macro gate's VIX and HY spread.

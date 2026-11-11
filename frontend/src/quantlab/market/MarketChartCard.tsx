@@ -178,7 +178,7 @@ export function MarketChartCard({
       {/* What the chart is, in words, before anyone has to hover. */}
       <dl
         data-testid="chart-facts"
-        className="flex shrink-0 flex-wrap gap-x-4 gap-y-1 border-b border-border px-3 py-1.5 font-mono text-[11px] tabular-nums"
+        className="flex shrink-0 flex-wrap gap-x-4 gap-y-1 border-b border-border px-3 py-1.5 type-data tabular-nums"
       >
         {historical ? (
           <>

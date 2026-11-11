@@ -6,7 +6,7 @@ import { StatusBadge } from '../components/ui/status-badge';
 import { formatDuration, type RunSize } from './barFrequency';
 import type { SECTION_IDS } from './StrategyBuilder';
 
-const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
+const MICRO = 'type-label text-muted-foreground';
 
 type Section = keyof typeof SECTION_IDS;
 
@@ -23,6 +23,7 @@ export function SubmitBar({
   onNameChange,
   saved,
   dirty,
+  pristine = false,
   saving,
   onSave,
   onSaveAsCopy,
@@ -46,6 +47,8 @@ export function SubmitBar({
   onNameChange: (name: string) => void;
   saved: boolean;
   dirty: boolean;
+  /** Nothing built yet: say what is missing on the button, not in red. */
+  pristine?: boolean;
   saving: boolean;
   onSave: () => void;
   onSaveAsCopy: () => void;
@@ -153,20 +156,30 @@ export function SubmitBar({
               data-testid="submit-warnings"
               title="Warnings do not stop a run. They say where its result may mislead."
               onClick={() => onJump('strategy')}
-              className="inline-flex items-center gap-1 rounded-sm border border-border px-1.5 py-px font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground hover:text-foreground"
+              className="inline-flex items-center gap-1 rounded-sm border border-border px-1.5 py-px type-label text-muted-foreground hover:text-foreground"
             >
               <TriangleAlert size={16} strokeWidth={1.5} aria-hidden="true" />
               {warningCount} warning{warningCount === 1 ? '' : 's'}
             </button>
           ) : null}
-          <Button type="submit" className="px-4" disabled={!canSubmit}>
+          <Button
+            type="submit"
+            className="px-4"
+            disabled={!canSubmit}
+            title={
+              canSubmit
+                ? undefined
+                : (blockers[0] ??
+                  (symbolsCount === 0 ? 'Add at least one ticker to the universe.' : undefined))
+            }
+          >
             <Play size={16} strokeWidth={1.5} aria-hidden="true" />
             {submitting ? 'Submitting…' : 'Submit backtest'}
           </Button>
         </div>
       </div>
 
-      {blockers.length > 0 || hasErrors || size.blocker || symbolsCount === 0 ? (
+      {!pristine && (blockers.length > 0 || hasErrors || size.blocker || symbolsCount === 0) ? (
         <ul
           role="alert"
           aria-label="What stops this run"

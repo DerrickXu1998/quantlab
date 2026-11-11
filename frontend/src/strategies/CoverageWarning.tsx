@@ -15,7 +15,7 @@ import {
 import type { Draft } from './strategyModel';
 import type { FundamentalsStatus } from './useFundamentals';
 
-const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
+const MICRO = 'type-label text-muted-foreground';
 
 /**
  * What the strategy cannot see, said before the run rather than after it.
@@ -176,7 +176,7 @@ export function CoverageWarning({
                   type="button"
                   onClick={() => onInspect(symbol)}
                   title={`Open ${symbol} in Research to see what it had filed`}
-                  className="border border-border px-1.5 py-px font-mono text-[11px] tracking-[0.06em] text-muted-foreground transition-colors hover:text-foreground"
+                  className="border border-border px-1.5 py-px type-data tracking-[0.06em] text-muted-foreground transition-colors hover:text-foreground"
                 >
                   {symbol}
                 </button>

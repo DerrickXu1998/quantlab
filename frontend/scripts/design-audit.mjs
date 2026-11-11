@@ -64,6 +64,12 @@ check('hard-coded colour', {
   why: 'One palette. Colours come from the tokens in styles.css, never inline.',
 });
 
+check('arbitrary font size', {
+  test: (l) => /\btext-\[\d+(?:\.\d+)?(?:px|rem|em)\]/.test(l),
+  skip: (f) => f.endsWith('styles.css'),
+  why: 'One type scale. Use a type-* role from styles.css or a stock Tailwind size.',
+});
+
 check('radius above 4px', {
   test: (l) => /\brounded-(?:lg|xl|2xl|3xl|full)\b/.test(l),
   why: 'Max border-radius 4px; no rounded-card cliches.',

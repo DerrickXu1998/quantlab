@@ -14,8 +14,8 @@ function PositionRow({ trade }: { trade: Trade }) {
 
   return (
     <tr className="border-t border-border">
-      <td className="px-3 py-1.5 font-mono text-[11px]">{trade.symbol}</td>
-      <td className="px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+      <td className="px-3 py-1.5 type-data">{trade.symbol}</td>
+      <td className="px-3 py-1.5 type-data text-muted-foreground">
         {trade.entry_date}
       </td>
       <td className="px-3 py-1.5 text-right">
@@ -67,7 +67,7 @@ export function PositionsTable({ trades }: { trades: Trade[] }) {
   return (
     <table data-testid="positions-table" className="w-full">
       <thead>
-        <tr className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+        <tr className="type-label text-muted-foreground">
           <th className="px-3 py-1.5 text-left font-normal">Symbol</th>
           <th className="px-3 py-1.5 text-left font-normal">Entry</th>
           <th className="px-3 py-1.5 text-right font-normal">Price</th>

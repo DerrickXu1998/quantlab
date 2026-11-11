@@ -6,7 +6,7 @@ import { Input, Select } from '../../components/ui/field';
 import { EmptyState } from '../chrome/EmptyState';
 import type { ConnectionLoad } from './useLiveConnection';
 
-const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
+const MICRO = 'type-label text-muted-foreground';
 
 type Mode = 'paper' | 'live';
 

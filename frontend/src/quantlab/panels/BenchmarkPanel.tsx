@@ -5,7 +5,7 @@ import { StatGrid } from '../../components/ui/layout';
 import { Numeric } from '../chrome/Numeric';
 import { Panel } from '../chrome/Panel';
 
-const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
+const MICRO = 'type-label text-muted-foreground';
 
 /** Below this many paired days the backend returns no regression at all. */
 const MIN_OBSERVATIONS = 60;

@@ -40,8 +40,8 @@ function RunRow({
         }`}
       >
         <span className="flex items-baseline justify-between gap-2">
-          <span className="truncate font-mono text-[11px]">{runDisplayName(run)}</span>
-          <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+          <span className="truncate type-data">{runDisplayName(run)}</span>
+          <span className="shrink-0 type-data text-muted-foreground">
             {run.created_at.slice(0, 10)}
           </span>
         </span>
@@ -90,7 +90,10 @@ export function RunsRail({
   onSelect: (runId: string) => void;
 }) {
   const { remove } = useRuns();
-  const [savedOnly, setSavedOnly] = useState(true);
+  // Saved runs are the default view, but only when there are some: opening
+  // on an empty "saved" list hides the runs that do exist.
+  const [filterChoice, setSavedOnly] = useState<boolean | null>(null);
+  const savedOnly = filterChoice ?? runs.some((run) => run.name);
   const [checked, setChecked] = useState<ReadonlySet<string>>(new Set());
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -161,7 +164,7 @@ export function RunsRail({
               type="button"
               aria-pressed={(option === 'saved') === savedOnly}
               onClick={() => setSavedOnly(option === 'saved')}
-              className={`px-2 py-1 font-mono text-[11px] uppercase tracking-[0.12em] transition-colors ${
+              className={`px-2 py-1 type-label transition-colors ${
                 (option === 'saved') === savedOnly
                   ? 'bg-primary/10 text-primary'
                   : 'bg-card text-muted-foreground hover:text-foreground'
@@ -175,7 +178,7 @@ export function RunsRail({
         {checked.size > 0 ? (
           <span
             data-testid="runs-selected-count"
-            className="font-mono text-[11px] text-muted-foreground"
+            className="type-data text-muted-foreground"
           >
             {checked.size} selected
           </span>
@@ -241,7 +244,7 @@ export function RunsRail({
             </p>
             <ul className="mt-3 min-h-0 flex-1 divide-y divide-border overflow-y-auto rounded-sm border border-border">
               {checkedRuns.map((run) => (
-                <li key={run.id} className="px-3 py-1.5 font-mono text-[11px]">
+                <li key={run.id} className="px-3 py-1.5 type-data">
                   {runDisplayName(run)}
                 </li>
               ))}

@@ -11,7 +11,7 @@ import { StatusBadge } from '../components/ui/status-badge';
 import { conceptCoverage, conceptLabel } from './fundamentals';
 import { canFillRole, roleRefusal } from './strategyModel';
 
-const MICRO = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
+const MICRO = 'type-label text-muted-foreground';
 
 /**
  * One signal, everything the registry says about it, and the three roles it
@@ -41,7 +41,7 @@ function SignalCard({
         <CardTitle className="truncate text-foreground">{model.name}</CardTitle>
         <span className="flex shrink-0 items-center gap-1.5">
           <StatusBadge tone="idle">{CATEGORY_LABELS[model.category]}</StatusBadge>
-          <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+          <span className="type-data tabular-nums text-muted-foreground">
             v{model.version}
           </span>
         </span>

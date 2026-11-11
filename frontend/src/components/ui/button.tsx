@@ -8,7 +8,7 @@ import { cn } from '../../lib/utils';
  * uppercase label, and the accent reserved for the primary action.
  */
 const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-sm border font-mono text-[11px] uppercase tracking-[0.12em] transition-colors focus-visible:outline-none focus-visible:border-primary disabled:cursor-not-allowed',
+  'inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-sm border type-control transition-colors focus-visible:outline-none focus-visible:border-primary disabled:cursor-not-allowed',
   {
     variants: {
       variant: {

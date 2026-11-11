@@ -26,9 +26,21 @@ describe('presetsFor', () => {
 });
 
 describe('AsOfControl', () => {
-  it('states what the date does, which is the point of the screen', () => {
-    render(<AsOfControl value="2026-09-21" onChange={vi.fn()} today="2026-09-21" />);
-    expect(screen.getByText(/nothing filed after it is shown/i)).toBeInTheDocument();
+  it('stays quiet until the server resolves to a different date', () => {
+    const { rerender } = render(
+      <AsOfControl value="2026-09-21" onChange={vi.fn()} today="2026-09-21" />,
+    );
+    expect(screen.queryByText(/resolved to/i)).not.toBeInTheDocument();
+
+    rerender(
+      <AsOfControl
+        value="2026-09-21"
+        resolved="2026-09-18"
+        onChange={vi.fn()}
+        today="2026-09-21"
+      />,
+    );
+    expect(screen.getByText(/resolved to 2026-09-18/i)).toBeInTheDocument();
   });
 
   it('moves the cut back on a preset', async () => {

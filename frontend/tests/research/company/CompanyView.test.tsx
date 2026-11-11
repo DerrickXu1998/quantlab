@@ -52,15 +52,10 @@ beforeEach(() => {
 });
 
 describe('CompanyView, before a name is chosen', () => {
-  it('says how the two controls relate, which the mode switcher above does not', async () => {
-    // The shell already names the mode and states its purpose. This line is the
-    // part specific to the view: both controls form one question, and moving
-    // either re-reads everything below.
+  it('opens on the two controls and one line asking for a company', async () => {
     renderView(null);
-    expect(screen.getByText(/two controls set the question/i)).toBeInTheDocument();
-    expect(
-      screen.getByText(/the same company on two dates is two different answers/i),
-    ).toBeInTheDocument();
+    expect(screen.getByRole('combobox')).toBeInTheDocument();
+    expect(screen.getByTestId('company-no-selection')).toHaveTextContent(/pick a company to begin/i);
   });
 
   it('names the first action instead of showing an empty workspace', async () => {

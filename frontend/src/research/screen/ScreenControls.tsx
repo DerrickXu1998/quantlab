@@ -8,7 +8,7 @@ import { CoverageLine } from './Coverage';
 import { echoBound, isFraction, type ConstraintDraft, type DraftErrors } from './constraints';
 import type { Universe } from '../../api/client';
 
-const LABEL = 'font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground';
+const LABEL = 'type-label text-muted-foreground';
 
 export interface ScreenControlsProps {
   universes: Universe[];
@@ -263,7 +263,7 @@ function ConstraintRow({
         dividing it by 100 behind the user's back is the one failure worse
         than an unlabelled box.
       */}
-      <p className="font-mono text-[11px] tabular-nums text-muted-foreground">
+      <p className="type-data tabular-nums text-muted-foreground">
         {isFraction(draft.metric) ? 'a fraction — 0.12 is 12%' : 'a plain number'}
         {minEcho || maxEcho ? (
           <span className="ml-1.5 text-foreground">
