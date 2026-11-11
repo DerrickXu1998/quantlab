@@ -1187,25 +1187,44 @@ class UniverseSnapshot:
         return sorted(self.members)
 
 
-def list_universes(wh: Warehouse) -> dict[str, Any]:
-    """Every snapshot of every universe, newest first.
+#: Where universes live (migration 011): the shared ones the data pipeline
+#: fills, and the ones a user published, which only that user can see. The
+#: pipeline looks shared snapshots up by name alone, so a private one must
+#: never sit in its table.
+_SHARED_UNIVERSES = ("universe_snapshots", "universe_members")
+_USER_UNIVERSES = ("user_universe_snapshots", "user_universe_members")
 
-    One row per *snapshot* rather than per universe: membership is dated, and
-    collapsing the dates would offer a list the caller cannot actually ask for.
-    ``size`` is counted from ``universe_members`` rather than read from
-    ``member_count``, which is a number written at ingest rather than the rows
-    themselves.
+
+def list_universes(wh: Warehouse, owner: str | None = None) -> dict[str, Any]:
+    """Every snapshot of every universe ``owner`` can see, newest first.
+
+    The shared universes, plus -- when ``owner`` is given -- the ones that user
+    published. One row per *snapshot* rather than per universe: membership is
+    dated, and collapsing the dates would offer a list the caller cannot
+    actually ask for. ``size`` is counted from the member rows rather than
+    read from ``member_count``, which is a number written at ingest rather
+    than the rows themselves.
+    """
+    shared = """
+        SELECT s.universe, s.snapshot_date, count(m.instrument_id)
+          FROM universe_snapshots s
+          LEFT JOIN universe_members m USING (snapshot_id)
+         GROUP BY s.universe, s.snapshot_date
+    """
+    own = """
+        SELECT s.universe, s.snapshot_date, count(m.instrument_id)
+          FROM user_universe_snapshots s
+          LEFT JOIN user_universe_members m USING (snapshot_id)
+         WHERE s.owner_id = %s
+         GROUP BY s.universe, s.snapshot_date
     """
     with wh.catalog() as conn:
-        rows = conn.execute(
-            """
-            SELECT s.universe, s.snapshot_date, count(m.instrument_id)
-              FROM universe_snapshots s
-              LEFT JOIN universe_members m USING (snapshot_id)
-             GROUP BY s.universe, s.snapshot_date
-             ORDER BY s.universe ASC, s.snapshot_date DESC
-            """
-        ).fetchall()
+        if owner is None:
+            rows = conn.execute(f"{shared} ORDER BY 1 ASC, 2 DESC").fetchall()
+        else:
+            rows = conn.execute(
+                f"{shared} UNION ALL {own} ORDER BY 1 ASC, 2 DESC", (owner,)
+            ).fetchall()
     items = [
         {"name": universe, "as_of": snapshot_date.isoformat(), "size": int(size)}
         for universe, snapshot_date, size in rows
@@ -1218,8 +1237,14 @@ def publish_universe(
     name: str,
     symbols: Sequence[str],
     snapshot_date: dt.date | str | None = None,
+    owner: str | None = None,
 ) -> dict[str, Any]:
     """Create a new universe snapshot from a list of canonical symbols.
+
+    With ``owner`` the snapshot is that user's alone. Without one it is
+    shared, which only the server itself does (the default "all" universe).
+    A user cannot take a shared universe's name: theirs would shadow it for
+    them alone, and the two would be indistinguishable in their list.
 
     Rejects unknown symbols and duplicate (name, date) snapshots. Membership
     is append-only by trigger, so a published snapshot cannot be edited later.
@@ -1238,28 +1263,52 @@ def publish_universe(
         raise ValueError("no symbols to publish")
 
     with wh.catalog() as conn:
-        existing = conn.execute(
-            "SELECT snapshot_id FROM universe_snapshots WHERE universe = %s AND snapshot_date = %s",
-            (name, snapshot_date),
-        ).fetchone()
+        if owner is None:
+            _, members_table = _SHARED_UNIVERSES
+            existing = conn.execute(
+                "SELECT snapshot_id FROM universe_snapshots "
+                "WHERE universe = %s AND snapshot_date = %s",
+                (name, snapshot_date),
+            ).fetchone()
+        else:
+            _, members_table = _USER_UNIVERSES
+            if conn.execute(
+                "SELECT 1 FROM universe_snapshots WHERE universe = %s LIMIT 1", (name,)
+            ).fetchone():
+                raise ValueError(f"{name!r} is a shared universe; publish under another name")
+            existing = conn.execute(
+                "SELECT snapshot_id FROM user_universe_snapshots "
+                "WHERE owner_id = %s AND universe = %s AND snapshot_date = %s",
+                (owner, name, snapshot_date),
+            ).fetchone()
         if existing is not None:
             raise ValueError(f"snapshot {name}@{snapshot_date} already exists")
 
-        row = conn.execute(
-            """
-            INSERT INTO universe_snapshots (universe, snapshot_date, source, member_count)
-            VALUES (%s, %s, %s, %s)
-            RETURNING snapshot_id
-            """,
-            (name, snapshot_date, "manual", len(ids)),
-        ).fetchone()
+        if owner is None:
+            row = conn.execute(
+                """
+                INSERT INTO universe_snapshots (universe, snapshot_date, source, member_count)
+                VALUES (%s, %s, %s, %s)
+                RETURNING snapshot_id
+                """,
+                (name, snapshot_date, "manual", len(ids)),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                INSERT INTO user_universe_snapshots
+                       (owner_id, universe, snapshot_date, member_count)
+                VALUES (%s, %s, %s, %s)
+                RETURNING snapshot_id
+                """,
+                (owner, name, snapshot_date, len(ids)),
+            ).fetchone()
         snapshot_id = row[0]
-        if ids:
-            with conn.cursor() as cur:
-                cur.executemany(
-                    "INSERT INTO universe_members (snapshot_id, instrument_id) VALUES (%s, %s)",
-                    [(snapshot_id, instrument_id) for instrument_id in ids.values()],
-                )
+        with conn.cursor() as cur:
+            cur.executemany(
+                f"INSERT INTO {members_table} (snapshot_id, instrument_id) VALUES (%s, %s)",
+                [(snapshot_id, instrument_id) for instrument_id in ids.values()],
+            )
 
     return {"name": name, "as_of": snapshot_date.isoformat(), "size": len(ids)}
 
@@ -1280,7 +1329,9 @@ def ensure_default_universe(wh: Warehouse) -> None:
         publish_universe(wh, "all", symbols)
 
 
-def resolve_universe(wh: Warehouse, universe: str, as_of: str) -> UniverseSnapshot | None:
+def resolve_universe(
+    wh: Warehouse, universe: str, as_of: str, owner: str | None = None
+) -> UniverseSnapshot | None:
     """The membership of ``universe`` as it stood on ``as_of``, or None.
 
     The newest snapshot captured on or before the date, which is the rule the
@@ -1288,28 +1339,42 @@ def resolve_universe(wh: Warehouse, universe: str, as_of: str) -> UniverseSnapsh
     today's membership is survivorship bias, and it flatters the result rather
     than breaking it, so nothing announces it.
 
+    A name ``owner`` published resolves to their own snapshots only -- never
+    to another user's, and never to a mix of theirs and a shared universe's
+    dates. Any other name resolves to the shared universe.
+
     None means no snapshot reaches that far back. The caller distinguishes "no
     such universe" from "no such date" because those need different answers,
     and neither is an empty result.
     """
     with wh.catalog() as conn:
+        owned = owner is not None and conn.execute(
+            "SELECT 1 FROM user_universe_snapshots WHERE owner_id = %s AND universe = %s LIMIT 1",
+            (owner, universe),
+        ).fetchone() is not None
+        if owned:
+            snapshots_table, members_table = _USER_UNIVERSES
+            scope, scope_params = " AND owner_id = %s", (owner,)
+        else:
+            snapshots_table, members_table = _SHARED_UNIVERSES
+            scope, scope_params = "", ()
         row = conn.execute(
-            """
+            f"""
             SELECT snapshot_id, snapshot_date
-              FROM universe_snapshots
-             WHERE universe = %s AND snapshot_date <= %s
+              FROM {snapshots_table}
+             WHERE universe = %s AND snapshot_date <= %s{scope}
              ORDER BY snapshot_date DESC
              LIMIT 1
             """,
-            (universe, as_of),
+            (universe, as_of, *scope_params),
         ).fetchone()
         if row is None:
             return None
         snapshot_id, snapshot_date = row
         members = conn.execute(
-            """
+            f"""
             SELECT i.symbol, i.name
-              FROM universe_members m
+              FROM {members_table} m
               JOIN instruments i USING (instrument_id)
              WHERE m.snapshot_id = %s
             """,
@@ -1917,8 +1982,12 @@ def screen(
     descending: bool = False,
     limit: int = 100,
     max_stale_days: int = fundamental_rules.DEFAULT_MAX_STALE_DAYS,
+    owner: str | None = None,
 ) -> dict[str, Any] | None:
     """Rank a named universe by filed ratios, as of a date. None if unresolved.
+
+    ``owner`` is the caller: a universe they published resolves to theirs
+    (see :func:`resolve_universe`), and nobody else's ever does.
 
     ``universe`` is not a convenience. ``fundamentals_pit_idx`` is
     ``(instrument_id, concept, filed_at)`` and leads with the instrument, so a
@@ -1932,7 +2001,7 @@ def screen(
     and one of them is a statement about companies while the other is a
     statement about the warehouse.
     """
-    snapshot = resolve_universe(wh, universe, as_of)
+    snapshot = resolve_universe(wh, universe, as_of, owner)
     if snapshot is None:
         return None
 

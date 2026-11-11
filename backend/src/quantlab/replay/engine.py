@@ -26,6 +26,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from quantlab.execution import ExecutionConfig, ExecutionSimulator
+from quantlab.execution.engine import mark_session
 from quantlab.research import performance
 from quantlab.research.runner import execution_config_for
 
@@ -273,7 +274,9 @@ def replay_events(
             realized_pnl=day.realized_pnl,
         )
         if day.closes:
-            curve.append(performance.EquityPoint(date=day.date, value=day.equity))
+            # In sessions, as the run's own curve is: per-bar marks would
+            # count an intraday run's bars as days and annualise them so.
+            mark_session(curve, day.date, day.equity, performance.EquityPoint)
 
     yield summary_event(run["id"], simulator, curve)
 
