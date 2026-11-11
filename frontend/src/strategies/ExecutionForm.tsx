@@ -5,8 +5,12 @@ import type {
   IntradayResolution,
   PositionSizing,
   PriceAdjustment,
+  RebalanceFrequency,
 } from '../api/types';
 import {
+  ALLOCATION_DEFAULTS,
+  ALLOCATION_FIELDS,
+  ALLOCATION_SIZING_MODES,
   FILL_TIMINGS,
   FILL_TIMING_EXPLAINERS,
   FILL_TIMING_LABELS,
@@ -18,7 +22,10 @@ import {
   PRICE_ADJUSTMENTS,
   PRICE_ADJUSTMENT_EXPLAINERS,
   PRICE_ADJUSTMENT_LABELS,
+  REBALANCE_FREQUENCIES,
+  REBALANCE_FREQUENCY_LABELS,
   SIZING_VALUE_MEANING,
+  isAllocationSizing,
 } from '../api/types';
 import { Input, Select } from '../components/ui/field';
 import { Term } from '../glossary/Term';
@@ -45,14 +52,55 @@ const SIZING_LABELS: Record<PositionSizing, string> = {
   fixed_fraction: 'Fixed fraction of equity',
   fixed_notional: 'Fixed cash per trade',
   volatility_target: 'Volatility target',
+  equal_active: 'Equal active weight',
+  signal_strength: 'Signal strength',
+  signal_inverse_volatility: 'Signal strength ÷ volatility',
 };
+
+const INDEPENDENT_SIZING_MODES = POSITION_SIZING_MODES.filter((mode) => !isAllocationSizing(mode));
 
 const SIZING_EXPLAINERS: Record<PositionSizing, string> = {
   equal_weight: 'Splits the book evenly across whatever is open at the time.',
   fixed_fraction: 'Commits the same share of current equity to every position.',
   fixed_notional: 'Commits the same cash amount every time, however the book has grown.',
   volatility_target: 'Sizes each position so its own volatility hits a target.',
+  equal_active:
+    'Portfolio allocation: every active signal gets the same target weight of one shared book, and open positions are resized as signals come and go.',
+  signal_strength:
+    'Portfolio allocation: target weights in proportion to each signal’s strength — the weighted share of entry components that agree — rebalanced across the shared book.',
+  signal_inverse_volatility:
+    'Portfolio allocation: target weights in proportion to signal strength divided by trailing volatility, so a quiet name gets more than a jumpy one with the same conviction.',
 };
+
+const REBALANCE_EXPLAINERS: Record<RebalanceFrequency, string> = {
+  on_signal:
+    'Targets are recomputed on any session where a signal opens, strengthens, weakens or closes an allocation.',
+  daily: 'Targets are recomputed every session, so price drift is traded back to target daily.',
+  weekly: 'Targets are recomputed on the first session of each week, and on nothing in between.',
+  monthly: 'Targets are recomputed on the first session of each month, and on nothing in between.',
+};
+
+/**
+ * The config after switching sizing mode, with every value the new mode would
+ * not read dropped: a stale number left behind would be recorded on the run as
+ * if it had an effect, and a legacy mode refuses the allocation fields
+ * outright. Between allocation modes the shared settings carry over, because
+ * all three read them.
+ */
+export function withSizingMode(value: ExecutionConfig, mode: PositionSizing): ExecutionConfig {
+  const next: ExecutionConfig = { ...value, position_sizing: mode };
+  if (SIZING_VALUE_MEANING[mode] === undefined) {
+    next.sizing_value = null;
+  } else if (mode !== value.position_sizing) {
+    // Each mode reads the value differently (cash, a fraction of equity, a
+    // target volatility), so another mode's number is never carried over.
+    next.sizing_value = mode === 'fixed_notional' ? 10000 : 0.2;
+  }
+  if (!isAllocationSizing(mode)) {
+    for (const field of ALLOCATION_FIELDS) delete next[field];
+  }
+  return next;
+}
 
 const COST_PROFILES = {
   idealized: { commission_bps: 0, slippage_bps: 0 },
@@ -83,9 +131,22 @@ function toFraction(percentValue: number): number {
   return Number((percentValue / 100).toFixed(8));
 }
 
-function toPercentString(fraction: number | null): string {
-  if (fraction === null) return '';
+function toPercentString(fraction: number | null | undefined): string {
+  if (fraction === null || fraction === undefined) return '';
   return String(Number((fraction * 100).toFixed(6)));
+}
+
+/** Blank means "off", not zero: a 0% stop would exit instantly. */
+function optionalNumber(raw: string): number | null {
+  if (raw.trim() === '') return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/** A percent typed on screen as its fraction; blank is the backend's default. */
+function optionalFraction(raw: string): number | null {
+  const parsed = optionalNumber(raw);
+  return parsed === null ? null : toFraction(parsed);
 }
 
 function Section({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
@@ -142,14 +203,8 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
   // Set from the Universe & window panel; here it only rules options out.
   const intradayBars = (value.bar_frequency ?? '1d') !== '1d';
 
-  /** Blank means "off", not zero: a 0% stop would exit instantly. */
-  const optionalNumber = (raw: string): number | null => {
-    if (raw.trim() === '') return null;
-    const parsed = Number(raw);
-    return Number.isFinite(parsed) ? parsed : null;
-  };
-
   const sizingMeaning = SIZING_VALUE_MEANING[value.position_sizing];
+  const allocation = isAllocationSizing(value.position_sizing);
 
   return (
     <div className="space-y-4" data-testid="execution-form">
@@ -186,24 +241,24 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
               id={id}
               aria-describedby={describedBy}
               value={value.position_sizing}
-              onChange={(event) => {
-                const mode = event.target.value as PositionSizing;
-                // Dropping the value when the mode stops reading it keeps a
-                // stale number from being recorded as if it had an effect.
-                patch({
-                  position_sizing: mode,
-                  sizing_value:
-                    SIZING_VALUE_MEANING[mode] === undefined
-                      ? null
-                      : (value.sizing_value ?? (mode === 'fixed_notional' ? 10000 : 0.2)),
-                });
-              }}
+              onChange={(event) =>
+                onChange(withSizingMode(value, event.target.value as PositionSizing))
+              }
             >
-              {POSITION_SIZING_MODES.map((mode) => (
-                <option key={mode} value={mode}>
-                  {SIZING_LABELS[mode]}
-                </option>
-              ))}
+              <optgroup label="Independent sizing">
+                {INDEPENDENT_SIZING_MODES.map((mode) => (
+                  <option key={mode} value={mode}>
+                    {SIZING_LABELS[mode]}
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label="Portfolio allocation (shared capital)">
+                {ALLOCATION_SIZING_MODES.map((mode) => (
+                  <option key={mode} value={mode}>
+                    {SIZING_LABELS[mode]}
+                  </option>
+                ))}
+              </optgroup>
             </Select>
           )}
         </Field>
@@ -234,7 +289,11 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
         <Field
           label="Max positions"
           term="max_positions"
-          explainer="Cap on how many positions may be open at once. Blank means no cap, and a wide signal can then take the whole book."
+          explainer={
+            allocation
+              ? 'Cap on how many names hold a target at once: the strongest signals are chosen, ties by symbol. Blank means every active signal shares the book.'
+              : 'Cap on how many positions may be open at once. Blank means no cap, and a wide signal can then take the whole book.'
+          }
         >
           {({ id, describedBy }) => (
             <Input
@@ -253,7 +312,11 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
         <Field
           label="Max position size"
           term="max_position_pct"
-          explainer="Ceiling for any single name, as a share of equity. 100% allows one position to be the entire book."
+          explainer={
+            allocation
+              ? 'Ceiling on any one target weight, as a share of equity. Weight cut by the cap goes to the uncapped names; what none can take stays in cash.'
+              : 'Ceiling for any single name, as a share of equity. 100% allows one position to be the entire book.'
+          }
           suffix="%"
         >
           {({ id, describedBy }) => (
@@ -272,6 +335,8 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
           )}
         </Field>
       </Section>
+
+      {allocation ? <AllocationSection value={value} patch={patch} /> : null}
 
       <Section
         title="Entry & exit timing"
@@ -705,6 +770,168 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
         </Field>
       </Section>
     </div>
+  );
+}
+
+/**
+ * The settings only the shared-capital modes read, shown only under them.
+ *
+ * The explainer leads because the behaviour is the surprising part: under
+ * these modes a signal on one name can shrink a position in another, which
+ * independent sizing never does.
+ */
+function AllocationSection({
+  value,
+  patch,
+}: {
+  value: ExecutionConfig;
+  patch: (next: Partial<ExecutionConfig>) => void;
+}) {
+  const frequency = value.rebalance_frequency ?? ALLOCATION_DEFAULTS.rebalance_frequency;
+  return (
+    <Section title="Portfolio allocation">
+      <p data-testid="allocation-explainer" className="text-xs text-muted-foreground sm:col-span-2">
+        These modes share one pool of capital. Every active signal holds a target weight and the
+        book is rebalanced toward those targets, so a new or stronger signal on one name can trim
+        positions in others, and a weaker one is partially reduced rather than closed. Independent
+        sizing such as equal weight gives each position its own sleeve, sized once at entry and
+        never resized by other signals.
+      </p>
+
+      <Field
+        label="Target exposure"
+        term="target_exposure"
+        explainer="Gross exposure the target weights add up to, as a share of equity (longs plus shorts). The rest stays in cash. Blank means 100%."
+        suffix="%"
+      >
+        {({ id, describedBy }) => (
+          <Input
+            id={id}
+            type="number"
+            min={0}
+            max={100}
+            step="any"
+            placeholder="100"
+            data-testid="execution-target-exposure"
+            aria-describedby={describedBy}
+            value={toPercentString(value.target_exposure)}
+            onChange={(event) => patch({ target_exposure: optionalFraction(event.target.value) })}
+          />
+        )}
+      </Field>
+
+      <Field
+        label="Min allocation score"
+        term="allocation_score"
+        explainer="Signals whose strength (the weighted share of entry components that agree) is below this get no allocation. Blank means every eligible signal counts."
+        suffix="%"
+      >
+        {({ id, describedBy }) => (
+          <Input
+            id={id}
+            type="number"
+            min={0}
+            max={100}
+            step="any"
+            placeholder="0"
+            data-testid="execution-min-allocation-score"
+            aria-describedby={describedBy}
+            value={toPercentString(value.min_allocation_score)}
+            onChange={(event) =>
+              patch({ min_allocation_score: optionalFraction(event.target.value) })
+            }
+          />
+        )}
+      </Field>
+
+      {value.position_sizing === 'signal_inverse_volatility' ? (
+        <Field
+          label="Volatility lookback"
+          term="realised_volatility"
+          explainer="Bars of history each name's realised volatility is measured over. It is the same setting as the ATR period, so an ATR stop measures over it too. A name without enough history gets no allocation."
+          suffix="bars"
+        >
+          {({ id, describedBy }) => (
+            <Input
+              id={id}
+              type="number"
+              min={2}
+              step="1"
+              data-testid="execution-volatility-lookback"
+              aria-describedby={describedBy}
+              value={String(value.atr_period)}
+              onChange={(event) => patch({ atr_period: Number(event.target.value) })}
+            />
+          )}
+        </Field>
+      ) : null}
+
+      <Field label="Rebalance" term="rebalance" explainer={REBALANCE_EXPLAINERS[frequency]} full>
+        {({ id, describedBy }) => (
+          <Select
+            id={id}
+            aria-describedby={describedBy}
+            data-testid="execution-rebalance-frequency"
+            value={frequency}
+            onChange={(event) =>
+              patch({ rebalance_frequency: event.target.value as RebalanceFrequency })
+            }
+          >
+            {REBALANCE_FREQUENCIES.map((option) => (
+              <option key={option} value={option}>
+                {REBALANCE_FREQUENCY_LABELS[option]}
+              </option>
+            ))}
+          </Select>
+        )}
+      </Field>
+
+      <Field
+        label="Rebalance threshold"
+        term="rebalance_threshold"
+        explainer="A position is traded only when its weight is at least this far from target, so small drifts do not pay costs. Exits are never held back by it. Blank means 0%."
+        suffix="%"
+      >
+        {({ id, describedBy }) => (
+          <Input
+            id={id}
+            type="number"
+            min={0}
+            max={100}
+            step="any"
+            placeholder="0"
+            data-testid="execution-rebalance-threshold"
+            aria-describedby={describedBy}
+            value={toPercentString(value.rebalance_threshold)}
+            onChange={(event) =>
+              patch({ rebalance_threshold: optionalFraction(event.target.value) })
+            }
+          />
+        )}
+      </Field>
+
+      <Field
+        label="Max turnover"
+        term="max_turnover"
+        explainer="Most one rebalance may trade, as the sum of weight changes: 200% sells the whole book and buys a new one. A larger rebalance is scaled down in proportion; exits are never held back. Blank means no cap."
+        suffix="%"
+      >
+        {({ id, describedBy }) => (
+          <Input
+            id={id}
+            type="number"
+            min={0}
+            max={200}
+            step="any"
+            placeholder="no cap"
+            data-testid="execution-max-turnover"
+            aria-describedby={describedBy}
+            value={toPercentString(value.max_turnover)}
+            onChange={(event) => patch({ max_turnover: optionalFraction(event.target.value) })}
+          />
+        )}
+      </Field>
+    </Section>
   );
 }
 

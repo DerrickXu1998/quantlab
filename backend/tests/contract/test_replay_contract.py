@@ -207,6 +207,67 @@ def test_stream_of_an_unknown_run_is_404(client):
     assert set(SCHEMAS["Error"]["required"]) <= set(response.json())
 
 
+@pytest.fixture(scope="module")
+def allocation_run(client):
+    """A stored signal-strength run whose decisions carry ``_score``."""
+    symbols = [
+        item["symbol"] for item in client.get("/api/v1/instruments").json()["items"][:3]
+    ]
+    strategy = {
+        "name": "Scored",
+        "description": "",
+        "components": [
+            {
+                "rule_name": "rsi-threshold", "role": "entry", "weight": 1.0,
+                "parameters": {"oversold": 45.0},
+            },
+            {
+                "rule_name": "sma-crossover", "role": "entry", "weight": 3.0,
+                "parameters": {"fast": 5, "slow": 20},
+            },
+            {"rule_name": "rsi-threshold", "role": "exit", "parameters": {"overbought": 60.0}},
+        ],
+        "entry_logic": "any",
+        "exit_logic": "any",
+        "execution": {
+            "position_sizing": "signal_strength", "stop_loss_pct": 0.08,
+            "rebalance_frequency": "weekly", "max_turnover": 1.0,
+        },
+    }
+    created = client.post(
+        "/api/v1/runs",
+        json={
+            "strategy": strategy, "symbols": symbols,
+            "start_date": "2024-01-01", "end_date": "2024-12-31",
+        },
+    )
+    assert created.status_code == 201, created.text
+    return created.json()
+
+
+def test_a_stored_allocation_run_replays_identically(client, allocation_run):
+    run_id = allocation_run["id"]
+    signals = client.get(f"/api/v1/runs/{run_id}").json()["signals"]
+    assert any("_score" in s["trigger_values"] for s in signals)
+
+    first = _frames(client.get(f"/api/v1/runs/{run_id}/replay/stream"))
+    second = _frames(client.get(f"/api/v1/runs/{run_id}/replay/stream"))
+    assert first == second  # deterministic, fill for fill
+
+    fills = [f for f in first if f["event"] == "fill"]
+    assert "rebalance" in {f["reason"] for f in fills}
+    # The fill sides of a long-only shared-capital book.
+    assert {f["side"] for f in fills} <= {"buy", "sell"}
+
+    performance = client.get(f"/api/v1/runs/{run_id}/performance").json()
+    replayed = [(f["date"], f["equity"]) for f in first if f["event"] == "equity"]
+    assert replayed == [(p["date"], p["value"]) for p in performance["equity"]]
+
+    summary = client.get(f"/api/v1/runs/{run_id}/replay/summary").json()
+    assert summary["trade_count"] == performance["metrics"]["trade_count"]
+    assert summary["exit_reasons"] == performance["exit_reasons"]
+
+
 def test_the_contract_documents_the_event_stream():
     stream = SPEC["paths"]["/runs/{run_id}/replay/stream"]["get"]
     assert "text/event-stream" in stream["responses"]["200"]["content"]

@@ -1,5 +1,12 @@
 import type { ExecutionConfig } from '../api/types';
-import { DEFAULT_EXECUTION, FILL_TIMING_SHORT } from '../api/types';
+import {
+  ALLOCATION_DEFAULTS,
+  ALLOCATION_SIZING_SHORT as ALLOCATION_SHORT,
+  DEFAULT_EXECUTION,
+  FILL_TIMING_SHORT,
+  isAllocationSizing,
+  resolveAllocation,
+} from '../api/types';
 import type { PriceAdjustment } from '../api/types';
 
 const ADJUSTMENT_SHORT: Record<PriceAdjustment, string> = {
@@ -22,6 +29,37 @@ export interface SummaryItem {
 
 function pct(fraction: number): string {
   return `${Number((fraction * 100).toFixed(4))}%`;
+}
+
+/**
+ * An allocation mode and each of its settings that is off the backend default,
+ * as short chips. Empty for the independent modes. Shared by the builder's
+ * summary and a run's provenance line, so both read the same config the same
+ * way.
+ */
+export function allocationChips(execution: ExecutionConfig): { key: string; text: string }[] {
+  if (!isAllocationSizing(execution.position_sizing)) return [];
+  const allocation = resolveAllocation(execution);
+  const chips = [
+    { key: 'position_sizing', text: `${ALLOCATION_SHORT[execution.position_sizing]} allocation` },
+  ];
+  const add = (key: string, text: string) => chips.push({ key, text });
+  if (allocation.target_exposure !== ALLOCATION_DEFAULTS.target_exposure) {
+    add('target_exposure', `${pct(allocation.target_exposure)} gross exposure`);
+  }
+  if (allocation.min_allocation_score !== ALLOCATION_DEFAULTS.min_allocation_score) {
+    add('min_allocation_score', `score ≥ ${pct(allocation.min_allocation_score)}`);
+  }
+  if (allocation.rebalance_frequency !== ALLOCATION_DEFAULTS.rebalance_frequency) {
+    add('rebalance_frequency', `rebalance ${allocation.rebalance_frequency}`);
+  }
+  if (allocation.rebalance_threshold !== ALLOCATION_DEFAULTS.rebalance_threshold) {
+    add('rebalance_threshold', `rebalance drift ≥ ${pct(allocation.rebalance_threshold)}`);
+  }
+  if (allocation.max_turnover !== null) {
+    add('max_turnover', `turnover ≤ ${pct(allocation.max_turnover)} a rebalance`);
+  }
+  return chips;
 }
 
 /**
@@ -65,6 +103,8 @@ export function executionSummary(execution: ExecutionConfig): SummaryItem[] {
   if (execution.max_volume_participation !== null) {
     push('order_expiry_days', `order expiry ${execution.order_expiry_days} days`);
   }
+  // Changed by definition: no default config carries an allocation mode.
+  for (const chip of allocationChips(execution)) items.push({ ...chip, changed: true });
   if (execution.max_positions !== null) push('max_positions', `max ${execution.max_positions} positions`);
   if (execution.max_position_pct !== d.max_position_pct) {
     push('max_position_pct', `max ${pct(execution.max_position_pct)} a position`);

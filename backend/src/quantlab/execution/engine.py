@@ -29,6 +29,8 @@ bar.
 
 from __future__ import annotations
 
+import datetime as _dt
+import math
 from collections import deque
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -38,6 +40,12 @@ import numpy as np
 
 from quantlab.execution.adjustments import CorporateAction, applies
 from quantlab.execution.adjustments import factors as adjustment_factors
+from quantlab.execution.allocation import (
+    AllocationSignal,
+    plan_rebalance,
+    signal_score,
+    target_weights,
+)
 from quantlab.execution.bars import BarSeries, column, unit_of
 from quantlab.execution.config import (
     BPS,
@@ -249,6 +257,13 @@ class _PendingOrder:
     reason: str = "signal"
     protective: bool = False
     started: bool = False
+    #: The quantity is a fixed target (a rebalance order), not a request to
+    #: size afresh: later fills take ``min(remaining_qty, capacity)`` and never
+    #: re-size from that session's equity or price.
+    frozen_qty: bool = False
+    #: The open leg of a rebalance reversal: its own close leg is not an exit
+    #: the cooldown should wait out.
+    reversal: bool = False
 
 
 @dataclass
@@ -414,6 +429,18 @@ class ExecutionSimulator:
             0,
         )
 
+        #: Portfolio allocation (the shared-capital sizing modes); None for
+        #: every legacy mode, which then never touches any state below.
+        self._allocation = self.config.allocation()
+        #: symbol -> (direction +1/-1, score); NaN marks an invalid score.
+        self._alloc_state: dict[str, tuple[int, float]] = {}
+        #: on_signal: the state changed since the last rebalance.
+        self._rebalance_due = False
+        #: weekly/monthly/daily: the period of the last session seen.
+        self._last_period: Any = None
+        #: Each symbol's latest bar index, for the causal volatility read.
+        self._last_index: dict[str, int] = {}
+
         self._atr = self._precompute_atr()
         self._vol = self._precompute_volatility()
 
@@ -433,7 +460,7 @@ class ExecutionSimulator:
                     symbol: self._seed_atr_state(bars)
                     for symbol, bars in self.bars_by_symbol.items()
                 }
-            if self.config.position_sizing == "volatility_target":
+            if self._needs_volatility():
                 self._vol_state = {
                     symbol: self._seed_vol_state(bars)
                     for symbol, bars in self.bars_by_symbol.items()
@@ -473,6 +500,13 @@ class ExecutionSimulator:
 
     # -- precomputation ----------------------------------------------------
 
+    def _needs_volatility(self) -> bool:
+        """Whether sizing reads the trailing realised volatility series."""
+        return self.config.position_sizing in (
+            "volatility_target",
+            "signal_inverse_volatility",
+        )
+
     def _precompute_atr(self) -> dict[str, np.ndarray]:
         if self.config.atr_stop_multiple is None:
             return {}
@@ -497,7 +531,7 @@ class ExecutionSimulator:
         uses -- one risk horizon rather than two that can be tuned against each
         other.
         """
-        if self.config.position_sizing != "volatility_target":
+        if not self._needs_volatility():
             return {}
         window = self.config.atr_period
         out: dict[str, np.ndarray] = {}
@@ -651,7 +685,17 @@ class ExecutionSimulator:
         *,
         qty_limit: float = float("inf"),
         request: bool = False,
+        qty: float | None = None,
+        reason: str = "signal",
+        reversal: bool = False,
     ) -> Fill | None:
+        """Open or add to a position.
+
+        ``qty`` given is an explicit target quantity (a rebalance order): it
+        bypasses :meth:`_size` but is still capped by the cash available,
+        the session's volume capacity and ``qty_limit``, and pays the same
+        costs. Left ``None``, the configured sizing mode decides.
+        """
         config = self.config
         position = self._positions.get(symbol)
         if (
@@ -663,6 +707,10 @@ class ExecutionSimulator:
             return None
         if position is None and config.cooldown_days:
             last_exit = self._last_exit_index.get(symbol)
+            # A reversal's open follows its own close on the same session;
+            # that close is a change of side, not an exit to cool down from.
+            if reversal and last_exit == index:
+                last_exit = None
             if (
                 last_exit is not None
                 and self._sessions_between(symbol, last_exit, index) < config.cooldown_days
@@ -672,9 +720,23 @@ class ExecutionSimulator:
 
         action = "buy" if side == "long" else "short"
         fill_price = self._slipped(price, action)
-        target_qty = self._size(symbol, fill_price, index)
+        if qty is None:
+            target_qty = self._size(symbol, fill_price, index)
+            requested_qty = target_qty
+        else:
+            if position is not None and position.side != side:
+                # A reversal closes the old side first; it is never netted here.
+                return None
+            available = self._available(symbol)
+            target_qty = (
+                min(float(qty), available / fill_price)
+                if qty > 0 and available > 0 and fill_price > 0
+                else 0.0
+            )
+            # The target is what was asked for, even where cash falls short.
+            requested_qty = max(0.0, min(float(qty), qty_limit))
         if request:
-            self._requested_notional += target_qty * fill_price
+            self._requested_notional += requested_qty * fill_price
         if target_qty <= 0:
             self._counters["rejected_no_cash"] += 1
             return None
@@ -723,7 +785,7 @@ class ExecutionSimulator:
         fill = Fill(
             date=date, symbol=symbol, side=action, qty=qty, price=fill_price,
             value=notional, commission=commission, slippage=slippage,
-            realized_pnl=0.0, reason="signal",
+            realized_pnl=0.0, reason=reason,
         )
         self.fills.append(fill)
         self._counters["fills"] += 1
@@ -788,7 +850,8 @@ class ExecutionSimulator:
         action = "sell" if position.side == "long" else "cover"
         fill_price = self._slipped(price, action)
         if request:
-            self._requested_notional += position.qty * fill_price
+            # A partial close requests only the part it asks for.
+            self._requested_notional += min(position.qty, qty_limit) * fill_price
         capacity = self._capacity(self.bars_by_symbol[symbol][index])
         qty = min(position.qty, qty_limit, capacity)
         if capacity < position.qty and capacity < qty_limit:
@@ -1158,6 +1221,8 @@ class ExecutionSimulator:
             if outcome is not None:
                 reason, price = outcome
                 self._pending = [o for o in self._pending if o.symbol != symbol]
+                if self._allocation is not None:
+                    self._clear_allocation(symbol)
                 order = _PendingOrder(
                     symbol=symbol, kind="close", direction="", signal_date=date,
                     remaining_qty=position.qty, created_index=index, at_open=True,
@@ -1175,13 +1240,18 @@ class ExecutionSimulator:
         # 2b. Orders queued for a later price fill after the session's protective checks.
         fills_today.extend(self._drain_pending(date, bars_today, indices, at_open=False))
 
-        # 3 and 4. Today's decisions: closers first, then openers.
-        for decision in sorted(
-            decisions_today, key=lambda d: (_KIND_ORDER.get(d.kind, 9), d.symbol)
-        ):
-            fill = self._apply(decision, date, bars_today, indices)
-            if fill is not None:
-                fills_today.append(fill)
+        # 3 and 4. Today's decisions: closers first, then openers. Under
+        # portfolio allocation the decisions update the allocation state and
+        # a rebalance trades toward it instead (see :meth:`_allocate`).
+        if self._allocation is None:
+            for decision in sorted(
+                decisions_today, key=lambda d: (_KIND_ORDER.get(d.kind, 9), d.symbol)
+            ):
+                fill = self._apply(decision, date, bars_today, indices)
+                if fill is not None:
+                    fills_today.append(fill)
+        else:
+            fills_today.extend(self._allocate(date, decisions_today, bars_today, indices))
 
         # The trailing stop advances only after the bar has been tested, so
         # today's close can never have set today's own trigger.
@@ -1302,6 +1372,8 @@ class ExecutionSimulator:
                 fill = self._open(
                     date, order.symbol, side, price, index, at_open=order.at_open,
                     qty_limit=order.remaining_qty, request=not order.started,
+                    qty=order.remaining_qty if order.frozen_qty else None,
+                    reason=order.reason, reversal=order.reversal,
                 )
             order.started = True
             if fill is not None:
@@ -1309,7 +1381,11 @@ class ExecutionSimulator:
                 order.remaining_qty -= fill.qty
             if order.remaining_qty <= 1e-9:
                 continue
-            if fill is None and self._capacity(bar) > 0.0:
+            if (
+                fill is None
+                and self._capacity(bar) > 0.0
+                and not self._waits_for_reversal(order)
+            ):
                 continue
             expired = (
                 not order.protective
@@ -1407,6 +1483,332 @@ class ExecutionSimulator:
         elif self._capacity(bar) == 0.0:
             self._queue_remainder(order, 0.0)
         return fill
+
+    # -- portfolio allocation ----------------------------------------------
+    #
+    # The shared-capital modes (equal_active, signal_strength,
+    # signal_inverse_volatility). Decisions do not trade directly: they keep
+    # an allocation state, {symbol: (direction, score)}, and a rebalance
+    # trades the book toward the target weights that state implies. Legacy
+    # modes never reach any of this (``self._allocation`` is None), so their
+    # results are byte-for-byte what they were.
+    #
+    # Pending orders and a new rebalance:
+    #
+    # * A strategy or protective exit cancels every pending order on that
+    #   symbol and closes it in full (reason "signal", or the protective
+    #   reason), whatever the schedule.
+    # * A rebalance cancels every not-yet-filled "rebalance" order, on every
+    #   symbol, and replaces them with the new plan's orders: the plan is
+    #   computed from what is actually held, so a stale order would trade
+    #   the same change twice.
+    # * A symbol with an exit still in flight (a deferred or volume-limited
+    #   close) is left out of the rebalance until that close completes.
+
+    def _waits_for_reversal(self, order: _PendingOrder) -> bool:
+        """A frozen open blocked only because its reversal's close has not
+        finished (capacity) waits rather than being dropped."""
+        if not (order.frozen_qty and order.kind == "open"):
+            return False
+        position = self._positions.get(order.symbol)
+        side = "long" if order.direction == "bullish" else "short"
+        return position is not None and position.side != side
+
+    def _clear_allocation(self, symbol: str) -> None:
+        """A strategy or protective exit: the symbol leaves the allocation."""
+        if self._alloc_state.pop(symbol, None) is not None:
+            self._rebalance_due = True
+
+    def _period_key(self, date: str) -> Any:
+        """Which rebalance period a session falls in, from its own date only."""
+        frequency = self._allocation.frequency
+        day = date[:10]
+        if frequency in ("on_signal", "daily"):
+            return day
+        try:
+            parsed = _dt.date.fromisoformat(day)
+        except ValueError as exc:
+            raise ValueError(
+                f"rebalance_frequency {frequency!r} needs ISO dates, got {date!r}"
+            ) from exc
+        if frequency == "weekly":
+            return tuple(parsed.isocalendar())[:2]
+        return day[:7]
+
+    def _update_allocation(self, decision: Decision, indices: dict[str, int]) -> None:
+        symbol = decision.symbol
+        if symbol not in self._sleeve_cash:
+            return  # not in this run's selection
+        sign = 1 if decision.direction == "bullish" else -1
+        position = self._positions.get(symbol)
+        state = self._alloc_state.get(symbol)
+
+        if decision.kind in ("exit", "both"):
+            exits_position = position is not None and (position.side == "long") != (sign > 0)
+            exits_state = state is not None and state[0] != sign
+            if exits_position or exits_state:
+                if exits_position:
+                    index = indices.get(symbol)
+                    if (
+                        index is not None
+                        and self._sessions_between(symbol, position.entry_index, index)
+                        < self.config.min_holding_days
+                    ):
+                        return  # too soon to exit; as under the legacy modes
+                self._clear_allocation(symbol)
+                # A mandatory exit replaces any pending order on the symbol;
+                # a strategy or protective close already in flight is left
+                # to finish rather than placed again.
+                self._pending = [
+                    o for o in self._pending
+                    if o.symbol != symbol or (o.kind == "close" and o.reason != "rebalance")
+                ]
+                # A ``both`` decision that closes does not also open: one rule
+                # wearing both hats, exactly as under the legacy modes.
+                return
+            if decision.kind == "exit":
+                return  # nothing to exit
+
+        if sign < 0 and not self.config.allow_shorts:
+            self._counters["rejected_shorts_disabled"] += 1
+            return
+        score = signal_score(decision.trigger_values)
+        value = (sign, math.nan if score is None else score)
+        unchanged = (
+            state is not None
+            and state[0] == value[0]
+            and (state[1] == value[1] or (math.isnan(state[1]) and math.isnan(value[1])))
+        )
+        if not unchanged:
+            self._alloc_state[symbol] = value
+            self._rebalance_due = True
+
+    def _volatility_at(self, symbol: str) -> float | None:
+        """The causal volatility at the symbol's latest bar, or None."""
+        series = self._vol.get(symbol)
+        index = self._last_index.get(symbol)
+        if series is None or index is None or index >= len(series):
+            return None
+        value = float(series[index])
+        return value if math.isfinite(value) else None
+
+    def _submit(
+        self,
+        date: str,
+        symbol: str,
+        kind: str,
+        side: str,
+        qty: float,
+        reason: str,
+        bar: Any,
+        index: int,
+        *,
+        reversal: bool = False,
+    ) -> Fill | None:
+        """Create one frozen-quantity order, and fill it now or queue it."""
+        config = self.config
+        self._counters["orders"] += 1
+        order = _PendingOrder(
+            symbol=symbol, kind=kind,
+            direction="bullish" if side == "long" else "bearish",
+            signal_date=date, remaining_qty=qty, created_index=index,
+            at_open=config.fill_timing == "next_open", reason=reason,
+            frozen_qty=True, reversal=reversal,
+        )
+        if config.fill_timing in DEFERRED_FILL_TIMING:
+            self._pending.append(order)
+            return None
+        order.started = True
+        price = float(bar.close)
+        if kind == "close":
+            fill = self._close(date, symbol, price, index, reason, qty_limit=qty, request=True)
+        else:
+            # Only a volume-limited part carries over; a cash shortfall is
+            # not an order to buy the rest later.
+            fill_price = self._slipped(price, "buy" if side == "long" else "short")
+            available = self._available(symbol)
+            order.remaining_qty = (
+                min(qty, available / fill_price) if available > 0 and fill_price > 0 else 0.0
+            )
+            fill = self._open(
+                date, symbol, side, price, index, at_open=False, request=True,
+                qty=qty, reason=reason, reversal=reversal,
+            )
+        if fill is not None:
+            self._queue_remainder(order, fill.qty)
+        elif self._capacity(bar) == 0.0 or self._waits_for_reversal(order):
+            self._queue_remainder(order, 0.0)
+        return fill
+
+    def _allocate(
+        self,
+        date: str,
+        decisions_today: list[Decision],
+        bars_today: dict[str, Any],
+        indices: dict[str, int],
+    ) -> list[Fill]:
+        """Steps 3 and 4 under portfolio allocation.
+
+        1. Update the allocation state from today's decisions (exits first).
+        2. Close, in full, every held name the strategy has exited -- every
+           session, whatever the schedule (reason "signal").
+        3. On a rebalance session: target weights from the state, with equity
+           and closes as they stand after step 2; then reductions and closes,
+           then increases, each a frozen-quantity order with reason
+           "rebalance".
+        """
+        settings = self._allocation
+        config = self.config
+        fills: list[Fill] = []
+        for symbol, index in indices.items():
+            self._last_index[symbol] = index
+        for decision in sorted(
+            decisions_today, key=lambda d: (_KIND_ORDER.get(d.kind, 9), d.symbol)
+        ):
+            self._update_allocation(decision, indices)
+
+        rebalance = False
+        if bars_today:
+            if settings.frequency == "on_signal":
+                rebalance = self._rebalance_due
+            else:
+                period = self._period_key(date)
+                rebalance = period != self._last_period
+                self._last_period = period
+
+        # Mandatory exits: held, no longer allocated, nothing closing it yet.
+        decided = {d.symbol for d in decisions_today}
+        in_flight = {
+            o.symbol for o in self._pending if o.kind == "close" and o.reason != "rebalance"
+        }
+        mandatory: set[str] = set()
+        submitted: set[str] = set()
+        for symbol in sorted(self._positions):
+            if symbol in self._alloc_state or symbol in in_flight:
+                continue
+            mandatory.add(symbol)
+            bar = bars_today.get(symbol)
+            if bar is None:
+                if symbol in decided:
+                    self._counters["dropped_no_bar"] += 1
+                continue
+            submitted.add(symbol)
+        if submitted:
+            self._pending = [o for o in self._pending if o.symbol not in submitted]
+        for symbol in sorted(submitted):
+            bar = bars_today[symbol]
+            position = self._positions[symbol]
+            fill = self._submit(
+                date, symbol, "close", position.side, position.qty, "signal",
+                bar, indices[symbol],
+            )
+            if fill is not None:
+                fills.append(fill)
+
+        if not rebalance:
+            return fills
+        self._rebalance_due = False
+        equity = self.equity()
+        if equity <= 0:
+            return fills
+
+        # A rebalance replaces every order the last one left unfilled.
+        self._pending = [o for o in self._pending if o.reason != "rebalance"]
+        locked = {o.symbol for o in self._pending}
+        # Under on_signal, a change this rebalance cannot trade yet (a close
+        # still in flight, no usable bar) keeps the next session due.
+        retry = bool(locked & set(self._alloc_state))
+        inverse_vol = config.position_sizing == "signal_inverse_volatility"
+        signals = [
+            AllocationSignal(
+                symbol=symbol,
+                direction=direction,
+                score=score,
+                volatility=self._volatility_at(symbol) if inverse_vol else None,
+            )
+            for symbol, (direction, score) in sorted(self._alloc_state.items())
+            if symbol not in locked
+        ]
+        weights = target_weights(
+            signals,
+            mode=config.position_sizing,
+            target_exposure=settings.target_exposure,
+            min_score=settings.min_score,
+            max_positions=config.max_positions,
+            max_position_pct=config.max_position_pct,
+        )
+        current: dict[str, float] = {}
+        for symbol in sorted(self._positions):
+            if symbol in locked:
+                continue
+            position = self._positions[symbol]
+            value = position.qty * self._last_price.get(symbol, position.entry_price)
+            current[symbol] = (value if position.side == "long" else -value) / equity
+        plan = plan_rebalance(
+            current,
+            weights.weights,
+            threshold=settings.threshold,
+            max_turnover=settings.max_turnover,
+            mandatory=mandatory - locked,
+        )
+
+        # (symbol, kind, side, qty, reversal leg): reductions, then increases.
+        reductions: list[tuple[str, str, str, float, bool]] = []
+        increases: list[tuple[str, str, str, float, bool]] = []
+        for symbol, weight in plan.targets.items():
+            if symbol in mandatory:
+                continue  # closed above, or waiting for a bar to close on
+            bar = bars_today.get(symbol)
+            close = float(bar.close) if bar is not None else 0.0
+            if bar is None or not close > 0:
+                # No price to size or trade at today: counted, and retried.
+                self._counters["dropped_no_bar"] += 1
+                retry = True
+                continue
+            target_qty = abs(weight) * equity / close
+            side = "long" if weight > 0 else "short" if weight < 0 else None
+            position = self._positions.get(symbol)
+            if position is not None and position.side != side:
+                # A reversal (or a close): the old side goes first, in full.
+                reductions.append((symbol, "close", position.side, position.qty, False))
+                if side is not None:
+                    increases.append((symbol, "open", side, target_qty, True))
+            elif position is not None:
+                delta = target_qty - position.qty
+                if delta < 0:
+                    reductions.append((symbol, "close", position.side, -delta, False))
+                elif delta > 0:
+                    increases.append((symbol, "open", position.side, delta, False))
+            elif side is not None:
+                increases.append((symbol, "open", side, target_qty, False))
+        if settings.frequency == "on_signal":
+            self._rebalance_due = retry
+
+        if config.max_positions is not None:
+            # Reserve slots: a position closing in full (here, or by an exit
+            # in flight) frees one; new opens take what is left, best first.
+            closing = {s for s, _, _, qty, _ in reductions if qty >= self._positions[s].qty}
+            closing |= submitted | {o.symbol for o in self._pending if o.kind == "close"}
+            held_after = sum(1 for s in self._positions if s not in closing)
+            free = max(0, config.max_positions - held_after)
+            rank = {symbol: i for i, symbol in enumerate(weights.selected)}
+            new_opens = sorted(
+                (s for s, *_ in increases if s not in self._positions or s in closing),
+                key=lambda s: (rank.get(s, len(rank)), s),
+            )
+            refused = set(new_opens[free:])
+            if refused:
+                self._counters["rejected_max_positions"] += len(refused)
+                increases = [item for item in increases if item[0] not in refused]
+
+        for symbol, kind, side, qty, reversal in [*reductions, *increases]:
+            fill = self._submit(
+                date, symbol, kind, side, qty, "rebalance",
+                bars_today[symbol], indices[symbol], reversal=reversal,
+            )
+            if fill is not None:
+                fills.append(fill)
+        return fills
 
     # -- results -----------------------------------------------------------
 

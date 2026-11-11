@@ -74,6 +74,8 @@ list than people expect.
         |         stop -> trailing -> target -> max_holding
         |    4. signal exits   (if min_holding_days elapsed)
         |    5. signal entries (if cash, slots, cooldown, filters allow)
+        |       -- under portfolio allocation sizing, step 5 is a
+        |          rebalance to target weights instead (§4a)
         v
   +-----------------------------------------------------------+
   |  ORDERS -> FILLS: a qty, at a price, on a date             |
@@ -233,7 +235,10 @@ being tested; it is a strategy being sampled by noise.
 
 `execution/config.py` and `execution/engine.py`.
 
-**Sizing.** Four modes, and the choice also decides how cash is held:
+**Sizing.** There are seven modes, and the choice also decides how cash is
+held. The four below size each position on its own. The three
+portfolio-allocation modes size against each other, and
+[§4a](#4a-portfolio-allocation-shared-capital-target-weights) covers them.
 
 | Mode | Notional per trade | Cash model |
 |---|---|---|
@@ -275,6 +280,223 @@ separate them — `execution_summary` reports `total_commission` and
 shares. This is the existing house convention (`portfolio.py`: `qty = cash /
 price`) and it is a simplification: real fills are integer shares, and the
 rounding error matters at small book sizes and high prices. It is not modelled.
+
+### 4a. Portfolio allocation: shared-capital target weights
+
+`execution/allocation.py`, `strategy/compose.py`, and the allocation pass in
+`execution/engine.py`.
+
+The four modes above size a position **once**, at entry, from that one name's
+own numbers. Nothing that happens to the rest of the book later changes it.
+Three more `position_sizing` modes work differently. They treat the book as one
+portfolio with **target weights**, and they keep held positions at those
+weights:
+
+| Mode | Raw weight before normalisation |
+|---|---|
+| `equal_active` | `raw_i = direction_i` |
+| `signal_strength` | `raw_i = direction_i * score_i` |
+| `signal_inverse_volatility` | `raw_i = direction_i * score_i / volatility_i` |
+
+`direction_i` is `+1` for a long and `-1` for a short. All three pool their
+cash. `sizing_value` is rejected for them for the same reason it is rejected
+under `equal_weight`: they have no number for it to mean.
+
+**The score.** `strategy/compose.py` writes a conviction score onto every
+`entry` and `both` decision, as `trigger_values["_score"]` next to the existing
+`_logic` and `_components` metadata:
+
+```
+  score = sum(weight of the entry components active on this bar)
+        / sum(weight of all entry-role components)
+```
+
+- It uses `component.weight` under every logic mode, not just `weighted`.
+- **Filters never count.** They still gate eligibility, but they add nothing to
+  conviction.
+- Exit components never count either. On a `both` decision only the entry
+  members count.
+- Exit-only decisions carry no `_score`.
+- A decision only exists once the combinator has passed, so the score is in
+  `(0, 1]`.
+- A single-component strategy, and any `all` strategy, always scores `1`. For
+  those strategies `signal_strength` deliberately reduces to `equal_active`.
+
+The score is never inferred from a rule's own `trigger_values`. An RSI level
+and a z-score are not on one scale, and reading them as one would make
+"conviction" mean something different for every rule. Stored runs written
+before `_score` existed have no score, and `signal_score` reads an absent score
+as `1.0`, so they replay as `equal_active`. A score that is present but is
+non-finite or outside `(0, 1]` makes that name ineligible (`invalid_score`).
+It does not silently become 1.
+
+**From signals to weights** (`target_weights`), in this order:
+
+1. **Eligibility.** A name is dropped if its score is below
+   `min_allocation_score` (`min_score`). Under `signal_inverse_volatility` it is
+   also dropped if its volatility is missing, NaN or `<= 0` (`no_volatility`).
+   A long-only run drops bearish signals, as it does today.
+2. **Top-N.** With `max_positions` set, the survivors are ranked by
+   `(score descending, symbol)` and only the first N are kept. The rest are
+   excluded as `max_positions`. The symbol tie-break makes the cut
+   deterministic. Selection happens *before* normalisation, so the N names
+   share the whole target exposure between them.
+3. **Gross normalisation.**
+   `w_i = target_exposure * raw_i / sum(|raw_j|)`. `target_exposure` is gross
+   (longs plus shorts, in `(0, 1]`, default `1.0`), so `sum(|w_i|) =
+   target_exposure` before caps.
+4. **Cap and redistribute** (`cap_and_redistribute`). `max_position_pct` caps
+   `|w_i|`. A capped name is pinned at the cap, and the excess is shared out
+   among the uncapped names in proportion to their raw weights. This repeats
+   until nothing is over the cap. Ties are processed in symbol order, so the
+   result is deterministic. When the caps make the full exposure impossible
+   (three names, a 20% cap and a 100% target), the shortfall **stays in cash**.
+   It is never forced onto a name over its cap.
+
+`volatility_i` is the same causal series `volatility_target` uses: trailing
+annualised close-to-close volatility over `atr_period` sessions, read as at the
+decision bar. A name is ineligible until it has that much history, which is why
+this mode adds to the warm-up (§5).
+
+**Allocation state.** The engine keeps `{symbol: (direction, score)}`, built
+from the existing decision stream:
+
+- An entry adds the name, or updates its direction and score.
+- A strategy exit clears it, and so does a protective exit (stop, trailing
+  stop, target, max holding).
+
+Under the legacy modes, a repeated same-side entry on a held name is ignored.
+Here it is a conviction update: a weaker repeat can shrink the position, and a
+stronger one can grow it.
+
+**When targets are recomputed** (`rebalance_frequency`):
+
+| Value | Targets recomputed on |
+|---|---|
+| `on_signal` (default) | any session on which the allocation state changed: an entry, a score or direction update, or an exit |
+| `daily` | every session |
+| `weekly` | the first session of each ISO week |
+| `monthly` | the first session of each calendar month |
+
+Under a schedule, an entry that arrives between rebalance sessions updates the
+state, but the allocator does not act on it until the next scheduled session.
+Exits are never held for the schedule.
+
+**Order of events on a rebalance bar.** These steps replace steps 4 and 5 of
+the [§3](#3-the-bar-is-the-resolution-limit-and-that-is-the-whole-problem)
+ordering. Steps 1 to 3 (mark, queued fills, protective exits) are unchanged:
+
+```
+  4. strategy exits -> close to zero                  (reason "signal")
+  5. targets from equity and closes as at THIS bar's close, after step 4
+  6. reductions and closes                           (reason "rebalance")
+  7. increases and new positions                     (reason "rebalance")
+```
+
+Reductions come before increases for the same reason that entries come last in
+§3: the cash a reduction frees is what funds an increase. A **reversal** (long
+target on a short holding, or the reverse) is a close of the old side followed
+by an open of the new side. It is never a single trade through zero. Position
+slots are reserved for the selected names up to `max_positions`, so a bar's
+simultaneous opens cannot exceed it.
+
+The target quantity for each name is `w_i * equity / close`, both as at the
+decision bar. The order is the difference between that and what is held.
+
+**Target quantities are frozen when the order is created.** The order then goes
+through the existing machinery unchanged: fill timing, slippage, commission,
+volume capacity and order expiry (§4 above). A deferred order (`next_open` and
+the other `next_*` timings) and a capacity-limited remainder fill
+`min(remaining_qty, capacity)` of **the quantity decided at the signal**. They
+are not re-sized from the fill bar's equity or price. Legacy orders still
+re-size at fill time, as they always have. An allocation order would be sized
+on information the decision bar did not have if it re-sized at fill time, and
+two orders from one rebalance would then stop adding up to the target.
+
+**Pending orders and a new rebalance.** Under a deferred timing, or with a
+volume-limited remainder, an order can still be waiting when the next decision
+or rebalance arrives:
+
+- A strategy exit cancels every pending order on that symbol (a queued open
+  included), then closes whatever is held in full. A strategy or protective
+  close already in flight is left to finish rather than placed again.
+- A rebalance cancels **every** unfilled `rebalance` order before placing its
+  own. The new plan is computed from what is actually held, so a stale order
+  left in place would trade the same change twice.
+- A symbol whose strategy or protective close has not completed yet is left
+  out of the rebalance (no target, not counted as current) until that close is
+  done.
+- A rebalance open that is blocked only because its reversal's close has not
+  completed (capacity) keeps waiting, up to `order_expiry_days`, instead of
+  being dropped.
+
+Under `on_signal`, a state change on a session with no bars at all (a holiday)
+is carried to the next session that has bars. So is a change that a rebalance
+could not trade: a symbol with no usable bar that session, or one whose close
+was still in flight. The next session rebalances again. (Under a schedule, it
+waits for the next scheduled session.) A rebalance reversal's open is not held
+back by `cooldown_days`, because its own close is a change of side, not an
+exit. An `entry` decision against the current direction is a reversal under
+these modes, while the legacy modes ignore it. A `both` decision that closes a
+position does not also open the other side, as under the legacy modes, and
+`min_holding_days` still holds back a strategy exit (the allocation is kept
+until the exit is allowed).
+
+Every allocator order carries fill reason **`rebalance`**. That includes the
+first open of a name and a full close because the name fell out of the top N.
+Strategy exits keep `signal`, and protective exits keep their own reasons. So
+the fill reasons show how much of the turnover came from the allocator and how
+much from the strategy.
+
+**Drift threshold and turnover cap** (`plan_rebalance`). Weights are compared
+as signed fractions of equity at the decision bar's close.
+
+- `rebalance_threshold`, in `[0, 1)` and default `0`, skips a name whose
+  `|target - current|` is below the threshold. A 2% threshold leaves a 2% drift
+  alone, rather than paying commission and slippage every session to correct
+  it.
+- `max_turnover`, in `(0, 2]` and unset by default, caps
+  `turnover = sum(|target - current|)` over the discretionary names. When the
+  requested turnover is over the cap, **every** discretionary delta is scaled
+  by `max_turnover / turnover`. The book then moves part of the way toward its
+  targets and continues on the next rebalance. The upper bound of `2` is one
+  full flip of a 100% book.
+- **Mandatory exits are exempt from both.** A name going to zero because of a
+  strategy exit or a protective exit is not checked against the threshold. It
+  is left out of the turnover sum and is never scaled. A turnover budget limits
+  how much the allocator rebalances. It never delays an exit.
+
+**The cross-position effect, and why it differs from `equal_weight`.** Under
+`equal_weight`, each name owns `initial_capital / len(symbols)`. A signal on B
+cannot touch A's sleeve, and an untraded sleeve sits in cash. Under the
+allocation modes, capital is shared:
+
+- A new signal on B **shrinks A**. Two names at 50% become three at 33%.
+- An exit on A **grows B**.
+- Under `signal_strength`, A's position moves when *B's* conviction changes.
+
+So a run will show `rebalance` fills on names whose own signal did nothing that
+day. That is the mode doing its job. It also means that comparing an
+`equal_weight` run with an `equal_active` run of the same strategy measures the
+portfolio construction as well as the signals. The two differ even when every
+score is 1: one leaves idle sleeves in cash, and the other puts the whole
+exposure into whatever is active.
+
+**Validation.** The five allocation fields (`target_exposure`,
+`min_allocation_score`, `rebalance_frequency`, `rebalance_threshold`,
+`max_turnover`) are all unset by default. If one is set under a legacy mode the
+run is rejected with
+`"<field> is only used by portfolio allocation sizing (equal_active,
+signal_strength, signal_inverse_volatility); leave it unset"`. When a field is
+unset under an allocation mode it resolves to `1.0`, `0.0`, `on_signal`, `0.0`
+and no cap respectively (`ExecutionConfig.allocation()`). A legacy config
+serialises exactly as it did before, so stored runs and their hashes are
+unchanged.
+
+Out of scope: mean-variance optimisation, sector or factor constraints, and
+**ranking a universe by a raw feature** (12-1 momentum, `cs_rank`). The
+allocator ranks only by the strategy's own score, among names the strategy has
+already decided to enter.
 
 ---
 
@@ -347,6 +569,7 @@ A composed strategy's warm-up is `StrategySpec.lookback_days`:
   max(component.lookback_days)
     + combine_window_days - 1        # a component may have fired that long ago
     + execution.extra_lookback_days  # atr_period + 1, when an ATR stop is set
+                                     # or sizing is signal_inverse_volatility
 ```
 
 The third term is the one that is easy to forget. An ATR stop is set from the
@@ -354,6 +577,13 @@ ATR as at the *entry* bar, so a position opened on the window's first bar still
 needs `atr_period` bars behind it or its stop is undefined. `ExecutionConfig`
 contributes that requirement itself rather than leaving the strategy layer to
 guess at it.
+
+`signal_inverse_volatility` adds the same term for the same reason. Its weights
+divide by trailing volatility over `atr_period` sessions, which takes
+`atr_period + 1` closes. Without that warm-up, every name would be ineligible
+(`no_volatility`) for the window's first weeks, and the run would open in cash.
+The term is not added twice when an ATR stop is also set. `equal_active` and
+`signal_strength` read no price history, so they add nothing.
 
 ---
 
@@ -718,6 +948,7 @@ recently and moves fast; re-check before trusting any row.
 | Ten new signal rules with `category`, `summary`, `roles` | `signals/library.py` |
 | The indicators they need — ema, macd, bollinger, rolling_std, rolling_zscore, true_range, atr, stochastic, roc, adx, obv, donchian | `indicators/technical.py` |
 | `category` / `summary` / `roles` on `SignalRule`, defaulted so pre-existing rules register unchanged | `signals/registry.py` |
+| Portfolio allocation sizing (`equal_active`, `signal_strength`, `signal_inverse_volatility`). It covers the entry-only `_score` on decisions, the pure target-weight and rebalance-plan maths, frozen-quantity rebalance orders with fill reason `rebalance`, and the five allocation-only config fields (§4a) | `strategy/compose.py`, `execution/allocation.py`, `execution/engine.py`, `execution/config.py` |
 
 That closes what were the two largest open questions: the indicator dependency
 (ported into the backend distribution rather than reaching into `src/quantlab`,
@@ -778,6 +1009,13 @@ report when the two disagree, so it was corrected rather than the code:
   `max_positions` and `rejected_no_cash` mean different things between them.
   Stated now, because somebody comparing two sizing modes would otherwise meet a
   behaviour change they did not ask for.
+- **The portfolio-allocation modes are a third cash model**, not a variant of
+  the pooled one (§4a). They share capital and re-size *held* positions, so a
+  repeated entry is a conviction update rather than a no-op. Their orders keep
+  the quantity fixed at the signal instead of re-sizing at fill time, and they
+  add `rebalance` to the fill and exit reasons. None of this reaches a legacy
+  mode. Their fields are rejected there rather than ignored, for the same
+  reason `sizing_value` is rejected under `equal_weight`.
 
 One more thing changed that no contract mentioned: **filters are excluded from
 anything that materialises signals** — the demo seed and the warehouse's
@@ -809,6 +1047,16 @@ fully available to strategies, which evaluate them live and never store them.
   trades are where to look.
 - **`trade_count` includes open trades; `winning_trades + losing_trades` does
   not.** They will not sum. Trades that close exactly flat count as neither.
+- **Under portfolio allocation sizing, a `rebalance` fill is not a signal.** It
+  is the allocator moving a name back to its target weight, often because a
+  *different* name entered or exited (§4a). Before reading a trade as the
+  rule's decision, check whether its reason is `signal` or `rebalance`. If a
+  run's costs are dominated by `rebalance` fills, the portfolio construction is
+  spending the money, not the signal. Raise `rebalance_threshold`, set a
+  `max_turnover`, or move to a `weekly` or `monthly` schedule.
+- **`signal_strength` on a single-component or `all` strategy is
+  `equal_active`.** Every score is 1 there, by construction. Identical results
+  between the two are expected, not a bug.
 - **`assumptions` travels inside the response body**, not in UI copy. On purpose:
   a refactor can drop a caption, and the caveat has to survive being pasted into
   a spreadsheet.

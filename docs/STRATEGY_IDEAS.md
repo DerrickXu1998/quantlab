@@ -96,23 +96,34 @@ S6's gate applied to a breakout entry instead of a trend entry.
 
 ## B. Blocked — what the strategy tab cannot express yet
 
-### B1 — Cross-sectional momentum rotation *(blocked: F10)*
+### B1 — Cross-sectional momentum rotation *(still blocked: F10 is only partly supported)*
 
 "Monthly, buy the top decile of the universe by 12-1 momentum, hold until it
 leaves the top quintile." Every feature needed already exists in the research
 engine (`momentum_12_1`, `cs_rank`, `residual_momentum`,
-`relative_strength`, `sector_neutral`), all point-in-time clean. What is
-missing is portfolio construction: the execution engine trades each instrument
-independently against the same rule — there is no cross-instrument ranking, no
-rebalance frequency, no target weights. The `weighted` combine logic is
-per-instrument only.
+`relative_strength`, `sector_neutral`), all point-in-time clean. What was
+missing is portfolio construction. Half of that now exists, and the half that
+B1 needs most does not.
 
-- **F10**: portfolio-level execution — rank a universe by a feature, rebalance
-  on a schedule, hold N positions with target weights. Touches
-  `strategy/spec.py` (new portfolio block), `execution/engine.py`
-  (rebalance pass before per-instrument signals), and StrategyBuilder UI.
-- **U6**: ranking/rebalance controls in the strategy UI + a holdings table on
-  run detail.
+- **F10, partially supported.** The portfolio-allocation sizing modes
+  (`equal_active`, `signal_strength`, `signal_inverse_volatility`; see
+  [EXECUTION_MODEL.md §4a](EXECUTION_MODEL.md#4a-portfolio-allocation-shared-capital-target-weights))
+  give the engine shared-capital target weights across held positions. They
+  also give it a scheduled rebalance (`rebalance_frequency`: `daily`, `weekly`,
+  `monthly`), a top-N cut by `max_positions`, per-name caps, a drift threshold
+  and a turnover cap.
+- **Still missing.** Nothing ranks a universe by a raw feature. The allocator's
+  top-N ranks only by the strategy's own entry score, and only among names
+  whose rules already fired. "Top decile by 12-1 momentum" is a rank across
+  instruments, and no per-instrument rule can express it. Full scheduled
+  cross-sectional momentum, including "hold until it leaves the top quintile",
+  is therefore **not** buildable yet. The remaining F10 work is a
+  feature-ranking input to the allocator. It touches `strategy/spec.py` (a
+  ranking block) and the allocator's selection step, which today ranks by
+  `(score, symbol)`.
+- **U6**: ranking controls in the strategy UI + a holdings table on run detail.
+  The allocation and rebalance controls themselves have shipped in the
+  builder's **Portfolio allocation** subsection.
 
 ### B2 — Pairs / statistical arbitrage *(blocked: F1, F2 — already registered)*
 
@@ -146,15 +157,27 @@ features with PIT discipline, but no backend signal rule consumes them.
   live, useless for backtests; `fca_short_interest` is UK-only. Scope B4 to
   US insiders + UK shorts accordingly.
 
-### B5 — Signal-strength sizing *(blocked: F13)*
+### B5 — Signal-strength sizing *(supported: F13, via `signal_strength`)*
 
-"Size positions by conviction" (z-score magnitude, weighted-score fraction).
-The engine's sizing modes are all signal-blind; `weighted` logic decides
-*whether* to enter, never *how much*.
+"Size positions by conviction" (weighted-score fraction). Buildable today: set
+`position_sizing: signal_strength`, or `signal_inverse_volatility` to also
+scale by trailing volatility.
 
-- **F13**: an optional `sizing_from_score` mode scaling `fixed_fraction` by the
-  weighted combine score. Cheap once F10's plumbing exists; not worth doing
-  standalone.
+- **F13, supported, but not as first sketched.** The sketch was a
+  `sizing_from_score` mode that scaled `fixed_fraction` by the score. What
+  shipped is a portfolio target weight instead. Each entry decision carries
+  `_score`, the normalised weighted-combine fraction: the weight of the active
+  entry components over the weight of all entry components. Filters and exit
+  components are excluded. Before caps, a long's weight is
+  `target_exposure * score_i / sum(score_j)` across the active names (shorts
+  take the negative sign). Held positions are re-sized
+  as conviction or the set of names changes
+  ([EXECUTION_MODEL.md §4a](EXECUTION_MODEL.md#4a-portfolio-allocation-shared-capital-target-weights)).
+- **Not covered: z-score magnitude.** The score never reads a rule's own
+  `trigger_values`. A strategy with one entry component, or with `all` logic,
+  always scores 1, and `signal_strength` then behaves exactly like
+  `equal_active`. Conviction needs several weighted entry components under
+  `any`, `majority` or `weighted` logic.
 
 ## Suggested order
 
@@ -163,5 +186,13 @@ The engine's sizing modes are all signal-blind; `weighted` logic decides
 2. **F11** (squeeze/choppiness filters) — hours, unlocks B3.
 3. **U7** (custom-rule UI) — days, makes the whole indicator catalog
    user-reachable; the highest-leverage single UI item here.
-4. **F10 + U6** (portfolio construction) — the only item that is an
-   architecture decision rather than an increment; do it before B4/B5.
+4. ~~**F13**~~ — done: `signal_strength` sizing. Re-run A1–A6 under
+   `equal_active` against their `equal_weight` baseline. That measures what
+   shared capital does on its own. Every A-idea has a single entry component,
+   so every score is 1 and `signal_strength` adds nothing on top. Testing
+   conviction weighting needs an idea with two or more weighted entry
+   components.
+5. **F10 remainder + U6** (feature ranking). Shared-capital target weights and
+   scheduled rebalancing have landed. What is left is ranking a universe by a
+   feature, which B1 needs. It is still the only item here that is an
+   architecture decision rather than an increment. Do it before B4.

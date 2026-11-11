@@ -341,4 +341,49 @@ describe('executionSummary', () => {
     const items = executionSummary({ ...DEFAULT_EXECUTION, bar_frequency: '5m', cooldown_days: 3 });
     expect(items.find((item) => item.key === 'cooldown_days')?.text).toBe('cooldown 3 days');
   });
+
+  it('names an allocation mode, and only the allocation settings off their defaults', () => {
+    const changed = (execution: Parameters<typeof executionSummary>[0]) =>
+      executionSummary(execution)
+        .filter((item) => item.changed)
+        .map((item) => item.text);
+
+    // Independent sizing reads exactly as it always has.
+    expect(changed(DEFAULT_EXECUTION)).toEqual([]);
+
+    // Defaults, whether unset or spelled out, add no chip but the mode.
+    expect(changed({ ...DEFAULT_EXECUTION, position_sizing: 'equal_active' })).toEqual([
+      'equal active allocation',
+    ]);
+    expect(
+      changed({
+        ...DEFAULT_EXECUTION,
+        position_sizing: 'signal_strength',
+        target_exposure: 1,
+        min_allocation_score: 0,
+        rebalance_frequency: 'on_signal',
+        rebalance_threshold: 0,
+        max_turnover: null,
+      }),
+    ).toEqual(['signal strength allocation']);
+
+    expect(
+      changed({
+        ...DEFAULT_EXECUTION,
+        position_sizing: 'signal_inverse_volatility',
+        target_exposure: 0.8,
+        min_allocation_score: 0.25,
+        rebalance_frequency: 'monthly',
+        rebalance_threshold: 0.02,
+        max_turnover: 0.5,
+      }),
+    ).toEqual([
+      'strength ÷ volatility allocation',
+      '80% gross exposure',
+      'score ≥ 25%',
+      'rebalance monthly',
+      'rebalance drift ≥ 2%',
+      'turnover ≤ 50% a rebalance',
+    ]);
+  });
 });

@@ -211,9 +211,99 @@ export const POSITION_SIZING_MODES = [
   'fixed_fraction',
   'fixed_notional',
   'volatility_target',
+  'equal_active',
+  'signal_strength',
+  'signal_inverse_volatility',
 ] as const;
 
 export type PositionSizing = (typeof POSITION_SIZING_MODES)[number];
+
+/**
+ * The shared-capital modes: they hold target weights across every open
+ * position and rebalance them, so one new signal can resize the others. The
+ * legacy modes size each position once, at entry, independently.
+ */
+export const ALLOCATION_SIZING_MODES = [
+  'equal_active',
+  'signal_strength',
+  'signal_inverse_volatility',
+] as const satisfies readonly PositionSizing[];
+
+export type AllocationSizing = (typeof ALLOCATION_SIZING_MODES)[number];
+
+export function isAllocationSizing(mode: PositionSizing): mode is AllocationSizing {
+  return (ALLOCATION_SIZING_MODES as readonly PositionSizing[]).includes(mode);
+}
+
+/** An allocation mode, in the few words a chip has room for. */
+export const ALLOCATION_SIZING_SHORT: Record<AllocationSizing, string> = {
+  equal_active: 'equal active',
+  signal_strength: 'signal strength',
+  signal_inverse_volatility: 'strength ÷ volatility',
+};
+
+export const REBALANCE_FREQUENCIES = ['on_signal', 'daily', 'weekly', 'monthly'] as const;
+
+export type RebalanceFrequency = (typeof REBALANCE_FREQUENCIES)[number];
+
+export const REBALANCE_FREQUENCY_LABELS: Record<RebalanceFrequency, string> = {
+  on_signal: 'When a signal changes',
+  daily: 'Every session',
+  weekly: 'Weekly (first session of the week)',
+  monthly: 'Monthly (first session of the month)',
+};
+
+/**
+ * The allocation-only fields, and what the backend resolves each to when left
+ * unset under an allocation mode. A legacy mode refuses every one of them.
+ */
+export const ALLOCATION_FIELDS = [
+  'target_exposure',
+  'min_allocation_score',
+  'rebalance_frequency',
+  'rebalance_threshold',
+  'max_turnover',
+] as const;
+
+export type AllocationField = (typeof ALLOCATION_FIELDS)[number];
+
+export interface ResolvedAllocation {
+  target_exposure: number;
+  min_allocation_score: number;
+  rebalance_frequency: RebalanceFrequency;
+  rebalance_threshold: number;
+  max_turnover: number | null;
+}
+
+export const ALLOCATION_DEFAULTS: ResolvedAllocation = {
+  target_exposure: 1,
+  min_allocation_score: 0,
+  rebalance_frequency: 'on_signal',
+  rebalance_threshold: 0,
+  max_turnover: null,
+};
+
+/**
+ * The allocation settings an allocation-mode config will actually run with:
+ * each unset field replaced by its backend default, as
+ * `ExecutionConfig.allocation()` resolves them.
+ */
+export function resolveAllocation(execution: {
+  target_exposure?: number | null;
+  min_allocation_score?: number | null;
+  rebalance_frequency?: RebalanceFrequency | null;
+  rebalance_threshold?: number | null;
+  max_turnover?: number | null;
+}): ResolvedAllocation {
+  return {
+    target_exposure: execution.target_exposure ?? ALLOCATION_DEFAULTS.target_exposure,
+    min_allocation_score:
+      execution.min_allocation_score ?? ALLOCATION_DEFAULTS.min_allocation_score,
+    rebalance_frequency: execution.rebalance_frequency ?? ALLOCATION_DEFAULTS.rebalance_frequency,
+    rebalance_threshold: execution.rebalance_threshold ?? ALLOCATION_DEFAULTS.rebalance_threshold,
+    max_turnover: execution.max_turnover ?? ALLOCATION_DEFAULTS.max_turnover,
+  };
+}
 
 export const FILL_TIMINGS = [
   'signal_close',
@@ -336,10 +426,29 @@ export interface ExecutionConfig {
   intraday_resolution: IntradayResolution;
   /** The bars signals run on: '1d' (default) or intraday '1h' | '15m' | '5m'. */
   bar_frequency: '1d' | '1h' | '15m' | '5m';
+
+  /*
+   * Portfolio allocation (equal_active, signal_strength,
+   * signal_inverse_volatility only). Absent or null means the backend's
+   * default (ALLOCATION_DEFAULTS); a legacy mode must leave all five unset, so
+   * DEFAULT_EXECUTION carries none of them and a legacy payload is unchanged.
+   */
+  /** Gross exposure the targets add up to, as a fraction of equity: (0, 1]. */
+  target_exposure?: number | null;
+  /** Signals scoring below this are not allocated to: [0, 1]. */
+  min_allocation_score?: number | null;
+  rebalance_frequency?: RebalanceFrequency | null;
+  /** Skip a change smaller than this, in weight: [0, 1). */
+  rebalance_threshold?: number | null;
+  /** Most sum-of-|weight change| one rebalance may trade: (0, 2]. */
+  max_turnover?: number | null;
 }
 
-/** The contract's own defaults, §4, field for field. */
-export const DEFAULT_EXECUTION: ExecutionConfig = {
+/**
+ * The contract's own defaults, §4, field for field. Typed as equal weight so a
+ * spread of it still satisfies the generated (pre-allocation) run schema.
+ */
+export const DEFAULT_EXECUTION: ExecutionConfig & { position_sizing: 'equal_weight' } = {
   initial_capital: 100000,
   position_sizing: 'equal_weight',
   sizing_value: null,
@@ -381,6 +490,7 @@ export const EXIT_REASONS = [
   'trailing_stop',
   'max_holding',
   'end_of_window',
+  'rebalance',
 ] as const;
 
 export type ExitReason = (typeof EXIT_REASONS)[number];
@@ -392,6 +502,7 @@ export const EXIT_REASON_LABELS: Record<ExitReason, string> = {
   trailing_stop: 'Trailing stop',
   max_holding: 'Max holding',
   end_of_window: 'End of window',
+  rebalance: 'Rebalance',
 };
 
 /**
