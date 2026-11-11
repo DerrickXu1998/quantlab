@@ -1,5 +1,5 @@
 import { ChartLine, FlaskConical, History, LayoutDashboard, Search } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { UserMenu } from '../auth/UserMenu';
 import { GlossaryButton } from '../glossary/GlossaryButton';
 import { DataSourceBanner } from '../components/DataSourceBanner';
@@ -18,6 +18,7 @@ import { DatasetBadge } from '../workbench/DatasetBadge';
 import { cn } from '../lib/utils';
 import { useOptionalRuns } from '../runs/RunsContext';
 import { RunNotices } from '../runs/RunNotices';
+import { CommandPalette, useCommandPaletteShortcut } from './CommandPalette';
 import { MobileHeader, type NavItem } from './MobileMenu';
 import { navigate, replaceRoute, useRoute } from './router';
 import { useIsDesktop } from './useMediaQuery';
@@ -67,6 +68,9 @@ export function AppShell() {
   // Backtests run in the background; the Strategies tab says how many are
   // queued or running, wherever you are.
   const activeRuns = useOptionalRuns()?.activeCount ?? 0;
+
+  const [searchOpen, setSearchOpen] = useState(false);
+  useCommandPaletteShortcut(useCallback(() => setSearchOpen((current) => !current), []));
 
   return (
     <div className="relative flex h-screen flex-col">
@@ -145,6 +149,19 @@ export function AppShell() {
                     <DatasetBadge />
                   </>
                 ) : null}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  aria-label="Search companies and pages"
+                  title="Search (Ctrl/Cmd+K)"
+                  onClick={() => setSearchOpen(true)}
+                  className="gap-2 text-muted-foreground"
+                >
+                  <Search size={16} strokeWidth={1.5} aria-hidden="true" />
+                  <span className="hidden xl:inline">Search</span>
+                  <kbd className="hidden type-micro text-muted-foreground xl:inline">⌘K</kbd>
+                </Button>
                 <GlossaryButton />
                 <ThemeToggle />
                 <UserMenu />
@@ -179,6 +196,7 @@ export function AppShell() {
           )}
 
           <RunNotices />
+          <CommandPalette open={searchOpen} onOpenChange={setSearchOpen} destinations={NAV} />
 
           <footer className="shrink-0">
             <TickerTape quotes={quotes} />
