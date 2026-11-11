@@ -578,3 +578,190 @@ def test_an_atr_stop_adds_its_own_warm_up():
         execution=ExecutionConfig(atr_stop_multiple=2.0, atr_period=20),
     )
     assert with_atr.lookback_days == plain.lookback_days + 21
+
+
+# --- composition score (_score) ---------------------------------------------
+
+
+def test_combine_scores_by_component_weight_for_every_logic():
+    """Hand-calculated: score = active entry weight / total entry weight."""
+    from quantlab.strategy.compose import _combine
+
+    one = [object()]  # _combine only counts the firings
+    two = [object(), object()]
+    # all: 2 of 2 active, weights 1+1 -> eligible, 2/2.
+    assert _combine(two, 2, [1.0, 1.0], "all", 0.0, 2.0) == (True, 1.0)
+    # all: 1 of 2 active -> ineligible.
+    assert _combine(one, 2, [1.0], "all", 0.0, 2.0)[0] is False
+    # any: 1 of 4 equal weights -> 1/4.
+    assert _combine(one, 4, [1.0], "any", 0.0, 4.0) == (True, 0.25)
+    # majority: 2 of 3 equal -> 2/3.
+    assert _combine(two, 3, [1.0, 1.0], "majority", 0.0, 3.0) == (True, 2 / 3)
+    # majority still scores by weight, not count: (2+1)/(2+1+3).
+    assert _combine(two, 3, [2.0, 1.0], "majority", 0.0, 6.0) == (True, 0.5)
+    # weighted: weights 2,1,1; the 2 and one 1 active vs threshold 3 -> 3/4.
+    assert _combine(two, 3, [2.0, 1.0], "weighted", 3.0, 4.0) == (True, 0.75)
+    # weighted below threshold: no entry.
+    assert _combine(one, 3, [1.0], "weighted", 3.0, 4.0)[0] is False
+    # Nothing active: no entry.
+    assert _combine([], 3, [], "any", 0.0, 3.0) == (False, 0.0)
+
+
+def _entry_scores(strategy, series, weights):
+    """Each entry/both decision's score next to the hand-calculated one.
+
+    Entries use distinct rule names (and the exit a rule no entry uses), so
+    the entry members are recoverable from ``_components`` by name.
+    """
+    decisions, _ = compose(strategy, series)
+    total = sum(weights.values())
+    out = []
+    for item in decisions:
+        if item.kind == "exit":
+            continue
+        names = item.trigger_values["_components"]
+        expected = sum(weights[name] for name in names if name in weights) / total
+        out.append((item.trigger_values["_score"], expected))
+    return out
+
+
+@pytest.mark.parametrize(
+    ("logic", "threshold", "allowed"),
+    [
+        ("all", 1.0, {1.0}),
+        ("any", 1.0, {1 / 4, 3 / 4, 1.0}),
+        ("majority", 1.0, {1.0}),  # 2 entries: a majority needs both
+        ("weighted", 3.0, {3 / 4, 1.0}),
+    ],
+)
+def test_entry_score_is_the_active_share_of_entry_weight(series, logic, threshold, allowed):
+    weights = {"rsi-threshold": 3.0, "macd-crossover": 1.0}
+    strategy = spec(
+        StrategyComponent("rsi-threshold", role="entry", weight=3.0),
+        StrategyComponent("macd-crossover", role="entry", weight=1.0),
+        StrategyComponent("breakout-20d", role="exit", weight=5.0),
+        entry_logic=logic,
+        entry_threshold=threshold,
+        combine_window_days=5,
+    )
+    pairs = _entry_scores(strategy, series, weights)
+    assert pairs
+    for got, expected in pairs:
+        assert got == pytest.approx(expected)
+        assert any(got == pytest.approx(value) for value in allowed)
+
+
+def test_a_single_component_and_a_promoted_legacy_run_score_one(series):
+    for strategy in (
+        spec(component("rsi-threshold", "entry"), component("macd-crossover", "exit")),
+        promote_legacy("rsi-threshold"),
+    ):
+        decisions, _ = compose(strategy, series)
+        scored = [d for d in decisions if d.kind != "exit"]
+        assert scored and all(d.trigger_values["_score"] == 1.0 for d in scored)
+
+
+def test_exit_only_decisions_carry_no_score(series):
+    decisions, _ = compose(
+        spec(component("rsi-threshold", "entry"), component("macd-crossover", "exit")),
+        series,
+    )
+    exits = [d for d in decisions if d.kind == "exit"]
+    assert exits and all("_score" not in d.trigger_values for d in exits)
+
+
+def test_a_both_decision_scores_only_its_entry_members(series):
+    """The heavy exit member fires on the same date, but only the entry side
+    of the decision is conviction: active entries over 2 equal entries."""
+    strategy = spec(
+        StrategyComponent("rsi-threshold", role="entry"),
+        StrategyComponent("macd-crossover", role="entry"),
+        StrategyComponent("rsi-threshold", role="exit", weight=7.0),
+        entry_logic="any",
+        combine_window_days=1,
+    )
+    decisions, _ = compose(strategy, series)
+    both = [d for d in decisions if d.kind == "both"]
+    assert both
+    for item in both:
+        # Entry members first, then the single exit member.
+        entry_names = item.trigger_values["_components"][:-1]
+        assert item.trigger_values["_score"] == pytest.approx(len(entry_names) / 2)
+
+
+def test_filters_never_count_toward_the_score(series):
+    entries = (
+        StrategyComponent("rsi-threshold", role="entry"),
+        StrategyComponent("macd-crossover", role="entry"),
+        StrategyComponent("breakout-20d", role="exit"),
+    )
+    plain = spec(*entries, entry_logic="any", combine_window_days=5)
+    gated = spec(
+        *entries,
+        StrategyComponent(
+            "adx-trend-filter", role="filter", weight=9.0, parameters={"threshold": 20.0}
+        ),
+        entry_logic="any",
+        combine_window_days=5,
+    )
+
+    def scores(strategy):
+        decisions, _ = compose(strategy, series)
+        return {
+            (d.symbol, d.date, d.direction): d.trigger_values["_score"]
+            for d in decisions
+            if d.kind != "exit"
+        }
+
+    plain_scores, gated_scores = scores(plain), scores(gated)
+    assert gated_scores and set(gated_scores) <= set(plain_scores)
+    assert all(gated_scores[key] == plain_scores[key] for key in gated_scores)
+
+
+def test_contradictions_are_still_suppressed_with_scoring(series):
+    contradiction = spec(
+        StrategyComponent("rsi-threshold", role="entry"),
+        StrategyComponent("rsi-threshold", role="entry", invert=True),
+        entry_logic="any",
+        combine_window_days=30,
+    )
+    decisions, stats = compose(contradiction, series)
+    assert stats.contradictions > 0
+    per_date: dict[tuple[str, str], set[str]] = {}
+    for item in decisions:
+        if item.kind in ("entry", "both"):
+            assert 0.0 < item.trigger_values["_score"] <= 1.0
+            per_date.setdefault((item.symbol, item.date), set()).add(item.direction)
+    assert all(len(directions) == 1 for directions in per_date.values())
+
+
+def test_scores_are_deterministic_and_survive_a_json_round_trip(series):
+    import json
+
+    first, _ = compose(template("dual-confirmation"), series)
+    second, _ = compose(template("dual-confirmation"), series)
+    assert [d.trigger_values for d in first] == [d.trigger_values for d in second]
+    scored = [d for d in first if d.kind != "exit"]
+    assert scored
+    for item in scored:
+        again = json.loads(json.dumps(item.trigger_values))
+        assert again == item.trigger_values
+        assert isinstance(again["_score"], float)
+
+
+def test_an_old_spec_without_weights_scores_by_equal_weight(series):
+    payload = {
+        "name": "old",
+        "components": [
+            {"rule_name": "rsi-threshold", "role": "entry"},
+            {"rule_name": "macd-crossover", "role": "entry"},
+            {"rule_name": "breakout-20d", "role": "exit"},
+        ],
+        "entry_logic": "any",
+        "combine_window_days": 5,
+    }
+    strategy = StrategySpec.from_dict(payload)
+    assert all(c.weight == 1.0 for c in strategy.components)
+    pairs = _entry_scores(strategy, series, {"rsi-threshold": 1.0, "macd-crossover": 1.0})
+    assert pairs and all(got == pytest.approx(expected) for got, expected in pairs)
+    assert {got for got, _ in pairs} <= {0.5, 1.0}
