@@ -8,7 +8,7 @@ import {
   TableHeader,
   TableRow,
 } from '../../components/ui/table';
-import { METRIC_FORMAT } from '../format';
+import { METRIC_FORMAT, displaySymbol } from '../format';
 
 /**
  * The ranked answer.
@@ -85,7 +85,7 @@ export function ScreenTable({
                 className="font-mono text-xs text-foreground transition-colors hover:text-primary"
                 title={`Open ${row.symbol} in Company`}
               >
-                {row.symbol}
+                {displaySymbol(row.symbol)}
               </button>
             </TableCell>
             <TableCell className="max-w-[18rem] truncate text-xs text-muted-foreground">
@@ -116,10 +116,6 @@ export function ScreenTable({
 function SortGlyph({ descending }: { descending: boolean }) {
   const Icon = descending ? ArrowDown : ArrowUp;
   return (
-    <Icon
-      size={16}
-      strokeWidth={1.5}
-      aria-label={descending ? 'highest first' : 'lowest first'}
-    />
+    <Icon size={16} strokeWidth={1.5} aria-label={descending ? 'highest first' : 'lowest first'} />
   );
 }

@@ -85,6 +85,7 @@ export function StrategyLabView({ instruments }: { instruments: Instrument[] }) 
         <StrategyBuilder
           instruments={universe}
           seed={seed}
+          openLatest
           clone={clone}
           onShowRun={(id) => show('runs', id)}
         />

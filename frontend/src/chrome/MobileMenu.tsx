@@ -3,7 +3,6 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useDataset } from '../api/DatasetProvider';
 import { useOptionalAuth } from '../auth/AuthProvider';
 import { Button } from '../components/ui/button';
-import { StatusBadge } from '../components/ui/status-badge';
 import { cn } from '../lib/utils';
 import { SettingsDialog } from '../settings/SettingsDialog';
 import { useTheme } from '../theme/ThemeProvider';
@@ -21,7 +20,6 @@ export interface NavItem {
   id: Destination;
   label: string;
   icon: LucideIcon;
-  simulated?: string;
 }
 
 /**
@@ -77,9 +75,7 @@ export function MobileHeader({
       <div className="flex min-w-0 items-baseline gap-2">
         <span className="font-display text-sm tracking-[-0.02em]">QuantLab</span>
         {currentItem ? (
-          <span className="truncate type-label text-muted-foreground">
-            {currentItem.label}
-          </span>
+          <span className="truncate type-label text-muted-foreground">{currentItem.label}</span>
         ) : null}
       </div>
 
@@ -134,7 +130,7 @@ export function MobileHeader({
                     variant="ghost"
                     size="default"
                     aria-current={active ? 'page' : undefined}
-                    title={item.simulated ?? item.label}
+                    title={item.label}
                     onClick={() => {
                       onNavigate(item.id);
                       setOpen(false);
@@ -147,11 +143,6 @@ export function MobileHeader({
                   >
                     <item.icon size={20} strokeWidth={1.5} aria-hidden="true" />
                     <span>{item.label}</span>
-                    {item.simulated ? (
-                      <StatusBadge tone="simulated" title={item.simulated}>
-                        sim
-                      </StatusBadge>
-                    ) : null}
                   </Button>
                 );
               })}

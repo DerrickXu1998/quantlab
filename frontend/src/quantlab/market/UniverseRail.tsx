@@ -1,3 +1,4 @@
+import { displaySymbol } from '../../research/format';
 import { Check, Plus, Search, Trash2, X } from 'lucide-react';
 import { useMemo, useState, type FormEvent } from 'react';
 import type { Instrument } from '../../api/client';
@@ -35,7 +36,8 @@ function builtIns(instruments: Instrument[]): UniverseOption[] {
   if (has(macro)) options.push({ id: 'macro', label: 'Macro series', pick: macro });
   for (const regime of Object.keys(REGIME_LABEL)) {
     const pick = (i: Instrument) => i.regime_profile === regime;
-    if (has(pick)) options.push({ id: `regime:${regime}`, label: `Regime · ${REGIME_LABEL[regime]}`, pick });
+    if (has(pick))
+      options.push({ id: `regime:${regime}`, label: `Regime · ${REGIME_LABEL[regime]}`, pick });
   }
   return options;
 }
@@ -107,7 +109,9 @@ export function UniverseRail({
     const notes: string[] = [];
     if (unknown.length > 0) notes.push(`Not found: ${unknown.join(', ')}`);
     if (found.length > MAX_TICKERS) {
-      notes.push(`Charting the first ${MAX_TICKERS}; dropped ${found.slice(MAX_TICKERS).join(', ')}`);
+      notes.push(
+        `Charting the first ${MAX_TICKERS}; dropped ${found.slice(MAX_TICKERS).join(', ')}`,
+      );
     }
     if (next.length > 0) {
       onSet(next);
@@ -157,7 +161,11 @@ export function UniverseRail({
             One to {MAX_TICKERS}, separated by spaces or commas. Replaces the current charts.
           </p>
           {feedback ? (
-            <p role="status" data-testid="market-command-feedback" className="text-xs text-destructive">
+            <p
+              role="status"
+              data-testid="market-command-feedback"
+              className="text-xs text-destructive"
+            >
               {feedback}
             </p>
           ) : null}
@@ -187,7 +195,7 @@ export function UniverseRail({
                     aria-label={`Remove ${symbol}`}
                     className="flex h-11 items-center gap-1 rounded-sm border border-primary/50 bg-primary/10 px-2 type-data text-primary lg:h-7"
                   >
-                    {symbol}
+                    {displaySymbol(symbol)}
                     <X size={16} strokeWidth={1.5} aria-hidden="true" />
                   </button>
                 </li>
@@ -313,7 +321,9 @@ export function UniverseRail({
 
       <div className="min-h-0 flex-1 overflow-y-auto" data-testid="universe-list">
         {matches.length === 0 ? (
-          <p className="px-3 py-6 text-center text-xs text-muted-foreground">No instruments match.</p>
+          <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+            No instruments match.
+          </p>
         ) : (
           <ul className="divide-y divide-border">
             {matches.slice(0, ROW_LIMIT).map((instrument) => {
@@ -326,11 +336,17 @@ export function UniverseRail({
                     role="checkbox"
                     aria-checked={checked}
                     disabled={disabled}
-                    title={disabled ? `Up to ${MAX_TICKERS} charts at once — remove one first` : instrument.name}
+                    title={
+                      disabled
+                        ? `Up to ${MAX_TICKERS} charts at once — remove one first`
+                        : instrument.name
+                    }
                     onClick={() => onToggle(instrument.symbol)}
                     className={cn(
                       'flex min-h-11 w-full items-center gap-2 border-l-2 px-3 py-1.5 text-left transition-colors lg:min-h-0',
-                      checked ? 'border-l-primary bg-primary/5' : 'border-l-transparent hover:bg-accent/40',
+                      checked
+                        ? 'border-l-primary bg-primary/5'
+                        : 'border-l-transparent hover:bg-accent/40',
                       disabled && 'cursor-not-allowed opacity-40 hover:bg-transparent',
                     )}
                   >
@@ -338,15 +354,21 @@ export function UniverseRail({
                       aria-hidden="true"
                       className={cn(
                         'flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border',
-                        checked ? 'border-primary bg-primary text-primary-foreground' : 'border-border',
+                        checked
+                          ? 'border-primary bg-primary text-primary-foreground'
+                          : 'border-border',
                       )}
                     >
                       {checked ? <Check size={16} strokeWidth={1.5} className="h-3 w-3" /> : null}
                     </span>
                     <span className="flex min-w-0 flex-col">
-                      <span className="type-data tracking-[0.08em]">{instrument.symbol}</span>
+                      <span className="type-data tracking-[0.08em]">
+                        {displaySymbol(instrument.symbol)}
+                      </span>
                       {instrument.name && instrument.name !== instrument.symbol ? (
-                        <span className="truncate text-xs text-muted-foreground">{instrument.name}</span>
+                        <span className="truncate text-xs text-muted-foreground">
+                          {instrument.name}
+                        </span>
                       ) : null}
                     </span>
                   </button>

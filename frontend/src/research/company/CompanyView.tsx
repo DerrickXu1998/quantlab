@@ -1,12 +1,12 @@
 import { Search } from 'lucide-react';
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { ChartLine, ChartLineLook, ChartSignal } from '../../components/CandlestickChart';
 import { EmptyState } from '../../components/ui/empty-state';
 import { FillColumn, ScrollRegion, StatGrid } from '../../components/ui/layout';
 import { StatusBadge } from '../../components/ui/status-badge';
 import { useOptionalRuns } from '../../runs/RunsContext';
 import { useInstrumentFacts } from '../../strategies/useFundamentals';
-import { NOT_APPLICABLE, formatCount, formatPrice } from '../format';
+import { NOT_APPLICABLE, formatCount, formatPrice, displaySymbol } from '../format';
 import { AsFiledPanel } from './AsFiledPanel';
 import { AsOfControl } from './AsOfControl';
 import { CoveragePanel } from './CoveragePanel';
@@ -36,6 +36,8 @@ export interface CompanyViewProps {
   /** The as-of date, when the caller keeps it (the route does). */
   asOf?: string;
   onAsOfChange?: (asOf: string) => void;
+  /** Opened once when nothing is selected, if the catalogue has it. */
+  defaultSymbol?: string;
 }
 
 /**
@@ -53,7 +55,13 @@ export interface CompanyViewProps {
  * different sets of accounts, and the point of this screen is that a reader can
  * see that happen.
  */
-export function CompanyView({ symbol, onSelectSymbol, asOf: asOfProp, onAsOfChange }: CompanyViewProps) {
+export function CompanyView({
+  symbol,
+  onSelectSymbol,
+  asOf: asOfProp,
+  onAsOfChange,
+  defaultSymbol,
+}: CompanyViewProps) {
   // Pinned at mount. Recomputing it per render would let the "Today" preset
   // drift mid-session and re-key every read at midnight.
   const [today] = useState(() => todayISO());
@@ -66,6 +74,16 @@ export function CompanyView({ symbol, onSelectSymbol, asOf: asOfProp, onAsOfChan
   const setAsOf = onAsOfChange ?? setLocalAsOf;
 
   const instruments = useInstruments();
+  // Open on a company rather than an empty page, once, and only where the
+  // catalogue has it. Clearing the picker afterwards stays cleared.
+  const openedDefault = useRef(false);
+  useEffect(() => {
+    if (openedDefault.current || !defaultSymbol || instruments.status !== 'ready') return;
+    openedDefault.current = true;
+    if (!symbol && instruments.data.some((instrument) => instrument.symbol === defaultSymbol)) {
+      onSelectSymbol(defaultSymbol);
+    }
+  }, [defaultSymbol, symbol, instruments.status, instruments.data, onSelectSymbol]);
   const overview = useCompanyOverview(symbol, asOf);
   // How far back from the as-of date. The chart and every model run cover this
   // window, so a backtest's return is measured over exactly what is on screen.
@@ -323,10 +341,14 @@ function Identity({
   return (
     <div data-testid="company-identity" className="border border-border bg-card p-3">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className="font-mono text-base tabular-nums text-primary">{symbol}</span>
-        <span className="font-display text-base font-medium text-foreground">
-          {name ?? 'Name unavailable'}
+        <span className="font-mono text-base tabular-nums text-primary">
+          {displaySymbol(symbol)}
         </span>
+        {name === symbol ? null : (
+          <span className="font-display text-base font-medium text-foreground">
+            {name ?? 'Name unavailable'}
+          </span>
+        )}
         {/* 607 of 644 names carry a blank sector, so it renders only when real. */}
         {sector ? <StatusBadge tone="idle">{sector}</StatusBadge> : null}
         {status === 'loading' ? (
@@ -360,9 +382,7 @@ function Identity({
 function Stat({ label, value, mono = true }: { label: string; value: ReactNode; mono?: boolean }) {
   return (
     <div>
-      <p className="type-label text-muted-foreground">
-        {label}
-      </p>
+      <p className="type-label text-muted-foreground">{label}</p>
       <p className={mono ? 'mt-0.5 font-mono text-sm tabular-nums' : 'mt-0.5 text-sm'}>{value}</p>
     </div>
   );

@@ -1,5 +1,5 @@
 import { ChartLine, History, LineChart, Radio, ServerCrash } from 'lucide-react';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { Instrument } from '../../api/client';
 import { replaceRoute, useRoute } from '../../chrome/router';
 import { Button } from '../../components/ui/button';
@@ -137,7 +137,10 @@ function Segment<T extends string>({
 export function MarketView({
   instruments: fallback,
   feedError,
+  defaultSymbol,
 }: {
+  /** Charted once when the page opens with nothing selected. */
+  defaultSymbol?: string;
   /** The shell's watchlist, used only if the full catalogue cannot be read. */
   instruments: Instrument[];
   feedError: string | null;
@@ -147,6 +150,16 @@ export function MarketView({
   const { universes, save, remove: removeUniverse } = useCustomUniverses();
   const settings = useMarketSettings();
   const historical = settings.mode === 'historical';
+  // Open on a chart rather than an instruction, once. A link that names its
+  // own tickers, or a user who clears the chart, is left alone.
+  const openedDefault = useRef(false);
+  useEffect(() => {
+    if (openedDefault.current || !defaultSymbol || catalog.status !== 'ready') return;
+    openedDefault.current = true;
+    if (selected.length === 0 && catalog.data.some((i) => i.symbol === defaultSymbol)) {
+      set([defaultSymbol]);
+    }
+  }, [defaultSymbol, catalog, selected.length, set]);
   // Live prices come from the user's own IBKR login; until it is connected,
   // live mode shows how to connect instead of empty charts.
   const liveConnection = useLiveConnection(!historical);

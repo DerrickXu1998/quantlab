@@ -20,8 +20,8 @@ describe('hash router', () => {
     expect(result.current.destination).toBe('overview');
   });
 
-  it('deep-links each of the six destinations', () => {
-    for (const destination of ['overview', 'research', 'strategies', 'replay', 'market', 'execution']) {
+  it('deep-links each of the five destinations', () => {
+    for (const destination of ['overview', 'research', 'strategies', 'replay', 'market']) {
       window.location.hash = `#/${destination}`;
 
       const { result } = renderHook(() => useRoute());
@@ -29,6 +29,16 @@ describe('hash router', () => {
       expect(result.current.destination).toBe(destination);
       expect(result.current.canonical).toBe(true);
     }
+  });
+
+  it('sends an old Execution link to Overview', () => {
+    // Execution was a simulated order book; the destination is gone.
+    window.location.hash = '#/execution';
+
+    const { result } = renderHook(() => useRoute());
+
+    expect(result.current.destination).toBe('overview');
+    expect(result.current.canonical).toBe(false);
   });
 
   it('follows the hash changing under it, which is what back/forward does', async () => {
