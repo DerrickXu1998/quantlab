@@ -22,6 +22,15 @@ from quantlab.signals.registry import get_rule
 from quantlab.synthetic.generator import Bar
 
 
+def idealized_config(**kwargs):
+    settings = {
+        "fill_timing": "signal_close", "commission_bps": 0.0,
+        "slippage_bps": 0.0, "max_volume_participation": None,
+    }
+    settings.update(kwargs)
+    return ExecutionConfig(**settings)
+
+
 def bars(prices, *, high=None, low=None, opens=None):
     """Bars from a close series; high/low default to +/-1% of the close."""
     out = []
@@ -48,6 +57,15 @@ def decision(date, kind, direction, symbol="AAA"):
 # --- sizing -----------------------------------------------------------------
 
 
+def test_new_runs_default_to_next_open_and_base_costs():
+    config = ExecutionConfig()
+    assert config.fill_timing == "next_open"
+    assert config.commission_bps == 1.0
+    assert config.slippage_bps == 5.0
+    assert config.max_volume_participation == 0.01
+    assert config.order_expiry_days == 5
+
+
 def test_equal_weight_splits_capital_into_one_sleeve_per_instrument():
     """100k across four names is a 25k sleeve; a trade uses the whole sleeve."""
     series = {s: bars([100.0] * 5) for s in ("AAA", "BBB", "CCC", "DDD")}
@@ -55,7 +73,7 @@ def test_equal_weight_splits_capital_into_one_sleeve_per_instrument():
         ["AAA", "BBB", "CCC", "DDD"],
         series,
         [decision("d001", "entry", "bullish")],
-        ExecutionConfig(),
+        idealized_config(),
     )
     trade = result.trades[0]
     assert trade.qty == pytest.approx(250.0)  # 25_000 / 100
@@ -69,7 +87,7 @@ def test_fixed_fraction_sizes_against_equity_not_the_sleeve():
         ["AAA", "BBB"],
         series,
         [decision("d001", "entry", "bullish")],
-        ExecutionConfig(position_sizing="fixed_fraction", sizing_value=0.30),
+        idealized_config(position_sizing="fixed_fraction", sizing_value=0.30),
     )
     assert result.trades[0].qty == pytest.approx(300.0)  # 30% of 100_000 / 100
 
@@ -80,7 +98,7 @@ def test_fixed_notional_ignores_book_size():
         ["AAA"],
         series,
         [decision("d001", "entry", "bullish")],
-        ExecutionConfig(position_sizing="fixed_notional", sizing_value=7_500.0),
+        idealized_config(position_sizing="fixed_notional", sizing_value=7_500.0),
     )
     assert result.trades[0].qty == pytest.approx(75.0)
 
@@ -91,7 +109,7 @@ def test_max_position_pct_caps_a_pooled_position():
         ["AAA"],
         series,
         [decision("d001", "entry", "bullish")],
-        ExecutionConfig(
+        idealized_config(
             position_sizing="fixed_fraction", sizing_value=0.90, max_position_pct=0.25
         ),
     )
@@ -103,7 +121,7 @@ def test_max_positions_rejects_the_signal_rather_than_queueing_it():
     decisions = [
         decision("d001", "entry", "bullish", symbol) for symbol in ("AAA", "BBB", "CCC")
     ]
-    result = simulate(["AAA", "BBB", "CCC"], series, decisions, ExecutionConfig(max_positions=2))
+    result = simulate(["AAA", "BBB", "CCC"], series, decisions, idealized_config(max_positions=2))
     assert len(result.trades) == 2
     assert result.summary.rejected_max_positions == 1
 
@@ -114,7 +132,7 @@ def test_max_positions_rejects_the_signal_rather_than_queueing_it():
 def test_commission_and_slippage_are_charged_on_both_sides():
     """Hand-computed: 10 bps commission, 5 bps slippage, one round trip."""
     series = {"AAA": bars([100.0, 102.0, 103.0, 104.0])}
-    config = ExecutionConfig(commission_bps=10, slippage_bps=5)
+    config = idealized_config(commission_bps=10, slippage_bps=5)
     result = simulate(
         ["AAA"],
         series,
@@ -141,9 +159,9 @@ def test_commission_and_slippage_are_charged_on_both_sides():
 def test_costs_only_ever_reduce_the_result():
     series = {"AAA": bars([100.0, 105.0, 110.0, 115.0])}
     decisions = [decision("d001", "entry", "bullish"), decision("d003", "exit", "bearish")]
-    free = simulate(["AAA"], series, decisions, ExecutionConfig())
+    free = simulate(["AAA"], series, decisions, idealized_config())
     charged = simulate(
-        ["AAA"], series, decisions, ExecutionConfig(commission_bps=25, slippage_bps=10)
+        ["AAA"], series, decisions, idealized_config(commission_bps=25, slippage_bps=10)
     )
     assert charged.equity[-1].value < free.equity[-1].value
 
@@ -157,7 +175,7 @@ def test_stop_loss_fills_at_the_stop_when_the_bar_merely_touches_it():
         ["AAA"],
         series,
         [decision("d000", "entry", "bullish")],
-        ExecutionConfig(stop_loss_pct=0.05),
+        idealized_config(stop_loss_pct=0.05),
     )
     trade = result.trades[0]
     assert trade.exit_reason == "stop_loss"
@@ -175,7 +193,7 @@ def test_stop_fills_at_the_open_when_the_session_gapped_through_it():
         ["AAA"],
         series,
         [decision("d000", "entry", "bullish")],
-        ExecutionConfig(stop_loss_pct=0.05),
+        idealized_config(stop_loss_pct=0.05),
     )
     trade = result.trades[0]
     assert trade.exit_reason == "stop_loss"
@@ -190,7 +208,7 @@ def test_stop_wins_when_a_single_bar_contains_both_stop_and_target():
         ["AAA"],
         series,
         [decision("d000", "entry", "bullish")],
-        ExecutionConfig(stop_loss_pct=0.05, take_profit_pct=0.05),
+        idealized_config(stop_loss_pct=0.05, take_profit_pct=0.05),
     )
     assert result.trades[0].exit_reason == "stop_loss"
     assert result.trades[0].exit_price == pytest.approx(95.0)
@@ -206,7 +224,7 @@ def test_take_profit_fires_when_no_stop_is_in_range():
         ["AAA"],
         series,
         [decision("d000", "entry", "bullish")],
-        ExecutionConfig(take_profit_pct=0.05),
+        idealized_config(take_profit_pct=0.05),
     )
     assert result.trades[0].exit_reason == "take_profit"
     assert result.trades[0].exit_price == pytest.approx(105.0)
@@ -224,7 +242,7 @@ def test_a_target_does_not_collect_a_favourable_gap():
         ["AAA"],
         series,
         [decision("d000", "entry", "bullish")],
-        ExecutionConfig(take_profit_pct=0.05),
+        idealized_config(take_profit_pct=0.05),
     )
     assert result.trades[0].exit_price == pytest.approx(105.0)
 
@@ -245,7 +263,7 @@ def test_trailing_stop_measures_from_the_best_close_not_the_entry():
         ["AAA"],
         series,
         [decision("d000", "entry", "bullish")],
-        ExecutionConfig(trailing_stop_pct=0.10),
+        idealized_config(trailing_stop_pct=0.10),
     )
     trade = result.trades[0]
     assert trade.exit_reason == "trailing_stop"
@@ -260,7 +278,7 @@ def test_todays_close_cannot_set_todays_trailing_trigger():
         ["AAA"],
         series,
         [decision("d000", "entry", "bullish")],
-        ExecutionConfig(trailing_stop_pct=0.10),
+        idealized_config(trailing_stop_pct=0.10),
     )
     # Trail is 90 from the entry close of 100, and the low of 99.5 never reaches it.
     assert result.trades[0].open is True
@@ -273,7 +291,7 @@ def test_atr_stop_scales_with_the_instruments_own_range():
         ["AAA"],
         series,
         [decision("d018", "entry", "bullish")],
-        ExecutionConfig(atr_stop_multiple=1.0, atr_period=14),
+        idealized_config(atr_stop_multiple=1.0, atr_period=14),
     )
     assert result.trades[0].exit_reason == "stop_loss"
 
@@ -287,7 +305,7 @@ def test_the_tighter_of_a_percentage_and_an_atr_stop_wins():
         ["AAA"],
         series,
         [decision("d018", "entry", "bullish")],
-        ExecutionConfig(stop_loss_pct=0.02, atr_stop_multiple=1.0, atr_period=14),
+        idealized_config(stop_loss_pct=0.02, atr_stop_multiple=1.0, atr_period=14),
     )
     assert result.trades[0].exit_price == pytest.approx(98.0)
 
@@ -298,7 +316,7 @@ def test_max_holding_days_closes_a_position_that_nothing_else_would():
         ["AAA"],
         series,
         [decision("d000", "entry", "bullish")],
-        ExecutionConfig(max_holding_days=3),
+        idealized_config(max_holding_days=3),
     )
     trade = result.trades[0]
     assert (trade.exit_reason, trade.exit_date) == ("max_holding", "d003")
@@ -310,7 +328,7 @@ def test_min_holding_days_suppresses_a_signal_exit_but_not_a_stop():
         ["AAA"],
         series,
         [decision("d000", "entry", "bullish"), decision("d001", "exit", "bearish")],
-        ExecutionConfig(min_holding_days=3),
+        idealized_config(min_holding_days=3),
     )
     assert held.trades[0].open is True
 
@@ -318,7 +336,7 @@ def test_min_holding_days_suppresses_a_signal_exit_but_not_a_stop():
         ["AAA"],
         {"AAA": bars([100.0, 80.0, 80.0], low=[99.0, 79.0, 79.0])},
         [decision("d000", "entry", "bullish"), decision("d001", "exit", "bearish")],
-        ExecutionConfig(min_holding_days=3, stop_loss_pct=0.05),
+        idealized_config(min_holding_days=3, stop_loss_pct=0.05),
     )
     assert stopped.trades[0].exit_reason == "stop_loss"
 
@@ -330,10 +348,10 @@ def test_cooldown_blocks_a_re_entry_inside_the_window():
         decision("d001", "exit", "bearish"),
         decision("d003", "entry", "bullish"),
     ]
-    free = simulate(["AAA"], series, decisions, ExecutionConfig())
+    free = simulate(["AAA"], series, decisions, idealized_config())
     assert len(free.trades) == 2
 
-    cooled = simulate(["AAA"], series, decisions, ExecutionConfig(cooldown_days=5))
+    cooled = simulate(["AAA"], series, decisions, idealized_config(cooldown_days=5))
     assert len(cooled.trades) == 1
     assert cooled.summary.rejected_cooldown == 1
 
@@ -347,7 +365,7 @@ def test_next_open_fills_on_the_following_session():
         ["AAA"],
         series,
         [decision("d000", "entry", "bullish"), decision("d002", "exit", "bearish")],
-        ExecutionConfig(fill_timing="next_open"),
+        idealized_config(fill_timing="next_open"),
     )
     trade = result.trades[0]
     assert (trade.entry_date, trade.entry_price) == ("d001", 101.0)
@@ -360,7 +378,7 @@ def test_a_next_open_signal_on_the_last_bar_has_nowhere_to_fill():
         ["AAA"],
         series,
         [decision("d001", "entry", "bullish")],
-        ExecutionConfig(fill_timing="next_open"),
+        idealized_config(fill_timing="next_open"),
     )
     assert result.trades == []
 
@@ -371,7 +389,7 @@ def test_next_close_fills_at_the_following_sessions_close():
         ["AAA"],
         series,
         [decision("d000", "entry", "bullish"), decision("d002", "exit", "bearish")],
-        ExecutionConfig(fill_timing="next_close"),
+        idealized_config(fill_timing="next_close"),
     )
     trade = result.trades[0]
     assert (trade.entry_date, trade.entry_price) == ("d001", 102.0)
@@ -391,7 +409,7 @@ def test_next_typical_fills_inside_the_following_sessions_range():
         ["AAA"],
         series,
         [decision("d000", "entry", "bullish"), decision("d002", "exit", "bearish")],
-        ExecutionConfig(fill_timing="next_typical"),
+        idealized_config(fill_timing="next_typical"),
     )
     trade = result.trades[0]
     assert trade.entry_date == "d001"
@@ -412,7 +430,7 @@ def test_a_stop_hit_during_the_session_beats_an_exit_queued_for_its_close():
         ["AAA"],
         series,
         [decision("d000", "entry", "bullish"), decision("d002", "exit", "bearish")],
-        ExecutionConfig(fill_timing="next_close", stop_loss_pct=0.05),
+        idealized_config(fill_timing="next_close", stop_loss_pct=0.05),
     )
     trade = result.trades[0]
     assert trade.exit_date == "d003"
@@ -427,7 +445,7 @@ def test_a_position_filled_at_the_close_is_not_stopped_by_that_sessions_range():
         ["AAA"],
         series,
         [decision("d000", "entry", "bullish")],
-        ExecutionConfig(fill_timing="next_close", stop_loss_pct=0.05),
+        idealized_config(fill_timing="next_close", stop_loss_pct=0.05),
     )
     trade = result.trades[0]
     assert trade.entry_date == "d001"
@@ -441,7 +459,7 @@ def test_a_deferred_signal_on_the_last_bar_has_nowhere_to_fill(timing):
         ["AAA"],
         series,
         [decision("d001", "entry", "bullish")],
-        ExecutionConfig(fill_timing=timing),
+        idealized_config(fill_timing=timing),
     )
     assert result.trades == []
 
@@ -456,7 +474,7 @@ def test_a_deferred_signal_on_the_last_bar_has_nowhere_to_fill(timing):
     ],
 )
 def test_every_fill_timing_states_its_price_in_the_assumptions(timing, phrase):
-    assert any(phrase in line for line in ExecutionConfig(fill_timing=timing).assumptions())
+    assert any(phrase in line for line in idealized_config(fill_timing=timing).assumptions())
 
 
 # --- shorts -----------------------------------------------------------------
@@ -465,7 +483,7 @@ def test_every_fill_timing_states_its_price_in_the_assumptions(timing, phrase):
 def test_shorts_are_refused_unless_enabled_and_counted_when_refused():
     series = {"AAA": bars([100.0, 90.0, 80.0])}
     result = simulate(
-        ["AAA"], series, [decision("d000", "entry", "bearish")], ExecutionConfig()
+        ["AAA"], series, [decision("d000", "entry", "bearish")], idealized_config()
     )
     assert result.trades == []
     assert result.summary.rejected_shorts_disabled == 1
@@ -477,7 +495,7 @@ def test_a_short_makes_money_when_the_price_falls():
         ["AAA"],
         series,
         [decision("d000", "entry", "bearish"), decision("d002", "exit", "bullish")],
-        ExecutionConfig(allow_shorts=True),
+        idealized_config(allow_shorts=True),
     )
     trade = result.trades[0]
     assert trade.side == "short"
@@ -496,7 +514,7 @@ def test_a_short_stop_triggers_on_the_way_up():
         ["AAA"],
         series,
         [decision("d000", "entry", "bearish")],
-        ExecutionConfig(allow_shorts=True, stop_loss_pct=0.05),
+        idealized_config(allow_shorts=True, stop_loss_pct=0.05),
     )
     trade = result.trades[0]
     assert (trade.exit_reason, trade.exit_price) == ("stop_loss", pytest.approx(105.0))
@@ -511,7 +529,7 @@ def test_no_pyramiding_a_repeat_entry_is_ignored():
         ["AAA"],
         series,
         [decision("d000", "entry", "bullish"), decision("d002", "entry", "bullish")],
-        ExecutionConfig(),
+        idealized_config(),
     )
     assert len(result.trades) == 1
 
@@ -519,7 +537,7 @@ def test_no_pyramiding_a_repeat_entry_is_ignored():
 def test_an_exit_with_nothing_held_does_nothing():
     series = {"AAA": bars([100.0] * 4)}
     result = simulate(
-        ["AAA"], series, [decision("d001", "exit", "bearish")], ExecutionConfig()
+        ["AAA"], series, [decision("d001", "exit", "bearish")], idealized_config()
     )
     assert result.trades == []
     assert result.summary.fills == 0
@@ -528,7 +546,7 @@ def test_an_exit_with_nothing_held_does_nothing():
 def test_a_position_open_at_the_end_is_reported_but_never_counted_as_realised():
     series = {"AAA": bars([100.0, 110.0])}
     result = simulate(
-        ["AAA"], series, [decision("d000", "entry", "bullish")], ExecutionConfig()
+        ["AAA"], series, [decision("d000", "entry", "bullish")], idealized_config()
     )
     trade = result.trades[0]
     assert (trade.open, trade.exit_date, trade.exit_reason) == (True, None, "end_of_window")
@@ -537,7 +555,7 @@ def test_a_position_open_at_the_end_is_reported_but_never_counted_as_realised():
 def test_a_symbol_outside_the_selection_is_ignored_not_silently_traded():
     series = {"AAA": bars([100.0] * 4)}
     result = simulate(
-        ["AAA"], series, [decision("d001", "entry", "bullish", symbol="ZZZ")], ExecutionConfig()
+        ["AAA"], series, [decision("d001", "entry", "bullish", symbol="ZZZ")], idealized_config()
     )
     assert result.trades == []
 
@@ -545,7 +563,7 @@ def test_a_symbol_outside_the_selection_is_ignored_not_silently_traded():
 def test_a_decision_on_a_date_with_no_bar_is_counted_as_dropped():
     series = {"AAA": bars([100.0] * 3)}
     result = simulate(
-        ["AAA"], series, [decision("d009", "entry", "bullish")], ExecutionConfig()
+        ["AAA"], series, [decision("d009", "entry", "bullish")], idealized_config()
     )
     assert result.summary.dropped_no_bar == 1
 
@@ -553,7 +571,7 @@ def test_a_decision_on_a_date_with_no_bar_is_counted_as_dropped():
 def test_the_same_inputs_produce_the_same_book_twice():
     series = {"AAA": bars([100.0, 105.0, 98.0, 103.0, 99.0])}
     decisions = [decision("d000", "entry", "bullish"), decision("d003", "exit", "bearish")]
-    config = ExecutionConfig(commission_bps=5, slippage_bps=2, stop_loss_pct=0.05)
+    config = idealized_config(commission_bps=5, slippage_bps=2, stop_loss_pct=0.05)
     first = simulate(["AAA"], series, decisions, config)
     second = simulate(["AAA"], series, decisions, config)
     assert first == second
@@ -573,13 +591,15 @@ def test_the_same_inputs_produce_the_same_book_twice():
         ({"stop_loss_pct": 5.0}, "fraction in (0, 1]"),
         ({"max_positions": 0}, "max_positions"),
         ({"max_position_pct": 1.5}, "max_position_pct"),
+        ({"max_volume_participation": 0.0}, "max_volume_participation"),
+        ({"order_expiry_days": 0}, "order_expiry_days"),
         ({"atr_period": 1}, "atr_period"),
         ({"min_holding_days": 10, "max_holding_days": 5}, "min_holding_days must be <="),
     ],
 )
 def test_invalid_configuration_is_refused_with_the_field_named(kwargs, message):
     with pytest.raises(ValueError, match=message.replace("(", r"\(").replace(")", r"\)")):
-        ExecutionConfig(**kwargs)
+        idealized_config(**kwargs)
 
 
 def test_a_misspelled_setting_is_an_error_not_a_silent_default():
@@ -589,11 +609,11 @@ def test_a_misspelled_setting_is_an_error_not_a_silent_default():
 
 
 def test_assumptions_describe_the_config_that_actually_ran():
-    quiet = ExecutionConfig().assumptions()
+    quiet = idealized_config().assumptions()
     assert any("No transaction costs" in line for line in quiet)
     assert any("Long-only" in line for line in quiet)
 
-    loud = ExecutionConfig(
+    loud = idealized_config(
         commission_bps=5, slippage_bps=2, stop_loss_pct=0.05, allow_shorts=True
     ).assumptions()
     assert not any("No transaction costs" in line for line in loud)
@@ -622,7 +642,7 @@ def _synthetic(seed: int, n: int = 300):
 
 
 @pytest.mark.parametrize("rule_name", ["rsi-threshold", "sma-crossover", "breakout-20d"])
-def test_default_config_reproduces_the_pre_execution_engine(rule_name):
+def test_idealized_config_reproduces_the_pre_execution_engine(rule_name):
     """The compatibility promise, checked against the old code rather than
     against a recorded number: same trades, same curve, same metrics."""
     symbols = ["AAA", "BBB", "CCC"]
@@ -658,7 +678,7 @@ def test_default_config_reproduces_the_pre_execution_engine(rule_name):
         )
         for item in stored
     ]
-    new = simulate(symbols, series, decisions, ExecutionConfig())
+    new = simulate(symbols, series, decisions, idealized_config())
 
     assert [p.date for p in new.equity] == [p.date for p in old_equity]
     for fresh, original in zip(new.equity, old_equity, strict=True):
@@ -677,7 +697,7 @@ def test_default_config_reproduces_the_pre_execution_engine(rule_name):
 def test_iter_days_and_simulate_agree_because_there_is_only_one_loop():
     series = {"AAA": _synthetic(7, 120)}
     decisions = [decision("d010", "entry", "bullish"), decision("d090", "exit", "bearish")]
-    config = ExecutionConfig(commission_bps=5, stop_loss_pct=0.10)
+    config = idealized_config(commission_bps=5, stop_loss_pct=0.10)
 
     simulator = ExecutionSimulator(["AAA"], series, config)
     days = list(simulator.iter_days(decisions))
@@ -694,7 +714,7 @@ def test_ingest_extends_atr_and_volatility_bit_identically_to_the_batch_precompu
     import numpy as np
 
     series = _synthetic(11, 200)
-    config = ExecutionConfig(
+    config = idealized_config(
         position_sizing="volatility_target",
         sizing_value=0.10,
         atr_stop_multiple=2.0,
@@ -719,3 +739,80 @@ def test_ingest_extends_atr_and_volatility_bit_identically_to_the_batch_precompu
     ] == [(day.date, day.equity, day.cash, day.realized_pnl, day.fills) for day in batch_days]
     assert streamed.trades() == batch.trades()
     assert batch.closed_trades, "the fixture must actually trade"
+
+
+# --- volume participation ---------------------------------------------------
+
+
+def volume_bars(prices, volumes):
+    return [
+        Bar(date=f"d{i:03d}", open=float(price), high=float(price) * 1.01,
+            low=float(price) * 0.99, close=float(price), volume=volume)
+        for i, (price, volume) in enumerate(zip(prices, volumes, strict=True))
+    ]
+
+
+def volume_config(**kwargs):
+    settings = {"max_volume_participation": 0.10, "order_expiry_days": 5}
+    settings.update(kwargs)
+    return idealized_config(**settings)
+
+
+def test_a_capped_entry_carries_and_completes_over_multiple_bars():
+    result = simulate(
+        ["AAA"], {"AAA": volume_bars([100.0] * 4, [1_000] * 4)},
+        [decision("d000", "entry", "bullish")], volume_config(),
+    )
+    assert [fill.qty for fill in result.fills] == [100.0] * 4
+    assert result.trades[0].qty == 400.0
+    assert result.summary.volume_limited_fills == 4
+    assert result.summary.requested_notional == 100_000.0
+    assert result.summary.filled_notional == 40_000.0
+    assert result.summary.unfilled_orders == 1
+    assert result.summary.unfilled_notional == 60_000.0
+
+
+def test_a_signal_remainder_expires_after_its_session_budget():
+    result = simulate(
+        ["AAA"], {"AAA": volume_bars([100.0] * 4, [1_000] * 4)},
+        [decision("d000", "entry", "bullish")], volume_config(order_expiry_days=2),
+    )
+    assert result.trades[0].qty == 300.0
+    assert result.summary.expired_orders == 1
+    assert result.summary.unfilled_orders == 0
+
+
+def test_zero_volume_waits_for_a_later_bar():
+    result = simulate(
+        ["AAA"], {"AAA": volume_bars([100.0, 100.0], [0, 1_000])},
+        [decision("d000", "entry", "bullish")], volume_config(),
+    )
+    assert [(fill.date, fill.qty) for fill in result.fills] == [("d001", 100.0)]
+
+
+def test_partial_exits_produce_one_weighted_trade():
+    result = simulate(
+        ["AAA"], {"AAA": volume_bars([100.0, 100.0, 110.0, 120.0], [1_000] * 4)},
+        [decision("d000", "entry", "bullish"), decision("d002", "exit", "bearish")],
+        volume_config(initial_capital=20_000.0),
+    )
+    (trade,) = result.trades
+    assert trade.qty == 200.0
+    assert trade.entry_price == 100.0
+    assert trade.exit_price == 115.0
+    assert trade.return_pct == pytest.approx(0.15)
+    assert trade.pnl == pytest.approx(3_000.0)
+
+
+def test_a_protective_exit_remainder_stays_active_until_filled():
+    series = volume_bars([100.0, 100.0, 95.0, 95.0], [1_000] * 4)
+    series[2] = Bar(date="d002", open=95.0, high=96.0, low=90.0, close=95.0, volume=1_000)
+    series[3] = Bar(date="d003", open=95.0, high=96.0, low=90.0, close=95.0, volume=1_000)
+    result = simulate(
+        ["AAA"], {"AAA": series}, [decision("d000", "entry", "bullish")],
+        volume_config(stop_loss_pct=0.05, order_expiry_days=5),
+    )
+    (trade,) = result.trades
+    assert trade.exit_reason == "stop_loss"
+    assert trade.qty == 200.0
+    assert result.summary.expired_orders == 0

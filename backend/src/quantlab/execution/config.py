@@ -111,9 +111,13 @@ class ExecutionConfig:
     max_position_pct: float = 1.0
 
     # --- timing and costs ---
-    fill_timing: str = "signal_close"
-    commission_bps: float = 0.0
-    slippage_bps: float = 0.0
+    fill_timing: str = "next_open"
+    commission_bps: float = 1.0
+    slippage_bps: float = 5.0
+
+    # --- liquidity ---
+    max_volume_participation: float | None = 0.01
+    order_expiry_days: int = 5
 
     # --- risk controls ---
     stop_loss_pct: float | None = None
@@ -154,8 +158,8 @@ class ExecutionConfig:
     # --- signal bars ---
     #: The bars signals are computed on and the engine steps through: ``1d``
     #: (default) or intraday ``1h`` / ``15m`` / ``5m``, built from the IEX
-    #: minute bars. Intraday, every count of "days" below -- holding periods,
-    #: cooldown, ATR period -- counts bars, and annualisation is per bar.
+    #: minute bars. Intraday, holding periods and cooldown count trading sessions;
+    #: ATR and volatility lookbacks count bars, and annualisation is per bar.
     bar_frequency: str = "1d"
 
     def __post_init__(self) -> None:
@@ -218,6 +222,9 @@ class ExecutionConfig:
 
         _positive("commission_bps", self.commission_bps, allow_zero=True)
         _positive("slippage_bps", self.slippage_bps, allow_zero=True)
+        _fraction("max_volume_participation", self.max_volume_participation)
+        if self.order_expiry_days < 1:
+            raise ValueError("order_expiry_days must be >= 1")
         _positive("borrow_cost_bps", self.borrow_cost_bps, allow_zero=True)
         if self.borrow_cost_bps > 5_000:
             # 50%/yr. Anything above is almost certainly a percent typed as bps.
@@ -360,6 +367,15 @@ class ExecutionConfig:
         else:
             out.append("No transaction costs and no slippage are charged.")
 
+        if self.max_volume_participation is not None:
+            out.append(
+                f"Each order fills at most {self.max_volume_participation:.1%} of a bar's "
+                f"volume. Unfilled signal quantity carries for up to {self.order_expiry_days} "
+                "trading sessions; protective-exit quantity remains active until filled or the "
+                "window ends. Zero-volume bars cannot fill. Intraday capacity uses IEX volume, "
+                "a conservative proxy rather than consolidated market volume."
+            )
+
         risk: list[str] = []
         if self.stop_loss_pct is not None:
             risk.append(f"a {self.stop_loss_pct:.1%} stop from entry")
@@ -407,8 +423,9 @@ class ExecutionConfig:
             out.append(
                 f"Signals and fills are on {self.bar_frequency} bars built from the IEX minute "
                 "feed, regular hours only; a bar's open and close are that feed's, not the "
-                "official auction prices. Holding periods, cooldown and the ATR period count "
-                "bars, not days. Fundamentals and macro series are read as of the previous "
+                "official auction prices. Holding periods and cooldown count trading sessions; "
+                "ATR and volatility lookbacks count bars. Fundamentals and macro series are read "
+                "as of the previous "
                 "session, since a day's close and filings are not known mid-session."
             )
 
@@ -443,10 +460,9 @@ class ExecutionConfig:
                 "Prices are unadjusted, so a split or dividend inside the window shows up as a "
                 "real move."
             )
-        out.append(
-            "Fills assume unlimited liquidity at the modelled price: no partial fills, no "
-            "queue position, no market impact."
-        )
+        if self.max_volume_participation is None:
+            out.append("Fills assume unlimited liquidity at the modelled price.")
+        out.append("No queue position, order-book depth or market impact is modelled.")
         return out
 
     # -- serialisation -----------------------------------------------------
@@ -481,10 +497,8 @@ class ExecutionConfig:
         return replace(self, **overrides)
 
 
-#: What a run gets when the caller says nothing. Chosen to reproduce the
-#: behaviour that predates this module -- equal-weight sleeves, filled at the
-#: close of the signal date, no costs and no stops -- except that prices are
-#: adjusted for splits and dividends. A stored run recorded before
+#: What a new run gets when the caller says nothing: equal-weight sleeves,
+#: next-open fills, base costs and no stops. A stored run recorded before
 #: ``price_adjustment`` existed re-executes with it set to ``none``
 #: (``research.runner.execution_config_for``), so its numbers do not move.
 DEFAULT_EXECUTION = ExecutionConfig()

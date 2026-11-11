@@ -94,9 +94,9 @@ describe('useModelOverlays', () => {
       // Nothing chosen: the engine's own defaults, sent explicitly so the run
       // records what it assumed.
       execution: expect.objectContaining({
-        fill_timing: 'signal_close',
-        commission_bps: 0,
-        slippage_bps: 0,
+        fill_timing: 'next_open',
+        commission_bps: 1,
+        slippage_bps: 5,
       }),
     });
     expect(onRunCreated).toHaveBeenCalled();
@@ -257,10 +257,10 @@ describe('ModelsPanel', () => {
     await user.click(screen.getByRole('button', { name: /apply to aapl\.us/i }));
 
     expect(onApply).toHaveBeenCalledWith(rsiThreshold, { period: 21 }, {
-      fill_timing: 'signal_close',
+      fill_timing: 'next_open',
       intraday_resolution: 'daily',
-      commission_bps: 0,
-      slippage_bps: 0,
+      commission_bps: 1,
+      slippage_bps: 5,
     });
   });
 
@@ -302,8 +302,8 @@ describe('ModelsPanel', () => {
     expect(onApply).toHaveBeenCalledWith(expect.anything(), {}, {
       fill_timing: 'next_vwap',
       intraday_resolution: 'minute',
-      commission_bps: 0,
-      slippage_bps: 0,
+      commission_bps: 1,
+      slippage_bps: 5,
     });
   });
 

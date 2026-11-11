@@ -98,12 +98,14 @@ function Counter({
   title,
   value,
   alarming,
+  format = 'integer',
 }: {
   label: string;
   title: string;
   value: number | undefined;
   /** Non-zero here means the run did not test what the user thinks it tested. */
   alarming?: boolean;
+  format?: 'integer' | 'currency';
 }) {
   if (value === undefined) return null;
   const lit = alarming === true && value > 0;
@@ -115,7 +117,7 @@ function Counter({
       <dd>
         <Numeric
           value={value}
-          format="integer"
+          format={format}
           tone={lit ? 'default' : 'muted'}
           className={`text-xs ${lit ? 'text-destructive' : ''}`}
         />
@@ -145,6 +147,41 @@ function ExecutionSummaryStrip({ summary }: { summary: ExecutionSummary }) {
     >
       <Counter label="Orders" title="Entry and exit orders the strategy asked for." value={summary.orders} />
       <Counter label="Fills" title="Orders that actually traded." value={summary.fills} />
+      <Counter
+        label="Volume limited"
+        title="Fills capped by the configured share of bar volume."
+        value={summary.volume_limited_fills}
+      />
+      <Counter
+        label="Expired"
+        title="Signal orders whose unfilled remainder exceeded its session budget."
+        value={summary.expired_orders}
+        alarming
+      />
+      <Counter
+        label="Unfilled"
+        title="Orders still working or left unfilled at the window end."
+        value={summary.unfilled_orders}
+        alarming
+      />
+      <Counter
+        label="Requested"
+        title="Absolute notional requested by entry and exit orders."
+        value={summary.requested_notional}
+        format="currency"
+      />
+      <Counter
+        label="Filled"
+        title="Absolute notional actually executed across all fills."
+        value={summary.filled_notional}
+        format="currency"
+      />
+      <Counter
+        label="Unfilled value"
+        title="Remaining order quantity valued at the latest available price."
+        value={summary.unfilled_notional}
+        format="currency"
+      />
       <Counter
         label="No cash"
         title="Orders the book had no cash left to pay for."

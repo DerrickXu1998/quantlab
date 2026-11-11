@@ -314,7 +314,7 @@ describe('TabBar', () => {
 });
 
 describe('executionSummary', () => {
-  it('lists changed settings first and flags flattering defaults even when unchanged', () => {
+  it('lists changed settings first and accepts the realistic defaults', () => {
     const items = executionSummary({ ...DEFAULT_EXECUTION, stop_loss_pct: 0.08, max_positions: 10 });
     expect(items.filter((item) => item.changed).map((item) => item.text)).toEqual([
       'max 10 positions',
@@ -322,7 +322,18 @@ describe('executionSummary', () => {
     ]);
     const costs = items.find((item) => item.key === 'costs');
     expect(costs?.changed).toBe(false);
-    expect(costs?.caution).toMatch(/flatter/);
+    expect(costs?.caution).toBeUndefined();
+    expect(items.find((item) => item.key === 'fill_timing')?.caution).toBeUndefined();
+  });
+
+  it('flags idealized costs and same-close fills', () => {
+    const items = executionSummary({
+      ...DEFAULT_EXECUTION,
+      fill_timing: 'signal_close',
+      commission_bps: 0,
+      slippage_bps: 0,
+    });
+    expect(items.find((item) => item.key === 'costs')?.caution).toMatch(/flatter/);
     expect(items.find((item) => item.key === 'fill_timing')?.caution).toMatch(/market-on-close/);
   });
 

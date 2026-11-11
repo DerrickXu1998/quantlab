@@ -14,10 +14,15 @@ import math
 
 import pytest
 
+from quantlab.execution import ExecutionConfig
 from quantlab.research import performance
 from quantlab.synthetic.generator import Bar
 
 INITIAL = 100_000.0
+IDEALIZED = ExecutionConfig(
+    fill_timing="signal_close", commission_bps=0.0, slippage_bps=0.0,
+    max_volume_participation=None,
+)
 
 
 def bars(*closes: float, start_day: int = 1) -> list[Bar]:
@@ -283,7 +288,8 @@ def test_compute_performance_assembles_the_whole_answer():
     signals = [signal("AAA", "2024-01-01", "bullish"), signal("AAA", "2024-01-03", "bearish")]
 
     result = performance.compute_performance(
-        run_id="run-1", signals=signals, bars_by_symbol=by_symbol, symbols=["AAA"]
+        run_id="run-1", signals=signals, bars_by_symbol=by_symbol, symbols=["AAA"],
+        execution=IDEALIZED,
     )
 
     assert result.run_id == "run-1"
@@ -314,7 +320,8 @@ def test_the_caveats_travel_with_the_numbers():
     """The assumptions are part of the payload, not UI copy that a refactor
     can drop. These numbers are not tradeable and must never look like they are."""
     result = performance.compute_performance(
-        run_id="r", signals=[], bars_by_symbol={"AAA": bars(100.0, 110.0)}, symbols=["AAA"]
+        run_id="r", signals=[], bars_by_symbol={"AAA": bars(100.0, 110.0)}, symbols=["AAA"],
+        execution=IDEALIZED,
     )
 
     joined = " ".join(result.assumptions).lower()
@@ -345,7 +352,7 @@ def test_a_split_does_not_crash_the_benchmark():
 
     result = performance.compute_performance(
         run_id="split", signals=signals, bars_by_symbol=by_symbol, symbols=["AAA"],
-        corporate_actions=_actions(("2024-01-03", "split", 20.0)),
+        execution=IDEALIZED, corporate_actions=_actions(("2024-01-03", "split", 20.0)),
     )
 
     assert result.benchmark[-1].value == pytest.approx(INITIAL)
@@ -360,7 +367,7 @@ def test_a_dividend_is_part_of_the_benchmarks_return():
 
     result = performance.compute_performance(
         run_id="div", signals=signals, bars_by_symbol=by_symbol, symbols=["AAA"],
-        corporate_actions=_actions(("2024-01-03", "dividend", None, 2.0)),
+        execution=IDEALIZED, corporate_actions=_actions(("2024-01-03", "dividend", None, 2.0)),
     )
 
     assert result.benchmark[-1].value == pytest.approx(INITIAL)
@@ -408,7 +415,10 @@ def test_the_benchmark_applies_only_what_the_runs_mode_applies():
 
     result = performance.compute_performance(
         run_id="split-only", signals=signals, bars_by_symbol=by_symbol, symbols=["AAA"],
-        execution=ExecutionConfig(price_adjustment="split"),
+        execution=ExecutionConfig(
+            price_adjustment="split", fill_timing="signal_close", commission_bps=0.0,
+            slippage_bps=0.0, max_volume_participation=None,
+        ),
         corporate_actions=_actions(("2024-01-03", "dividend", None, 2.0)),
     )
 

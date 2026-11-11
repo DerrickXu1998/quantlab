@@ -54,6 +54,30 @@ const SIZING_EXPLAINERS: Record<PositionSizing, string> = {
   volatility_target: 'Sizes each position so its own volatility hits a target.',
 };
 
+const COST_PROFILES = {
+  idealized: { commission_bps: 0, slippage_bps: 0 },
+  base: { commission_bps: 1, slippage_bps: 5 },
+  stressed: { commission_bps: 2, slippage_bps: 20 },
+} as const;
+
+type CostProfile = keyof typeof COST_PROFILES | 'custom';
+
+const COST_PROFILE_LABELS: Record<CostProfile, string> = {
+  idealized: 'Idealized — no costs',
+  base: 'Base — 1 bps commission + 5 bps slippage',
+  stressed: 'Stressed — 2 bps commission + 20 bps slippage',
+  custom: 'Custom',
+};
+
+function costProfileOf(value: ExecutionConfig): CostProfile {
+  for (const [profile, costs] of Object.entries(COST_PROFILES)) {
+    if (value.commission_bps === costs.commission_bps && value.slippage_bps === costs.slippage_bps) {
+      return profile as CostProfile;
+    }
+  }
+  return 'custom';
+}
+
 /** Fractions on the wire, percentages on the screen. Rounded to kill 0.1+0.2. */
 function toFraction(percentValue: number): number {
   return Number((percentValue / 100).toFixed(8));
@@ -520,6 +544,30 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
         note="Charged on both sides of every trade. A backtest with costs switched off is the single easiest way to make a losing strategy look profitable."
       >
         <Field
+          label="Cost profile"
+          explainer="Presets set commission and slippage per side. Editing either amount makes the profile custom; the numeric values are what the run records and executes."
+          full
+        >
+          {({ id, describedBy }) => (
+            <Select
+              id={id}
+              aria-describedby={describedBy}
+              value={costProfileOf(value)}
+              onChange={(event) => {
+                const profile = event.target.value as CostProfile;
+                if (profile !== 'custom') patch(COST_PROFILES[profile]);
+              }}
+            >
+              {(Object.keys(COST_PROFILE_LABELS) as CostProfile[]).map((profile) => (
+                <option key={profile} value={profile} disabled={profile === 'custom'}>
+                  {COST_PROFILE_LABELS[profile]}
+                </option>
+              ))}
+            </Select>
+          )}
+        </Field>
+
+        <Field
           label="Commission"
           term="commission"
           explainer="Basis points of notional, deducted as cash on entry and again on exit."
@@ -580,6 +628,52 @@ export function ExecutionForm({ value, onChange }: ExecutionFormProps) {
             )}
           </Field>
         ) : null}
+      </Section>
+
+      <Section
+        title="Liquidity & order lifetime"
+        note="A transparent capacity constraint using each bar's traded volume. It is not an order-book or market-impact model."
+      >
+        <Field
+          label="Max volume participation"
+          explainer="Maximum share of a bar's volume one order may fill. Remainders carry forward; blank means unlimited liquidity. Intraday bars use conservative IEX-only volume."
+          suffix="%"
+        >
+          {({ id, describedBy }) => (
+            <Input
+              id={id}
+              type="number"
+              min={0}
+              max={100}
+              step="any"
+              placeholder="unlimited"
+              aria-describedby={describedBy}
+              value={toPercentString(value.max_volume_participation)}
+              onChange={(event) => {
+                const raw = optionalNumber(event.target.value);
+                patch({ max_volume_participation: raw === null ? null : toFraction(raw) });
+              }}
+            />
+          )}
+        </Field>
+
+        <Field
+          label="Order expiry"
+          explainer="Trading sessions a partially filled signal order remains active. Protective-exit remainders stay active until filled or the window ends."
+          suffix="days"
+        >
+          {({ id, describedBy }) => (
+            <Input
+              id={id}
+              type="number"
+              min={1}
+              step={1}
+              aria-describedby={describedBy}
+              value={String(value.order_expiry_days)}
+              onChange={(event) => patch({ order_expiry_days: Number(event.target.value) })}
+            />
+          )}
+        </Field>
       </Section>
 
       <Section

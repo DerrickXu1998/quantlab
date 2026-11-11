@@ -310,6 +310,8 @@ export interface ExecutionConfig {
   fill_timing: FillTiming;
   commission_bps: number;
   slippage_bps: number;
+  max_volume_participation: number | null;
+  order_expiry_days: number;
 
   stop_loss_pct: number | null;
   take_profit_pct: number | null;
@@ -343,9 +345,11 @@ export const DEFAULT_EXECUTION: ExecutionConfig = {
   sizing_value: null,
   max_positions: null,
   max_position_pct: 1,
-  fill_timing: 'signal_close',
-  commission_bps: 0,
-  slippage_bps: 0,
+  fill_timing: 'next_open',
+  commission_bps: 1,
+  slippage_bps: 5,
+  max_volume_participation: 0.01,
+  order_expiry_days: 5,
   stop_loss_pct: null,
   take_profit_pct: null,
   trailing_stop_pct: null,
@@ -415,6 +419,12 @@ export interface ExecutionSummary {
   /** Protective exits placed by minute bars, and sessions that fell back to daily. */
   minute_resolved_exits?: number;
   minute_fallbacks?: number;
+  volume_limited_fills?: number;
+  expired_orders?: number;
+  unfilled_orders?: number;
+  requested_notional?: number;
+  filled_notional?: number;
+  unfilled_notional?: number;
   rejected_max_positions?: number;
   rejected_cooldown?: number;
   rejected_shorts_disabled?: number;

@@ -74,7 +74,14 @@ def _short_run(borrow_bps):
             date="d0252", symbol="AAA", kind="exit", direction="bullish", data_window_end="d0252"
         ),
     ]
-    config = ExecutionConfig(allow_shorts=True, borrow_cost_bps=borrow_bps)
+    config = ExecutionConfig(
+        allow_shorts=True,
+        borrow_cost_bps=borrow_bps,
+        fill_timing="signal_close",
+        commission_bps=0.0,
+        slippage_bps=0.0,
+        max_volume_participation=None,
+    )
     return simulate(["AAA"], {"AAA": path}, decisions, config)
 
 
@@ -186,6 +193,10 @@ def test_run_performance_carries_the_regression_and_borrow():
         ],
         bars_by_symbol={"AAA": path},
         symbols=["AAA"],
+        execution=ExecutionConfig(
+            fill_timing="signal_close", commission_bps=0.0, slippage_bps=0.0,
+            max_volume_participation=None,
+        ),
     )
     # Long the only name from day 1: beta to its own buy-and-hold is ~1.
     assert result.regression is not None

@@ -19,6 +19,16 @@ To load data -- locally or into production -- use the pipeline:
 `make quantlab-data ARGS="..."`, or `make ingest-fred TARGET=prod` for the macro
 series the S6 regime gate reads.
 
+## Backtest universe scope
+
+Backtests deliberately research strategies over a **fixed universe of current
+S&P 500 members**. They do not attempt to reproduce the historical index or
+answer what an index-tracking portfolio would have held at the time. Historical
+constituent membership, delistings and survivorship-bias correction are therefore
+outside the project's current scope. Results should be read as evidence about the
+strategy on this selected universe, not as an unbiased estimate of performance
+across all stocks that were investable historically.
+
 ## Documentation
 
 | | |
@@ -69,7 +79,15 @@ session's (high + low + close) / 3, a VWAP stand-in), commission and slippage in
 side, stops (fixed, trailing, or ATR-scaled), take-profits, holding-period
 bounds, cooldowns, sizing mode and position caps. Every one of them is reported
 back on the run, so a result carries the assumptions that produced it rather
-than a fixed caveat string.
+than a fixed caveat string. New runs default to next-open fills with 1 bps
+commission and 5 bps slippage per side. The UI's idealized, base, stressed and
+custom cost profiles set those numeric assumptions explicitly; same-close fills
+and zero costs remain available for idealized signal research. Orders are also
+capped at 1% of each bar's volume by default. Unfilled signal quantity carries
+for up to five trading sessions, while protective-exit remainders stay active;
+requested, filled and unfilled notional are reported with the run. Unlimited
+liquidity is an explicit override, not a claim that the capacity model includes
+bid/ask spreads, order-book depth or market impact.
 
 **One thing worth knowing before you read a number.** When a stop and a target
 both sit inside a single bar's high–low range, the engine takes the stop. A

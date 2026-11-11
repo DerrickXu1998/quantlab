@@ -262,9 +262,11 @@ assumptions that produced it.
   "max_positions": null,               // cap on concurrent open positions
   "max_position_pct": 1.0,             // cap per name, as a fraction of equity
 
-  "fill_timing": "signal_close",       // signal_close | next_open | next_close | next_typical
-  "commission_bps": 0.0,               // charged per side, on notional
-  "slippage_bps": 0.0,                 // adverse price move applied per side
+  "fill_timing": "next_open",          // signal_close | next_open | next_close | next_typical | next_vwap
+  "commission_bps": 1.0,               // charged per side, on notional
+  "slippage_bps": 5.0,                 // adverse price move applied per side
+  "max_volume_participation": 0.01,    // max share of bar volume per order; null = unlimited
+  "order_expiry_days": 5,              // sessions a partial signal order remains active
 
   "stop_loss_pct": null,               // 0.05 = exit 5% against entry
   "take_profit_pct": null,

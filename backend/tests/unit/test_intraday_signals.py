@@ -22,6 +22,15 @@ from quantlab.storage.facts import build_series
 from quantlab.synthetic.generator import Bar
 
 
+def idealized_config(**kwargs):
+    settings = {
+        "fill_timing": "signal_close", "commission_bps": 0.0,
+        "slippage_bps": 0.0, "max_volume_participation": None,
+    }
+    settings.update(kwargs)
+    return ExecutionConfig(**settings)
+
+
 def session(day, closes, start="09:30", step=5):
     """One session of 5-minute bars from a close series (o=h=l=c)."""
     first = np.datetime64(f"{day}T{start}", "m")
@@ -100,7 +109,7 @@ def test_a_position_held_overnight_into_a_split_keeps_its_value():
         ["AAA"],
         {"AAA": bars},
         [buy],
-        ExecutionConfig(bar_frequency="5m"),
+        idealized_config(bar_frequency="5m"),
         {"AAA": [CorporateAction("2024-01-03", "split", split_ratio=20.0)]},
     )
     assert result.equity[-1].value == pytest.approx(100_000.0)
@@ -118,7 +127,7 @@ def test_intraday_execution_matches_the_same_bars_as_rows():
         Decision(date="2024-01-02T09:35", symbol="AAA", kind="both", direction="bullish"),
         Decision(date="2024-01-03T09:35", symbol="AAA", kind="both", direction="bearish"),
     ]
-    config = ExecutionConfig(bar_frequency="5m", stop_loss_pct=0.02)
+    config = idealized_config(bar_frequency="5m", stop_loss_pct=0.02)
     columnar = simulate(["AAA"], {"AAA": bars}, decisions, config)
     row_wise = simulate(["AAA"], {"AAA": rows}, decisions, config)
     assert columnar.trades == row_wise.trades
@@ -127,7 +136,7 @@ def test_intraday_execution_matches_the_same_bars_as_rows():
 
 def test_the_equity_curve_has_one_point_per_session():
     bars = series(session("2024-01-02", [100] * 78), session("2024-01-03", [100] * 78))
-    result = simulate(["AAA"], {"AAA": bars}, [], ExecutionConfig(bar_frequency="5m"))
+    result = simulate(["AAA"], {"AAA": bars}, [], idealized_config(bar_frequency="5m"))
     assert [p.date for p in result.equity] == ["2024-01-02", "2024-01-03"]
 
 
@@ -136,15 +145,15 @@ def test_instruments_with_different_bar_times_each_step_on_their_own_bars():
     b = series(session("2024-01-02", [20, 21], start="09:35"))
     buy_b = Decision(date="2024-01-02T09:35", symbol="BBB", kind="entry", direction="bullish")
     result = simulate(
-        ["AAA", "BBB"], {"AAA": a, "BBB": b}, [buy_b], ExecutionConfig(bar_frequency="5m")
+        ["AAA", "BBB"], {"AAA": a, "BBB": b}, [buy_b], idealized_config(bar_frequency="5m")
     )
     (trade,) = result.trades
     assert (trade.symbol, trade.entry_price) == ("BBB", 20.0)
 
 
 def test_volatility_is_annualised_per_bar():
-    assert ExecutionConfig(bar_frequency="5m").periods_per_year == 252 * 78
-    assert ExecutionConfig().periods_per_year == 252
+    assert idealized_config(bar_frequency="5m").periods_per_year == 252 * 78
+    assert idealized_config().periods_per_year == 252
 
 
 @pytest.mark.parametrize(
@@ -156,7 +165,7 @@ def test_volatility_is_annualised_per_bar():
 )
 def test_intraday_configs_that_cannot_run_are_refused(bad):
     with pytest.raises(ValueError):
-        ExecutionConfig(**bad)
+        idealized_config(**bad)
 
 
 # --- the runner: limits, the demo, the slot --------------------------------------
@@ -337,7 +346,7 @@ def test_max_holding_days_counts_trading_days_on_intraday_bars():
     """2 days held on 5-minute bars is two sessions, not two bars."""
     buy = Decision(date="2024-01-02T09:35", symbol="AAA", kind="entry", direction="bullish")
     result = _both_paths(
-        _four_sessions(), [buy], ExecutionConfig(bar_frequency="5m", max_holding_days=2)
+        _four_sessions(), [buy], idealized_config(bar_frequency="5m", max_holding_days=2)
     )
 
     (trade,) = result.trades
@@ -353,7 +362,7 @@ def test_min_holding_days_suppresses_signal_exits_for_whole_sessions():
     result = _both_paths(
         _four_sessions(),
         [buy, same_day, next_day],
-        ExecutionConfig(bar_frequency="5m", min_holding_days=1),
+        idealized_config(bar_frequency="5m", min_holding_days=1),
     )
 
     (trade,) = result.trades
@@ -371,7 +380,7 @@ def test_a_cooldown_day_blocks_reentry_for_the_rest_of_that_session():
         Decision(date="2024-01-03T09:40", symbol="AAA", kind="entry", direction="bullish"),
     ]
     result = _both_paths(
-        _four_sessions(), decisions, ExecutionConfig(bar_frequency="5m", cooldown_days=1)
+        _four_sessions(), decisions, idealized_config(bar_frequency="5m", cooldown_days=1)
     )
 
     entries = sorted(trade.entry_date for trade in result.trades)

@@ -21,6 +21,15 @@ from quantlab.research.runner import execution_config_for
 from quantlab.synthetic.generator import Bar
 
 
+def idealized_config(**kwargs):
+    settings = {
+        "fill_timing": "signal_close", "commission_bps": 0.0,
+        "slippage_bps": 0.0, "max_volume_participation": None,
+    }
+    settings.update(kwargs)
+    return ExecutionConfig(**settings)
+
+
 def bars(closes, volume=1_000):
     """d000, d001, ... with high/low at +/-1% of the close."""
     return [
@@ -112,7 +121,7 @@ def run(closes, actions, mode="split_dividend", decisions=None, **config):
         ["AAA"],
         {"AAA": bars(closes)},
         decisions if decisions is not None else [buy()],
-        ExecutionConfig(price_adjustment=mode, **config),
+        idealized_config(price_adjustment=mode, **config),
         {"AAA": actions},
     )
 
@@ -189,7 +198,7 @@ def test_an_atr_stop_is_not_widened_by_the_split():
         simulator = ExecutionSimulator(
             ["AAA"],
             {"AAA": bars(closes)},
-            ExecutionConfig(price_adjustment=mode, atr_stop_multiple=2.0),
+            idealized_config(price_adjustment=mode, atr_stop_multiple=2.0),
             {"AAA": [split("d020", 20.0)]},
         )
         for _ in simulator.iter_days(entry):
@@ -215,9 +224,9 @@ def test_a_run_stored_before_the_setting_existed_reexecutes_unadjusted():
 
 
 def test_new_configs_default_to_split_and_dividend_adjustment():
-    assert ExecutionConfig().price_adjustment == "split_dividend"
+    assert idealized_config().price_adjustment == "split_dividend"
     with pytest.raises(ValueError, match="price_adjustment"):
-        ExecutionConfig(price_adjustment="total")
+        idealized_config(price_adjustment="total")
 
 
 # --- studies (lines drawn over candles) -------------------------------------

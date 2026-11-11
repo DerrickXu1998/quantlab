@@ -188,9 +188,12 @@ def test_signal_and_fill_events_carry_the_stored_signal(seeded):
     for fill in fills:
         assert fill.side in ("buy", "sell")
         assert fill.qty > 0 and fill.price > 0
-        # A fill happens on the date of the signal that caused it.
-        signal_keys = {(s.symbol, s.date) for s in events if isinstance(s, ReplaySignal)}
-        assert (fill.symbol, fill.date) in signal_keys
+        # The default next-open order fills after the signal that caused it.
+        assert any(
+            s.symbol == fill.symbol and s.date < fill.date
+            for s in events
+            if isinstance(s, ReplaySignal)
+        )
 
 
 def test_the_summary_reconciles_with_compute_performance(seeded):
