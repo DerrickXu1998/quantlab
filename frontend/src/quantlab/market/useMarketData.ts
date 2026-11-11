@@ -1,19 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  getPrices,
-  listInstruments,
-  listSignals,
-  type Instrument,
-  type PriceBar,
-} from '../../api/client';
+import { getPrices, listSignals, type Instrument, type PriceBar } from '../../api/client';
 import type { ChartSignal } from '../../components/CandlestickChart';
 import { replaceRoute, useRoute } from '../../chrome/router';
+import { loadInstruments } from '../../research/company/useCompany';
 import { useSettings } from '../../settings/SettingsProvider';
 import { useLiveSymbol, useNow } from '../feed/LiveFeedProvider';
-import { liveCardState, type FeedView, type LiveCardState, type Quote, type SymbolView } from '../feed/liveFeed';
+import {
+  liveCardState,
+  type FeedView,
+  type LiveCardState,
+  type Quote,
+  type SymbolView,
+} from '../feed/liveFeed';
 import { liveCandles, MAX_TICKERS, type Candle } from './marketModel';
 
-type Load<T> = { status: 'loading' } | { status: 'ready'; data: T } | { status: 'error'; message: string };
+type Load<T> =
+  { status: 'loading' } | { status: 'ready'; data: T } | { status: 'error'; message: string };
 
 function message(caught: unknown, fallback: string): string {
   return caught instanceof Error && caught.message ? caught.message : fallback;
@@ -29,9 +31,11 @@ export function useInstrumentCatalog(fallback: Instrument[]): Load<Instrument[]>
 
   useEffect(() => {
     let cancelled = false;
-    listInstruments()
-      .then((list) => {
-        if (!cancelled) setState({ status: 'ready', data: list.items });
+    // The shared read: the shell and the search palette have usually fetched
+    // the catalogue already.
+    loadInstruments()
+      .then((items) => {
+        if (!cancelled) setState({ status: 'ready', data: items });
       })
       .catch((caught: unknown) => {
         if (cancelled) return;
@@ -57,7 +61,12 @@ export function clearBarCache(): void {
   barCache.clear();
 }
 
-function loadBars(symbol: string): Promise<PriceBar[]> {
+/**
+ * One instrument's stored daily bars, oldest first, fetched once per session
+ * and shared: the Market charts and the shell's ticker tape read the same
+ * request rather than each downloading the history.
+ */
+export function loadBars(symbol: string): Promise<PriceBar[]> {
   let pending = barCache.get(symbol);
   if (!pending) {
     pending = getPrices(symbol).then((result) =>
@@ -80,7 +89,8 @@ export function useDailyBars(symbol: string): Load<PriceBar[]> {
         if (!cancelled) setState({ status: 'ready', data });
       })
       .catch((caught: unknown) => {
-        if (!cancelled) setState({ status: 'error', message: message(caught, 'price history unavailable') });
+        if (!cancelled)
+          setState({ status: 'error', message: message(caught, 'price history unavailable') });
       });
     return () => {
       cancelled = true;
