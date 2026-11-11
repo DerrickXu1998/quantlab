@@ -413,6 +413,35 @@ re-size at fill time, as they always have. An allocation order would be sized
 on information the decision bar did not have if it re-sized at fill time, and
 two orders from one rebalance would then stop adding up to the target.
 
+**Pending orders and a new rebalance.** Under a deferred timing, or with a
+volume-limited remainder, an order can still be waiting when the next decision
+or rebalance arrives:
+
+- A strategy exit cancels every pending order on that symbol (a queued open
+  included), then closes whatever is held in full. A strategy or protective
+  close already in flight is left to finish rather than placed again.
+- A rebalance cancels **every** unfilled `rebalance` order before placing its
+  own. The new plan is computed from what is actually held, so a stale order
+  left in place would trade the same change twice.
+- A symbol whose strategy or protective close has not completed yet is left
+  out of the rebalance (no target, not counted as current) until that close is
+  done.
+- A rebalance open that is blocked only because its reversal's close has not
+  completed (capacity) keeps waiting, up to `order_expiry_days`, instead of
+  being dropped.
+
+Under `on_signal`, a state change on a session with no bars at all (a holiday)
+is carried to the next session that has bars. So is a change that a rebalance
+could not trade: a symbol with no usable bar that session, or one whose close
+was still in flight. The next session rebalances again. (Under a schedule, it
+waits for the next scheduled session.) A rebalance reversal's open is not held
+back by `cooldown_days`, because its own close is a change of side, not an
+exit. An `entry` decision against the current direction is a reversal under
+these modes, while the legacy modes ignore it. A `both` decision that closes a
+position does not also open the other side, as under the legacy modes, and
+`min_holding_days` still holds back a strategy exit (the allocation is kept
+until the exit is allowed).
+
 Every allocator order carries fill reason **`rebalance`**. That includes the
 first open of a name and a full close because the name fell out of the top N.
 Strategy exits keep `signal`, and protective exits keep their own reasons. So

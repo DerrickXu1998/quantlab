@@ -111,8 +111,20 @@ EXECUTION = {
     "max_position_pct": 0.5,
 }
 
+#: Shared-capital allocation: inverse-volatility weights (the adjusted-price
+#: volatility path), a weekly schedule, a turnover cap and protective exits.
+ALLOCATION = {
+    "stop_loss_pct": 0.05,
+    "atr_stop_multiple": 2.5,
+    "position_sizing": "signal_inverse_volatility",
+    "max_position_pct": 0.6,
+    "rebalance_frequency": "weekly",
+    "rebalance_threshold": 0.01,
+    "max_turnover": 0.8,
+}
 
-def _run(store):
+
+def _run(store, execution):
     return runner.run_experiment(
         store,
         symbols=["AAA", "BBB"],
@@ -120,13 +132,26 @@ def _run(store):
         end_date=str(DAYS[-1]),
         model_name="sma-crossover",
         overrides={"fast": 10, "slow": 30},
-        execution=EXECUTION,
+        execution=execution,
     )
 
 
-@pytest.fixture(scope="module")
-def both():
-    return _run(Store(False)), _run(ColumnarStore(True))
+@pytest.fixture(scope="module", params=[EXECUTION, ALLOCATION], ids=["legacy", "allocation"])
+def both(request):
+    return _run(Store(False), request.param), _run(ColumnarStore(True), request.param)
+
+
+def test_the_allocation_run_actually_rebalances():
+    from quantlab.execution import simulate
+
+    rows = _run(Store(False), ALLOCATION)
+    config = runner.execution_config_for({"execution": rows.execution})
+    bars = runner.load_bars(Store(False), rows.symbols, str(DAYS[0]), rows.end_date, config)
+    signals = [vars(s) for s in rows.signals]
+    result = simulate(rows.symbols, bars, performance.to_decisions(signals), config)
+    reasons = {fill.reason for fill in result.fills}
+    assert "rebalance" in reasons and "signal" in reasons
+    assert rows.execution_summary["fills"] > 0
 
 
 def test_the_columnar_path_is_actually_taken():
