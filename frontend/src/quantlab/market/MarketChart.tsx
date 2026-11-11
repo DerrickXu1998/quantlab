@@ -20,6 +20,7 @@ import {
 import type { PriceBar } from '../../api/client';
 import type { ChartSignal } from '../../components/CandlestickChart';
 import { token } from '../../lib/token';
+import { displaySymbol } from '../../research/format';
 import { cn } from '../../lib/utils';
 import { useTheme } from '../../theme/ThemeProvider';
 import { RSI_PERIOD } from '../data/indicators';
@@ -245,7 +246,7 @@ export function MarketChart({
       wickUpColor: palette.up,
       wickDownColor: palette.down,
       borderVisible: false,
-      title: historical ? symbol : `${symbol} · live`,
+      title: historical ? displaySymbol(symbol) : `${displaySymbol(symbol)} · live`,
     });
     series.set('main', main);
 

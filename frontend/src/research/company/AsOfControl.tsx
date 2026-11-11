@@ -78,7 +78,7 @@ export function AsOfControl({ value, onChange, today, resolved }: AsOfControlPro
             max={today}
             value={value}
             onChange={(event) => onChange(event.target.value)}
-            className={cn(fieldClasses, 'w-full pl-8 sm:w-44')}
+            className={cn(fieldClasses, 'w-full min-w-[10.5rem] pl-8 sm:w-44')}
           />
         </div>
         <ButtonGroup label="As-of presets" title="Move the as-of date back">

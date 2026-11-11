@@ -4,6 +4,7 @@ import { ResearchShell } from '../research/shell/ResearchShell';
 import { useResearchRoute } from '../research/shell/useResearchRoute';
 import { replaceRoute, useRoute } from '../chrome/router';
 import { useEffect } from 'react';
+import { FEATURED_SYMBOLS } from '../quantlab/data/useWatchlist';
 
 /**
  * The Research destination.
@@ -38,6 +39,7 @@ export function ResearchPage() {
           onSelectSymbol={(next) => selectSymbol(next)}
           asOf={asOf ?? undefined}
           onAsOfChange={setAsOf}
+          defaultSymbol={FEATURED_SYMBOLS[0]}
         />
       ) : (
         <ScreenView onSelectSymbol={(next) => selectSymbol(next)} />

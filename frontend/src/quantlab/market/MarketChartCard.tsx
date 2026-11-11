@@ -1,3 +1,4 @@
+import { displaySymbol } from '../../research/format';
 import { Activity, Moon, PlugZap, ServerCrash, X } from 'lucide-react';
 import { useMemo, type ReactNode } from 'react';
 import type { Instrument } from '../../api/client';
@@ -47,7 +48,15 @@ const LIVE_BADGE: Record<LiveCardState['kind'], { tone: StatusTone; label: strin
   not_subscribed: { tone: 'bad', label: 'Not subscribed' },
 };
 
-function Fact({ label, children, testId }: { label: string; children: ReactNode; testId?: string }) {
+function Fact({
+  label,
+  children,
+  testId,
+}: {
+  label: string;
+  children: ReactNode;
+  testId?: string;
+}) {
   return (
     <div className="flex items-baseline gap-1.5" data-testid={testId}>
       <dt className="text-muted-foreground">{label}</dt>
@@ -94,7 +103,10 @@ export function MarketChartCard({
     // Studies run over the whole history so a 1M window does not open on a
     // 50-bar warm-up gap; then they are cut to the window.
     const studies = tailStudies(
-      computeStudies(aggregated.map((bar) => bar.close), active),
+      computeStudies(
+        aggregated.map((bar) => bar.close),
+        active,
+      ),
       bars.length,
     );
     if (active.has('vwap')) studies.vwap = anchoredVwap(bars);
@@ -110,7 +122,10 @@ export function MarketChartCard({
 
   const liveStudies = useMemo(() => {
     if (historical) return {};
-    const studies = computeStudies(live.candles.map((candle) => candle.close), active);
+    const studies = computeStudies(
+      live.candles.map((candle) => candle.close),
+      active,
+    );
     // Anchored at the open: the session VWAP intraday traders mean by VWAP.
     if (active.has('vwap')) studies.vwap = anchoredVwap(live.candles);
     return studies;
@@ -118,7 +133,9 @@ export function MarketChartCard({
 
   // Many warehouse names are the symbol again; "AAPL.US · AAPL.US" says nothing.
   const title =
-    instrument && instrument.name && instrument.name !== symbol ? `${symbol} · ${instrument.name}` : symbol;
+    instrument && instrument.name && instrument.name !== symbol
+      ? `${displaySymbol(symbol)} · ${instrument.name}`
+      : displaySymbol(symbol);
   const first = view?.bars[0];
   const last = view?.bars[view.bars.length - 1];
   const fake = !historical && live.feed.fake;
@@ -203,7 +220,9 @@ export function MarketChartCard({
             <Fact label="Window" testId="fact-window">
               {first && last ? `${first.date} → ${last.date}` : '—'}
             </Fact>
-            <Fact label="Bars" testId="fact-count">{view ? view.bars.length.toLocaleString() : '—'}</Fact>
+            <Fact label="Bars" testId="fact-count">
+              {view ? view.bars.length.toLocaleString() : '—'}
+            </Fact>
             {active.has('signals') ? (
               <Fact label="Signals" testId="fact-signals">
                 {signals.filter((s) => first && s.date >= first.date).length}
@@ -220,7 +239,9 @@ export function MarketChartCard({
                 {fake ? 'FAKE feed (dev) — not market data' : 'IBKR · live · provisional'}
               </span>
             </Fact>
-            <Fact label="Bar" testId="fact-bar">1 min, updates each tick</Fact>
+            <Fact label="Bar" testId="fact-bar">
+              1 min, updates each tick
+            </Fact>
             <Fact label="Session" testId="fact-session">
               {live.view?.sessionDate ?? '—'}
             </Fact>
@@ -230,8 +251,12 @@ export function MarketChartCard({
                 ? ` (${live.quote.bid.toFixed(2)} × ${live.quote.ask.toFixed(2)})`
                 : ''}
             </Fact>
-            <Fact label="Tick" testId="fact-tick">{ageOf(live.view?.tickAt ?? null, now)}</Fact>
-            <Fact label="Line" testId="fact-line">{live.view?.status ?? 'pending'}</Fact>
+            <Fact label="Tick" testId="fact-tick">
+              {ageOf(live.view?.tickAt ?? null, now)}
+            </Fact>
+            <Fact label="Line" testId="fact-line">
+              {live.view?.status ?? 'pending'}
+            </Fact>
             <Fact label="Clock">
               {live.candles.length > 0 ? `ET · from ${nyClock(live.candles[0].time)}` : 'ET'}
             </Fact>
@@ -249,7 +274,12 @@ export function MarketChartCard({
             testId="chart-error"
           />
         ) : daily.status === 'loading' ? (
-          <EmptyState icon={Activity} title={`Loading ${symbol}…`} role="status" testId="chart-loading" />
+          <EmptyState
+            icon={Activity}
+            title={`Loading ${symbol}…`}
+            role="status"
+            testId="chart-loading"
+          />
         ) : !lastDaily || !view ? (
           <EmptyState icon={Activity} title={`${symbol} has no stored bars`} testId="chart-empty" />
         ) : (
@@ -275,7 +305,11 @@ export function MarketChartCard({
           fitKey={`${symbol}|live|${live.view?.sessionDate ?? ''}`}
         />
       ) : (
-        <LiveEmpty symbol={symbol} state={live.state} sessionError={live.view?.sessionError ?? null} />
+        <LiveEmpty
+          symbol={symbol}
+          state={live.state}
+          sessionError={live.view?.sessionError ?? null}
+        />
       )}
     </Panel>
   );
@@ -294,11 +328,23 @@ function LiveEmpty({
   switch (state.kind) {
     case 'offline':
       return (
-        <EmptyState icon={PlugZap} tone="error" title="Live feed offline" detail={state.detail} testId="live-offline" />
+        <EmptyState
+          icon={PlugZap}
+          tone="error"
+          title="Live feed offline"
+          detail={state.detail}
+          testId="live-offline"
+        />
       );
     case 'not_subscribed':
       return (
-        <EmptyState icon={PlugZap} tone="error" title={`${symbol} is not subscribed`} detail={state.detail} testId="live-not-subscribed" />
+        <EmptyState
+          icon={PlugZap}
+          tone="error"
+          title={`${symbol} is not subscribed`}
+          detail={state.detail}
+          testId="live-not-subscribed"
+        />
       );
     case 'closed':
       return (
@@ -310,13 +356,23 @@ function LiveEmpty({
         />
       );
     case 'stale':
-      return <EmptyState icon={Activity} tone="error" title="Live feed stale" detail={state.detail} testId="live-stale" />;
+      return (
+        <EmptyState
+          icon={Activity}
+          tone="error"
+          title="Live feed stale"
+          detail={state.detail}
+          testId="live-stale"
+        />
+      );
     default:
       return (
         <EmptyState
           icon={Activity}
           title={`Waiting for ${symbol}'s session…`}
-          detail={sessionError ?? 'Backfilling the session from the open, then about one tick a second.'}
+          detail={
+            sessionError ?? 'Backfilling the session from the open, then about one tick a second.'
+          }
           role="status"
           testId="live-waiting"
         />

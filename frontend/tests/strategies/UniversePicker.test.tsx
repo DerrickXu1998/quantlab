@@ -24,7 +24,8 @@ function selectedSymbols(): string[] {
   if (!list) return [];
   return within(list)
     .getAllByRole('button', { name: /^remove /i })
-    .map((button) => button.textContent ?? '');
+    // The chip shows the short form (AAPL); the stored symbol is in its label.
+    .map((button) => (button.getAttribute('aria-label') ?? '').replace(/^remove /i, ''));
 }
 
 describe('UniversePicker', () => {

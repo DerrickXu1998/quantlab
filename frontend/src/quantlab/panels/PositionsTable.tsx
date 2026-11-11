@@ -1,23 +1,14 @@
 import { Inbox } from 'lucide-react';
 import type { Trade } from '../../api/client';
 import { EmptyState } from '../chrome/EmptyState';
-import { FlashNumber } from '../chrome/FlashNumber';
 import { Numeric } from '../chrome/Numeric';
-import { useTick } from '../feed/FeedProvider';
+import { displaySymbol } from '../../research/format';
 
 function PositionRow({ trade }: { trade: Trade }) {
-  const tick = useTick(trade.symbol);
-  // Marked at the run's last close by the backend; the live column re-marks it
-  // against the simulated feed, which is why that column alone is tagged.
-  const live = tick?.price;
-  const liveReturn = live ? live / trade.entry_price - 1 : null;
-
   return (
     <tr className="border-t border-border">
-      <td className="px-3 py-1.5 type-data">{trade.symbol}</td>
-      <td className="px-3 py-1.5 type-data text-muted-foreground">
-        {trade.entry_date}
-      </td>
+      <td className="px-3 py-1.5 type-data">{displaySymbol(trade.symbol)}</td>
+      <td className="px-3 py-1.5 type-data text-muted-foreground">{trade.entry_date}</td>
       <td className="px-3 py-1.5 text-right">
         <Numeric value={trade.entry_price} className="text-xs" />
       </td>
@@ -32,14 +23,6 @@ function PositionRow({ trade }: { trade: Trade }) {
           className="text-xs"
         />
       </td>
-      <td className="px-3 py-1.5 text-right">
-        <FlashNumber
-          value={liveReturn}
-          format="signedPercent"
-          tone="signed"
-          className="text-xs"
-        />
-      </td>
     </tr>
   );
 }
@@ -47,8 +30,8 @@ function PositionRow({ trade }: { trade: Trade }) {
 /**
  * Positions still open at the end of the run's window.
  *
- * Entry, mark and return are the backend's figures. The final column re-marks
- * them against the simulated feed and is the only invented number here.
+ * Entry, mark and return are the backend's figures; nothing here is
+ * recomputed in the browser.
  */
 export function PositionsTable({ trades }: { trades: Trade[] }) {
   const open = trades.filter((trade) => trade.open);
@@ -73,9 +56,6 @@ export function PositionsTable({ trades }: { trades: Trade[] }) {
           <th className="px-3 py-1.5 text-right font-normal">Price</th>
           <th className="px-3 py-1.5 text-right font-normal">Mark</th>
           <th className="px-3 py-1.5 text-right font-normal">Return</th>
-          <th className="px-3 py-1.5 text-right font-normal" title="Re-marked against the simulated feed">
-            Live
-          </th>
         </tr>
       </thead>
       <tbody>

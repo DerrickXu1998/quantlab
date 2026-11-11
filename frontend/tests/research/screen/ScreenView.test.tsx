@@ -193,7 +193,7 @@ describe('Screen — the table', () => {
     await ready();
     await user.click(dom.getByTestId('run-screen'));
 
-    await user.click(await dom.findByRole('button', { name: 'CAT.US' }));
+    await user.click(await dom.findByRole('button', { name: 'CAT' }));
 
     expect(onSelect).toHaveBeenCalledWith('CAT.US');
   });

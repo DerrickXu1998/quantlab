@@ -134,8 +134,8 @@ describe('App shell', () => {
     await user.click(screen.getByRole('button', { name: /market/i }));
     expect(await screen.findByTestId('market-view')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /execution/i }));
-    expect(await screen.findByTestId('order-ticket')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^replay$/i }));
+    await waitFor(() => expect(window.location.hash).toBe('#/replay'));
 
     // The back button is a hashchange to the previous entry.
     window.location.hash = '#/overview';
@@ -143,15 +143,13 @@ describe('App shell', () => {
     expect(await screen.findByTestId('portfolio-summary')).toBeInTheDocument();
   });
 
-  it('marks the feed as simulated in the header, and Execution in the nav', async () => {
+  it('shows nothing simulated: no sim marker, no feed status, no Execution', async () => {
     renderApp();
+    await screen.findByTestId('portfolio-summary');
 
-    const status = await screen.findByTestId('feed-status');
-    expect(status).toHaveTextContent(/sim/i);
-    expect(status).toHaveAttribute('title', expect.stringMatching(/no streaming feed/i));
-
-    const execution = screen.getByRole('button', { name: /execution/i });
-    expect(within(execution).getByText('sim')).toBeInTheDocument();
+    expect(screen.queryByTestId('feed-status')).not.toBeInTheDocument();
+    expect(screen.queryByText('sim')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /execution/i })).not.toBeInTheDocument();
   });
 
   it('keeps the grain overlay out of the way of every control', () => {
@@ -224,14 +222,14 @@ describe('Overview', () => {
     });
   });
 
-  it('lists only the positions still open, and tags the live column', async () => {
+  it('lists only the positions still open, with nothing marked simulated', async () => {
     renderApp();
 
     const positions = await screen.findByTestId('positions-table');
     expect(within(positions).getByText('ZZMEAN')).toBeInTheDocument();
     // The closed trade belongs in the trade log, not in open positions.
     expect(within(positions).queryByText('ZZTRND')).not.toBeInTheDocument();
-    expect(screen.getAllByTestId('simulated-tag').length).toBeGreaterThan(0);
+    expect(screen.queryByTestId('simulated-tag')).not.toBeInTheDocument();
   });
 
   it('ships the backtest caveats alongside the figures, open rather than folded away', async () => {
@@ -441,7 +439,10 @@ describe('Strategies', () => {
 
     expect(screen.queryByRole('tab', { name: /signal lab/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: /point-in-time/i })).not.toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /configure/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: /configure/i })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
   });
 
   it('draws its universe from the whole catalogue, not the eight-name watchlist', async () => {
@@ -559,6 +560,8 @@ describe('Composition', () => {
 
     expect(container.querySelector('.-top-3')).toBeNull();
     const panel = screen.getByRole('region', { name: 'Equity curve' });
-    expect(within(panel.querySelector('header') as HTMLElement).getByText('Trades')).toBeInTheDocument();
+    expect(
+      within(panel.querySelector('header') as HTMLElement).getByText('Trades'),
+    ).toBeInTheDocument();
   });
 });

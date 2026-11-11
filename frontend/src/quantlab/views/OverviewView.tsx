@@ -174,8 +174,15 @@ export function OverviewView() {
               <PortfolioSummary run={run} performance={performance.performance} />
             </CascadeItem>
 
-            <div className="grid min-h-0 flex-1 grid-cols-1 gap-px bg-border xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
-              <CascadeItem index={2} className="flex min-h-0 flex-col bg-background">
+            {/* Side by side from `xl`, where the row fills the viewport. Stacked
+                below it, where each panel keeps a real height and the column
+                scrolls: squeezed to fit, the chart collapsed under its own
+                footer. */}
+            <div className="grid flex-1 grid-cols-1 gap-px bg-border max-xl:shrink-0 xl:min-h-0 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
+              <CascadeItem
+                index={2}
+                className="flex min-h-0 flex-col bg-background max-xl:min-h-[32rem]"
+              >
                 <Panel
                   title="Equity curve"
                   fill
@@ -196,7 +203,7 @@ export function OverviewView() {
                           className="text-xs"
                         />
                       </Chip>
-                      <Chip label="Book">
+                      <Chip label="Book" className="hidden sm:flex">
                         <Numeric
                           value={performance.performance.initial_capital}
                           format="currency"
@@ -263,14 +270,7 @@ export function OverviewView() {
               </CascadeItem>
 
               <CascadeItem index={3} className="flex min-h-0 flex-col bg-background">
-                <Panel
-                  title="Open positions"
-                  fill
-                  scroll
-                  className="border-0"
-                  bodyClassName="p-0"
-                  simulated="The live column re-marks against the simulated feed."
-                >
+                <Panel title="Open positions" fill scroll className="border-0" bodyClassName="p-0">
                   <PositionsTable trades={performance.performance.trades} />
                 </Panel>
               </CascadeItem>

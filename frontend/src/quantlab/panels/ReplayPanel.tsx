@@ -1,3 +1,4 @@
+import { displaySymbol } from '../../research/format';
 import {
   ChartLine,
   Hourglass,
@@ -18,6 +19,7 @@ import { Panel } from '../chrome/Panel';
 import { StatusBadge } from '../chrome/StatusBadge';
 import { EquityCurve } from '../charts/EquityCurve';
 import { useReplay, type ReplayStatus } from '../data/useReplay';
+import { useRunPerformance } from '../data/useRunPerformance';
 import { Assumptions } from './Assumptions';
 import { StatRow } from './StatRow';
 
@@ -58,9 +60,7 @@ function progressPercent(current: string | null, run: Run): number | null {
 function BookStat({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <span className="type-label text-muted-foreground">
-        {label}
-      </span>
+      <span className="type-label text-muted-foreground">{label}</span>
       <span className="text-sm">{children}</span>
     </div>
   );
@@ -109,6 +109,9 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
   const [speed, setSpeed] = useState(50);
   const run = completed.find((candidate) => candidate.id === selectedId) ?? completed[0] ?? null;
   const { state, play, pause, restart } = useReplay(run?.id ?? null, speed);
+  // Before Play there is nothing streamed, but the run's result is already
+  // stored: show that curve at rest rather than an empty panel.
+  const stored = useRunPerformance(state.equity.length === 0 ? (run?.id ?? null) : null);
 
   if (completed.length === 0) {
     return (
@@ -136,9 +139,7 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
     >
       <Panel title="Replay" fill scroll bodyClassName="flex flex-col gap-4 p-3">
         <label className="flex flex-col gap-1.5">
-          <span className="type-label text-muted-foreground">
-            Run
-          </span>
+          <span className="type-label text-muted-foreground">Run</span>
           <select
             data-testid="replay-run-select"
             className="h-8 rounded-sm border border-border bg-card px-2 type-data"
@@ -157,9 +158,7 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
           className="flex flex-col gap-1.5"
           title="Applies from the next play; a running stream keeps its pace."
         >
-          <legend className="type-label text-muted-foreground">
-            Speed
-          </legend>
+          <legend className="type-label text-muted-foreground">Speed</legend>
           {/* One control, not two: the group wraps as a unit rather than
               orphaning `100 ms` onto a line of its own. */}
           <ButtonGroup
@@ -281,19 +280,22 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
         <Panel title="Book" className="shrink-0" bodyClassName="p-3">
           <BookStats state={state} />
           {Object.keys(state.closes).length > 0 ? (
-            <p
-              data-testid="replay-prices"
-              className="mt-3 type-data text-muted-foreground"
-            >
+            <p data-testid="replay-prices" className="mt-3 type-data text-muted-foreground">
               {Object.entries(state.closes)
-                .map(([symbol, price]) => `${symbol} ${price.toFixed(2)}`)
+                .map(([symbol, price]) => `${displaySymbol(symbol)} ${price.toFixed(2)}`)
                 .join(' · ')}
             </p>
           ) : null}
         </Panel>
 
         <Panel title="Equity" fill className="min-h-[220px] flex-[2]" bodyClassName="p-3">
-          {state.equity.length === 0 ? (
+          {state.equity.length === 0 && stored.status === 'ready' ? (
+            <EquityCurve
+              equity={stored.performance.equity}
+              strategyLabel="Final equity · press Play to replay"
+              fill
+            />
+          ) : state.equity.length === 0 ? (
             <EmptyState
               className="min-h-0 flex-1"
               testId="replay-equity-empty"
@@ -340,7 +342,7 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
                       <td className="px-3 py-1.5 type-data tabular-nums text-muted-foreground">
                         {fill.date}
                       </td>
-                      <td className="px-3 py-1.5 type-data">{fill.symbol}</td>
+                      <td className="px-3 py-1.5 type-data">{displaySymbol(fill.symbol)}</td>
                       <td className="px-3 py-1.5">
                         <StatusBadge tone={fill.side === 'buy' ? 'active' : 'idle'}>
                           {fill.side}
@@ -381,7 +383,7 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
                       <td className="px-3 py-1.5 type-data tabular-nums text-muted-foreground">
                         {signal.date}
                       </td>
-                      <td className="px-3 py-1.5 type-data">{signal.symbol}</td>
+                      <td className="px-3 py-1.5 type-data">{displaySymbol(signal.symbol)}</td>
                       <td className="px-3 py-1.5">
                         <StatusBadge tone={signal.direction === 'bullish' ? 'active' : 'idle'}>
                           {signal.direction}
