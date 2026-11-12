@@ -257,9 +257,10 @@ class _PendingOrder:
     reason: str = "signal"
     protective: bool = False
     started: bool = False
-    #: The quantity is a fixed target (a rebalance order), not a request to
-    #: size afresh: later fills take ``min(remaining_qty, capacity)`` and never
-    #: re-size from that session's equity or price.
+    #: The quantity is a fixed target (a rebalance or execution-sized deferred
+    #: order), not a request to size afresh: later fills take
+    #: ``min(remaining_qty, capacity)`` and never re-size from that session's
+    #: equity or price.
     frozen_qty: bool = False
     #: The open leg of a rebalance reversal: its own close leg is not an exit
     #: the cooldown should wait out.
@@ -691,8 +692,8 @@ class ExecutionSimulator:
     ) -> Fill | None:
         """Open or add to a position.
 
-        ``qty`` given is an explicit target quantity (a rebalance order): it
-        bypasses :meth:`_size` but is still capped by the cash available,
+        ``qty`` given is an explicit target quantity: it bypasses
+        :meth:`_size` but is still capped by the cash available,
         the session's volume capacity and ``qty_limit``, and pays the same
         costs. Left ``None``, the configured sizing mode decides.
         """
@@ -1369,6 +1370,12 @@ class ExecutionSimulator:
                 )
             elif order.kind == "open":
                 side = "long" if order.direction == "bullish" else "short"
+                if not order.started and not order.frozen_qty:
+                    fill_price = self._slipped(
+                        price, "buy" if side == "long" else "short"
+                    )
+                    order.remaining_qty = self._size(order.symbol, fill_price, index)
+                    order.frozen_qty = True
                 fill = self._open(
                     date, order.symbol, side, price, index, at_open=order.at_open,
                     qty_limit=order.remaining_qty, request=not order.started,
