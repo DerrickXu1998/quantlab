@@ -767,23 +767,46 @@ def _fact_coverage(
     )
 
 
+#: What a stored run means by a setting it does not mention: the behaviour
+#: in force before that setting existed, not today's default. Filling a gap
+#: with a newer default re-executes an old run under rules it never ran
+#: under, so its replay drifts from the result it stored -- as every run
+#: recorded before volume capacity did once ``max_volume_participation``
+#: started defaulting to 1%.
+_LEGACY_EXECUTION: dict[str, Any] = {
+    # Before splits and dividends were applied: raw prices.
+    "price_adjustment": "none",
+    # Before volume capacity: unlimited liquidity.
+    "max_volume_participation": None,
+}
+
+#: A run recorded before execution criteria existed: the behaviour that was
+#: hardcoded then -- fills at the signal close, no costs, raw prices and
+#: unlimited liquidity.
+_PRE_EXECUTION = {
+    **_LEGACY_EXECUTION,
+    "fill_timing": "signal_close",
+    "commission_bps": 0.0,
+    "slippage_bps": 0.0,
+}
+
+
 def execution_config_for(run: dict) -> ExecutionConfig:
     """The execution criteria a stored run was executed under.
 
-    A run recorded before execution criteria existed has none, and gets the
-    defaults -- which are exactly the behaviour that was hardcoded at the time,
-    so re-deriving its performance still reproduces it. Likewise a run recorded
-    before ``price_adjustment`` existed traded raw prices, and gets ``none``.
+    A stored config is the full ``to_dict`` of the build that ran it, so a key
+    it lacks is a setting added since; that key gets its pre-existing
+    behaviour (``_LEGACY_EXECUTION``), never the current default, and
+    re-deriving the run's performance or replaying it reproduces what it
+    stored. A run with no criteria at all gets ``_PRE_EXECUTION``.
     """
     stored = run.get("execution")
     if not stored:
-        return ExecutionConfig(price_adjustment="none")
-    # Recorded before splits and dividends were applied: it ran on raw prices.
-    stored = {"price_adjustment": "none", **stored}
+        return ExecutionConfig(**_PRE_EXECUTION)
     try:
-        return ExecutionConfig.from_dict(stored)
+        return ExecutionConfig.from_dict({**_LEGACY_EXECUTION, **stored})
     except ValueError:
         # A stored config this build cannot parse is a forward-compatibility
         # problem, not a reason to refuse to show the run at all.
         logger.warning("run_execution_unreadable", extra={"run_id": run.get("id")})
-        return ExecutionConfig(price_adjustment="none")
+        return ExecutionConfig(**_PRE_EXECUTION)
