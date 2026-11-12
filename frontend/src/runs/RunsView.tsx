@@ -289,7 +289,7 @@ function RunsTable({
         testId="runs-empty"
         icon={FlaskConical}
         title="No backtests yet"
-        detail="Build a strategy in Configure and submit it. It runs in the background and appears here with its status and results."
+        detail="Build a strategy and submit it. It appears here with its status and results."
       />
     );
   }

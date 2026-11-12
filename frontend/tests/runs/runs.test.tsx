@@ -292,7 +292,7 @@ describe('TabBar', () => {
           value={value}
           onChange={setValue}
           items={[
-            { id: 'configure', label: 'Configure' },
+            { id: 'configure', label: 'Build' },
             { id: 'runs', label: 'Runs', badge: 2, badgeLabel: '2 active' },
           ]}
         />
@@ -300,7 +300,7 @@ describe('TabBar', () => {
     }
     const user = userEvent.setup();
     render(<Harness />);
-    const configure = screen.getByRole('tab', { name: 'Configure' });
+    const configure = screen.getByRole('tab', { name: 'Build' });
     const runsTab = screen.getByRole('tab', { name: 'Runs, 2 active' });
     expect(configure).toHaveAttribute('tabindex', '0');
     expect(runsTab).toHaveAttribute('tabindex', '-1');
