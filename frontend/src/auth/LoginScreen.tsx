@@ -1,11 +1,11 @@
-import { useMemo, useState, type FormEvent } from 'react';
+import { useMemo, useRef, useState, type FormEvent } from 'react';
 import { ApiError } from '../api/client';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/field';
 import { GrainOverlay } from '../quantlab/chrome/GrainOverlay';
 import { CornerTicks } from '../components/ui/corner-ticks';
 import { useAuth } from './AuthProvider';
-import { LandingPitch } from './LandingPitch';
+import { LandingClose, LandingNav, LandingStory } from './landing/Landing';
 
 type Mode = 'login' | 'register';
 
@@ -191,6 +191,21 @@ export function LoginScreen() {
     }
   };
 
+  /**
+   * The nav and hero links: choose the tab, bring the form into view and put
+   * the cursor in it, so "Sign in" at the top of a long page is one click.
+   */
+  const emailField = useRef<HTMLInputElement>(null);
+  const goToForm = (next: Mode) => {
+    switchTo(next);
+    const reduced =
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const field = emailField.current;
+    field?.scrollIntoView?.({ behavior: reduced ? 'auto' : 'smooth', block: 'center' });
+    field?.focus({ preventScroll: true });
+  };
+
   const tab = (value: Mode, label: string) => (
     <button
       key={value}
@@ -214,108 +229,116 @@ export function LoginScreen() {
     <div className="relative min-h-screen bg-background">
       <GrainOverlay />
 
-      {/* The front door: what the product is on the left, the way in on the
-          right. One column on a phone, with the pitch first. */}
-      <div className="relative z-10 mx-auto grid min-h-screen w-full max-w-6xl grid-cols-1 items-center gap-12 px-4 py-12 lg:grid-cols-[minmax(0,1fr)_24rem] lg:gap-16 lg:px-8">
-        <LandingPitch />
+      <LandingNav onGo={goToForm} />
 
-        <main
-          className="w-full max-w-sm justify-self-center lg:justify-self-end"
-          data-testid="login-screen"
-        >
-          <p className="mb-3 text-xs text-muted-foreground">
-            Your runs and strategies are private to your account.
-          </p>
+      {/* The front door is one long scroll: the story first, then the way in.
+          The nav above keeps the way in one click away throughout. */}
+      <div className="relative z-10">
+        <LandingStory onGo={goToForm} />
+        <LandingClose>
+          <main
+            className="w-full max-w-sm justify-self-center lg:justify-self-end"
+            data-testid="login-screen"
+          >
+            <p className="mb-3 text-xs text-muted-foreground">
+              Your runs and strategies are private to your account.
+            </p>
 
-          <div className="relative border border-border bg-card">
-            <CornerTicks />
+            <div className="relative border border-border bg-card">
+              <CornerTicks />
 
-            <div role="tablist" aria-label="Authentication" className="flex border-b border-border">
-              {tab('login', 'Sign in')}
-              {tab('register', 'Create account')}
-            </div>
-
-            <form
-              id="auth-panel"
-              role="tabpanel"
-              aria-labelledby={`auth-tab-${mode}`}
-              className="space-y-4 p-4"
-              onSubmit={submit}
-              noValidate
-            >
-              <div className="space-y-1">
-                <label className={MICRO} htmlFor="auth-email">
-                  Email
-                </label>
-                <Input
-                  id="auth-email"
-                  type="email"
-                  autoComplete="email"
-                  value={email}
-                  aria-invalid={showEmailError ? true : undefined}
-                  aria-describedby={showEmailError ? 'auth-email-error' : undefined}
-                  onChange={(event) => setEmail(event.target.value)}
-                  onBlur={() => setTouched((current) => ({ ...current, email: true }))}
-                />
-                {showEmailError ? (
-                  <p id="auth-email-error" role="alert" className="text-xs text-destructive">
-                    {errors.email}
-                  </p>
-                ) : null}
+              <div
+                role="tablist"
+                aria-label="Authentication"
+                className="flex border-b border-border"
+              >
+                {tab('login', 'Sign in')}
+                {tab('register', 'Create account')}
               </div>
 
-              <div className="space-y-1">
-                <label className={MICRO} htmlFor="auth-password">
-                  Password
-                </label>
-                <Input
-                  id="auth-password"
-                  type="password"
-                  autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-                  value={password}
-                  aria-invalid={showPasswordError ? true : undefined}
-                  aria-describedby={showPasswordError ? 'auth-password-error' : undefined}
-                  onChange={(event) => setPassword(event.target.value)}
-                  onBlur={() => setTouched((current) => ({ ...current, password: true }))}
-                />
-                {showPasswordError ? (
-                  <p id="auth-password-error" role="alert" className="text-xs text-destructive">
-                    {errors.password}
-                  </p>
-                ) : null}
-                {mode === 'register' ? <StrengthMeter password={password} /> : null}
-              </div>
+              <form
+                id="auth-panel"
+                role="tabpanel"
+                aria-labelledby={`auth-tab-${mode}`}
+                className="space-y-4 p-4"
+                onSubmit={submit}
+                noValidate
+              >
+                <div className="space-y-1">
+                  <label className={MICRO} htmlFor="auth-email">
+                    Email
+                  </label>
+                  <Input
+                    ref={emailField}
+                    id="auth-email"
+                    type="email"
+                    autoComplete="email"
+                    value={email}
+                    aria-invalid={showEmailError ? true : undefined}
+                    aria-describedby={showEmailError ? 'auth-email-error' : undefined}
+                    onChange={(event) => setEmail(event.target.value)}
+                    onBlur={() => setTouched((current) => ({ ...current, email: true }))}
+                  />
+                  {showEmailError ? (
+                    <p id="auth-email-error" role="alert" className="text-xs text-destructive">
+                      {errors.email}
+                    </p>
+                  ) : null}
+                </div>
 
-              {/* One error region, always in the DOM's reading order at the same
+                <div className="space-y-1">
+                  <label className={MICRO} htmlFor="auth-password">
+                    Password
+                  </label>
+                  <Input
+                    id="auth-password"
+                    type="password"
+                    autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                    value={password}
+                    aria-invalid={showPasswordError ? true : undefined}
+                    aria-describedby={showPasswordError ? 'auth-password-error' : undefined}
+                    onChange={(event) => setPassword(event.target.value)}
+                    onBlur={() => setTouched((current) => ({ ...current, password: true }))}
+                  />
+                  {showPasswordError ? (
+                    <p id="auth-password-error" role="alert" className="text-xs text-destructive">
+                      {errors.password}
+                    </p>
+                  ) : null}
+                  {mode === 'register' ? <StrengthMeter password={password} /> : null}
+                </div>
+
+                {/* One error region, always in the DOM's reading order at the same
                 place, so a screen reader hears the failure where the button is. */}
-              {error ? (
-                <p
-                  role="alert"
-                  data-testid="auth-error"
-                  className="border border-destructive/40 bg-destructive/5 px-2 py-1.5 text-xs text-destructive"
-                >
-                  {error}
+                {error ? (
+                  <p
+                    role="alert"
+                    data-testid="auth-error"
+                    className="border border-destructive/40 bg-destructive/5 px-2 py-1.5 text-xs text-destructive"
+                  >
+                    {error}
+                  </p>
+                ) : null}
+
+                <Button type="submit" disabled={pending} className="w-full">
+                  {pending
+                    ? mode === 'login'
+                      ? 'Signing in…'
+                      : 'Creating…'
+                    : mode === 'login'
+                      ? 'Sign in'
+                      : 'Create account'}
+                </Button>
+
+                <p className="text-xs text-muted-foreground">
+                  {mode === 'login'
+                    ? 'No account yet? Create one — it takes an email and a password, and nothing else.'
+                    : 'Creating an account gives you a private workspace: only you can read, rename or delete your runs.'}
                 </p>
-              ) : null}
-
-              <Button type="submit" disabled={pending} className="w-full">
-                {pending
-                  ? mode === 'login'
-                    ? 'Signing in…'
-                    : 'Creating…'
-                  : mode === 'login'
-                    ? 'Sign in'
-                    : 'Create account'}
-              </Button>
-
-              <p className="text-xs text-muted-foreground">
-                {mode === 'login'
-                  ? 'No account yet? Create one — it takes an email and a password, and nothing else.'
-                  : 'Creating an account gives you a private workspace: only you can read, rename or delete your runs.'}
-              </p>
-            </form>
-          </div>
-        </main>
+              </form>
+            </div>
+          </main>
+        </LandingClose>
       </div>
     </div>
   );
