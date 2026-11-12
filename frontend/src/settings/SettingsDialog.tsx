@@ -115,7 +115,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         className="flex max-h-full w-full max-w-xl flex-col rounded-sm border border-border bg-card"
       >
         <header className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-3">
-          <h2 id="settings-title" className={`${MICRO} flex-1`}>
+          <h2 id="settings-title" className="type-title flex-1">
             Settings
           </h2>
           <Button
@@ -137,7 +137,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             </p>
           ) : load.status === 'error' ? (
             <p role="alert" className="px-4 py-6 text-sm text-destructive">
-              Could not load your settings: {load.message}
+              Your settings could not be loaded ({load.message}). Close this and try again.
             </p>
           ) : (
             <Body document={load.document} save={save} />
@@ -173,11 +173,11 @@ function Body({
         <p className="text-sm">
           {account.email ? (
             <>
-              Signed in as <span className="font-mono">{account.email}</span>. These settings are
-              this account's, on any browser.
+              Signed in as <span className="font-mono">{account.email}</span>. Settings follow this
+              account to any browser.
             </>
           ) : (
-            'Local account: sign-in is off on this server, so everyone using it shares these settings.'
+            'Local account. Sign-in is off on this server, so these settings are shared.'
           )}
         </p>
       </Section>
@@ -207,9 +207,7 @@ function Body({
         <div className="space-y-1">
           <p className="text-sm">Saved ticker lists</p>
           {settings.market.lists.length === 0 ? (
-            <p className="text-xs text-muted-foreground">
-              None yet. Save one from the Market tab's universe list.
-            </p>
+            <p className="text-xs text-muted-foreground">None yet. Save one from the Market tab.</p>
           ) : (
             <ul
               data-testid="settings-lists"
@@ -287,11 +285,8 @@ function IbkrSection({ document }: { document: UserSettingsDocument }) {
   return (
     <Section title="IBKR · live market data" testId="settings-ibkr">
       <p className="text-xs text-muted-foreground">
-        Live prices come from your own Interactive Brokers login. Your username and account type are
-        saved here. Your password is never saved in QuantLab's database or shown again: it is kept
-        only by a gateway that runs for you (on the server, with that gateway's container), which
-        stays on until you disconnect — disconnecting deletes the gateway and the password with
-        it. The gateway is read-only.
+        Live prices come from your own Interactive Brokers login. QuantLab never stores your
+        password: a read-only gateway holds it and deletes it when you disconnect.
       </p>
 
       <p data-testid="settings-ibkr-status" className="text-sm">
