@@ -84,8 +84,8 @@ export function ScreenControls(props: ScreenControlsProps) {
         </select>
         <p className="text-xs leading-snug text-muted-foreground">
           {chosen
-            ? `${chosen.size.toLocaleString('en-US')} members, as the list stood on ${chosen.as_of}. A screen is always bounded by a list — that is how the filings index is keyed, and how the work is actually done.`
-            : 'A screen is always bounded by a named list.'}
+            ? `${chosen.size.toLocaleString('en-US')} members as of ${chosen.as_of}.`
+            : 'Choose a list to screen.'}
         </p>
       </div>
 
@@ -121,8 +121,7 @@ export function ScreenControls(props: ScreenControlsProps) {
         </div>
       </div>
       <p className="-mt-3 text-xs leading-snug text-muted-foreground">
-        Leave the date empty to use the most recent filings. Set one and every ratio is computed
-        from the accounts that were public on that day — nothing filed later leaks in.
+        Empty uses the latest filings. A date uses only what had been filed by then.
       </p>
 
       <div className="space-y-3 border-t border-border pt-4">
@@ -136,8 +135,7 @@ export function ScreenControls(props: ScreenControlsProps) {
 
         {drafts.length === 0 ? (
           <p className="text-xs leading-snug text-muted-foreground">
-            No constraints. The screen returns the universe ranked, with every ratio shown and the
-            holes in the filings left visible as dashes.
+            No constraints: the whole universe, ranked.
           </p>
         ) : null}
 
@@ -163,13 +161,13 @@ export function ScreenControls(props: ScreenControlsProps) {
         >
           {running ? 'Screening…' : 'Run screen'}
         </Button>
-        <p className="text-xs leading-snug text-muted-foreground" data-testid="screen-run-note">
-          {running
-            ? 'Reading the filings for every member of the universe. A few seconds.'
-            : stale
-              ? 'The table below answers the previous question. Run to apply these changes.'
-              : 'A screen reads the whole universe, so it runs when you ask and not before.'}
-        </p>
+        {running || stale ? (
+          <p className="text-xs leading-snug text-muted-foreground" data-testid="screen-run-note">
+            {running
+              ? 'Reading the filings for every member. A few seconds.'
+              : 'The table shows the previous question. Run to apply these changes.'}
+          </p>
+        ) : null}
       </div>
     </div>
   );

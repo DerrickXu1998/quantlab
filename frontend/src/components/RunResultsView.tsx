@@ -230,9 +230,9 @@ export function RunResultsView({ run }: { run: RunDetailV2 }) {
         <Coverage run={run} />
         <Provenance run={run} />
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <StatusBadge tone={run.dataset === 'warehouse' ? 'good' : 'idle'}>
-            {run.dataset === 'warehouse' ? 'Live history' : 'Demo data'}
-          </StatusBadge>
+          {/* The provenance line above already names the dataset; only the
+              exception is worth a badge of its own. */}
+          {run.dataset === 'warehouse' ? null : <StatusBadge tone="idle">Demo data</StatusBadge>}
           {run.re_runnable === false ? (
             <StatusBadge
               tone="bad"

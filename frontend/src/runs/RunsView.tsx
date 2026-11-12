@@ -1,3 +1,4 @@
+import { displaySymbol } from '../research/format';
 import {
   ArrowLeft,
   Ban,
@@ -574,7 +575,7 @@ function RunRow({
       <TableCell className="type-data">{BAR_FREQUENCY_LABELS[barsOf(run)]}</TableCell>
       <TableCell className="max-w-[12rem] truncate text-xs" title={run.symbols.join(', ')}>
         <span className="tabular-nums">{run.symbols.length}</span> ·{' '}
-        {run.symbols.slice(0, 3).join(' ')}
+        {run.symbols.slice(0, 3).map(displaySymbol).join(' ')}
         {run.symbols.length > 3 ? '…' : ''}
       </TableCell>
       <TableCell className="whitespace-nowrap type-data tabular-nums">

@@ -177,7 +177,7 @@ export function ScreenView({ onSelectSymbol }: ScreenViewProps): JSX.Element {
           <ResearchPanel
             className="min-h-0 flex-1"
             title="The question"
-            purpose="Pick a list, set the bounds, run. Nothing is computed until you press Run."
+            purpose="Nothing is computed until you press Run."
           >
             <div className="h-full overflow-y-auto p-3" data-testid="screen-question-panel">
               <ScreenControls
@@ -207,7 +207,7 @@ export function ScreenView({ onSelectSymbol }: ScreenViewProps): JSX.Element {
           <ResearchPanel
             className="min-h-0 flex-1"
             title="What qualified"
-            purpose="The names that cleared every bound, ranked — beside how many were never measured at all."
+            purpose="Ranked, with how many could not be measured."
             actions={
               result ? (
                 <span className="type-data tabular-nums text-muted-foreground">
@@ -286,9 +286,7 @@ function ColumnChooser({
     );
   const group = (title: string, metrics: readonly ScreenMetric[]) => (
     <fieldset className="space-y-1">
-      <legend className="type-label text-muted-foreground">
-        {title}
-      </legend>
+      <legend className="type-label text-muted-foreground">{title}</legend>
       <div className="flex flex-wrap gap-x-4 gap-y-1">
         {metrics.map((metric) => (
           <label key={metric} className="inline-flex items-center gap-1.5 text-xs">
@@ -436,7 +434,7 @@ function Results({
         className="my-auto"
         icon={ScanSearch}
         title="No screen run yet"
-        detail={`Nothing has been asked of ${universe || 'this universe'}. Set the bounds on the left and press Run — the result is a ranked table, and every row opens as a company.`}
+        detail="Set the bounds on the left and press Run. Every row opens as a company."
       />
     );
   }
@@ -509,9 +507,7 @@ function Results({
         */}
         {result.coverage.length > 0 ? (
           <div className="space-y-2 border-t border-border pt-3">
-            <p className="type-label text-muted-foreground">
-              What could be measured at all
-            </p>
+            <p className="type-label text-muted-foreground">What could be measured at all</p>
             <div className="grid grid-cols-1 gap-x-8 gap-y-2 md:grid-cols-2 xl:grid-cols-3">
               {result.coverage
                 .filter((entry) => entry.measured > 0)

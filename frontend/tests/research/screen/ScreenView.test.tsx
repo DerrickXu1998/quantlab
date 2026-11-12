@@ -50,8 +50,8 @@ describe('Screen — asking the question', () => {
     await user.type(within(dom.getByTestId('constraint-pe')).getByLabelText('Min'), '5');
 
     expect(runScreen).not.toHaveBeenCalled();
-    // And it says so, rather than leaving the user to wonder.
-    expect(dom.getByTestId('screen-run-note')).toHaveTextContent(/runs when you ask/i);
+    // Nothing has run, so there is no result to be stale against and no note.
+    expect(dom.queryByTestId('screen-run-note')).not.toBeInTheDocument();
   });
 
   it('sends the constraint in the metric’s own unit when Run is pressed', async () => {
@@ -60,7 +60,10 @@ describe('Screen — asking the question', () => {
     await ready();
 
     await user.click(dom.getByRole('button', { name: /add/i }));
-    await user.selectOptions(within(dom.getByTestId('constraint-pe')).getByLabelText('Metric'), 'roe');
+    await user.selectOptions(
+      within(dom.getByTestId('constraint-pe')).getByLabelText('Metric'),
+      'roe',
+    );
     await user.type(within(dom.getByTestId('constraint-roe')).getByLabelText('Min'), '0.15');
     await user.click(dom.getByTestId('run-screen'));
 
@@ -99,9 +102,7 @@ describe('Screen — coverage, which is the whole point', () => {
     expect(dom.getByTestId('coverage-net_margin')).toHaveTextContent(
       'Net margin — 376 of 598 names measured',
     );
-    expect(dom.getByTestId('coverage-roe')).toHaveTextContent(
-      'ROE — 437 of 598 names measured',
-    );
+    expect(dom.getByTestId('coverage-roe')).toHaveTextContent('ROE — 437 of 598 names measured');
   });
 
   it('names the filed concepts a metric is built from', async () => {
