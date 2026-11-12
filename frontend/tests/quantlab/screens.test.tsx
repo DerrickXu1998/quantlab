@@ -439,7 +439,7 @@ describe('Strategies', () => {
 
     expect(screen.queryByRole('tab', { name: /signal lab/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: /point-in-time/i })).not.toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /configure/i })).toHaveAttribute(
+    expect(screen.getByRole('tab', { name: /build/i })).toHaveAttribute(
       'aria-selected',
       'true',
     );

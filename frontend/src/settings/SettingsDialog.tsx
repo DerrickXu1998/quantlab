@@ -1,5 +1,5 @@
-import { KeyRound, Trash2, X } from 'lucide-react';
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { KeyRound, Trash2 } from 'lucide-react';
+import { useState, type FormEvent, type ReactNode } from 'react';
 import {
   deleteIbkrCredentials,
   putIbkrCredentials,
@@ -7,6 +7,7 @@ import {
   type UserSettingsDocument,
 } from '../api/client';
 import { Button } from '../components/ui/button';
+import { Modal } from '../components/ui/dialog';
 import { Input, Select } from '../components/ui/field';
 import { ButtonGroup } from '../components/ui/layout';
 import { useSettings } from './SettingsProvider';
@@ -81,17 +82,7 @@ const CONNECTION_LABEL: Record<LiveConnection['state'], string> = {
  */
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const settings = useSettings();
-  const closeButton = useRef<HTMLButtonElement>(null);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    closeButton.current?.focus();
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
 
   const load = settings?.load;
 
@@ -101,59 +92,24 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-background/80 px-4 py-8"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="settings-title"
-        data-testid="settings-dialog"
-        className="flex max-h-full w-full max-w-xl flex-col rounded-sm border border-border bg-card"
-      >
-        <header className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-3">
-          <h2 id="settings-title" className={`${MICRO} flex-1`}>
-            Settings
-          </h2>
-          <Button
-            ref={closeButton}
-            type="button"
-            variant="ghost"
-            size="sm"
-            aria-label="Close settings"
-            onClick={onClose}
-          >
-            <X size={16} strokeWidth={1.5} aria-hidden="true" />
-          </Button>
-        </header>
-
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {!load || load.status === 'loading' ? (
-            <p role="status" className="px-4 py-6 text-sm text-muted-foreground">
-              Loading your settings…
-            </p>
-          ) : load.status === 'error' ? (
-            <p role="alert" className="px-4 py-6 text-sm text-destructive">
-              Could not load your settings: {load.message}
-            </p>
-          ) : (
-            <Body document={load.document} save={save} />
-          )}
-          {error ? (
-            <p
-              role="alert"
-              data-testid="settings-error"
-              className="mx-4 mb-4 text-sm text-destructive"
-            >
-              Not saved: {error}
-            </p>
-          ) : null}
-        </div>
-      </div>
-    </div>
+    <Modal title="Settings" closeLabel="Close settings" onClose={onClose} testId="settings-dialog">
+      {!load || load.status === 'loading' ? (
+        <p role="status" className="px-4 py-6 text-sm text-muted-foreground">
+          Loading your settings…
+        </p>
+      ) : load.status === 'error' ? (
+        <p role="alert" className="px-4 py-6 text-sm text-destructive">
+          Your settings could not be loaded ({load.message}). Close this and try again.
+        </p>
+      ) : (
+        <Body document={load.document} save={save} />
+      )}
+      {error ? (
+        <p role="alert" data-testid="settings-error" className="mx-4 mb-4 text-sm text-destructive">
+          Not saved: {error}
+        </p>
+      ) : null}
+    </Modal>
   );
 }
 
@@ -173,11 +129,11 @@ function Body({
         <p className="text-sm">
           {account.email ? (
             <>
-              Signed in as <span className="font-mono">{account.email}</span>. These settings are
-              this account's, on any browser.
+              Signed in as <span className="font-mono">{account.email}</span>. Settings follow this
+              account to any browser.
             </>
           ) : (
-            'Local account: sign-in is off on this server, so everyone using it shares these settings.'
+            'Local account. Sign-in is off on this server, so these settings are shared.'
           )}
         </p>
       </Section>
@@ -207,9 +163,7 @@ function Body({
         <div className="space-y-1">
           <p className="text-sm">Saved ticker lists</p>
           {settings.market.lists.length === 0 ? (
-            <p className="text-xs text-muted-foreground">
-              None yet. Save one from the Market tab's universe list.
-            </p>
+            <p className="text-xs text-muted-foreground">None yet. Save one from the Market tab.</p>
           ) : (
             <ul
               data-testid="settings-lists"
@@ -287,11 +241,8 @@ function IbkrSection({ document }: { document: UserSettingsDocument }) {
   return (
     <Section title="IBKR · live market data" testId="settings-ibkr">
       <p className="text-xs text-muted-foreground">
-        Live prices come from your own Interactive Brokers login. Your username and account type are
-        saved here. Your password is never saved in QuantLab's database or shown again: it is kept
-        only by a gateway that runs for you (on the server, with that gateway's container), which
-        stays on until you disconnect — disconnecting deletes the gateway and the password with
-        it. The gateway is read-only.
+        Live prices come from your own Interactive Brokers login. QuantLab never stores your
+        password: a read-only gateway holds it and deletes it when you disconnect.
       </p>
 
       <p data-testid="settings-ibkr-status" className="text-sm">

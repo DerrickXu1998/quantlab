@@ -1,3 +1,4 @@
+import { SkeletonState } from '../../components/ui/skeleton';
 import { ChartLine, History, LineChart, Radio, ServerCrash } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { Instrument } from '../../api/client';
@@ -193,7 +194,7 @@ export function MarketView({
         className="flex min-h-0 flex-col border-b border-border bg-card lg:border-b-0 lg:border-r"
       >
         {catalog.status === 'loading' ? (
-          <EmptyState icon={LineChart} title="Loading instruments…" role="status" />
+          <SkeletonState label="Loading instruments…" rows={8} />
         ) : instruments.length === 0 ? (
           <EmptyState
             testId="market-no-instruments"
@@ -331,12 +332,19 @@ export function MarketView({
             onConnect={liveConnection.connect}
             onCancel={() => void liveConnection.disconnect()}
           />
+        ) : selected.length === 0 && defaultSymbol && catalog.status === 'loading' ? (
+          <SkeletonState
+            label="Opening the chart…"
+            shape="chart"
+            testId="market-opening"
+            className="min-h-0 flex-1"
+          />
         ) : selected.length === 0 ? (
           <EmptyState
             testId="market-no-selection"
             icon={ChartLine}
             title="Select a ticker to review market movements"
-            detail={`Tick up to ${MAX_TICKERS} instruments in the universe list, or type tickers into Chart tickers and press GO. One chart fills the page; two sit side by side; three or four share a grid.`}
+            detail={`Tick up to ${MAX_TICKERS} in the list, or type tickers and press GO.`}
             className="min-h-0 flex-1"
           />
         ) : (

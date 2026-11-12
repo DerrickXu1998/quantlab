@@ -1,4 +1,5 @@
-import { Hourglass, PlugZap, SearchX, ServerCrash, type LucideIcon } from 'lucide-react';
+import { SkeletonState } from '../../components/ui/skeleton';
+import { PlugZap, SearchX, ServerCrash, type LucideIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Button } from '../../components/ui/button';
 import { Card, CardHeader, CardTitle } from '../../components/ui/card';
@@ -85,16 +86,7 @@ export function PanelState({
   ) : null;
 
   if (status === 'loading') {
-    return (
-      <EmptyState
-        icon={Hourglass}
-        title={`Reading ${subject}…`}
-        detail="One request, resolved as of the date above."
-        role="status"
-        testId={testId}
-        className="my-4"
-      />
-    );
+    return <SkeletonState label={`Reading ${subject}…`} rows={4} testId={testId} />;
   }
 
   if (status === 'unsupported') {

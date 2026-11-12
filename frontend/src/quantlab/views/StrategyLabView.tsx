@@ -60,7 +60,7 @@ export function StrategyLabView({ instruments }: { instruments: Instrument[] }) 
           value={tab}
           onChange={(next) => show(next)}
           items={[
-            { id: 'configure', label: 'Configure', icon: FlaskConical },
+            { id: 'configure', label: 'Build', icon: FlaskConical },
             {
               id: 'runs',
               label: 'Runs',

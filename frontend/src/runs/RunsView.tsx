@@ -1,12 +1,6 @@
-import {
-  ArrowLeft,
-  Ban,
-  Copy,
-  FlaskConical,
-  Hourglass,
-  RotateCcw,
-  ServerCrash,
-} from 'lucide-react';
+import { SkeletonState } from '../components/ui/skeleton';
+import { displaySymbol } from '../research/format';
+import { ArrowLeft, Ban, Copy, FlaskConical, RotateCcw, ServerCrash } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { isActiveRun } from '../api/client';
 import type { RunDetailV2, RunV2 } from '../api/types';
@@ -272,7 +266,7 @@ function RunsTable({
     });
 
   if (runsStatus === 'loading' && allRuns.length === 0) {
-    return <EmptyState icon={Hourglass} title="Loading runs…" role="status" />;
+    return <SkeletonState label="Loading runs…" rows={8} />;
   }
   if (runsStatus === 'error' && allRuns.length === 0) {
     return (
@@ -295,7 +289,7 @@ function RunsTable({
         testId="runs-empty"
         icon={FlaskConical}
         title="No backtests yet"
-        detail="Build a strategy in Configure and submit it. It runs in the background and appears here with its status and results."
+        detail="Build a strategy and submit it. It appears here with its status and results."
       />
     );
   }
@@ -574,7 +568,7 @@ function RunRow({
       <TableCell className="type-data">{BAR_FREQUENCY_LABELS[barsOf(run)]}</TableCell>
       <TableCell className="max-w-[12rem] truncate text-xs" title={run.symbols.join(', ')}>
         <span className="tabular-nums">{run.symbols.length}</span> ·{' '}
-        {run.symbols.slice(0, 3).join(' ')}
+        {run.symbols.slice(0, 3).map(displaySymbol).join(' ')}
         {run.symbols.length > 3 ? '…' : ''}
       </TableCell>
       <TableCell className="whitespace-nowrap type-data tabular-nums">
@@ -681,7 +675,7 @@ function RunDetail({
     activeRun?.id === runId ? ({ ...activeRun, ...(listed ?? {}) } as RunDetailV2) : null;
 
   if (!run) {
-    return <EmptyState icon={Hourglass} title="Loading the run…" role="status" />;
+    return <SkeletonState label="Loading the run…" shape="detail" />;
   }
   const name = runDisplayName(run);
   const active = isActiveRun(run);
