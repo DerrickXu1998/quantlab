@@ -1,4 +1,5 @@
-import { BookMarked, Hourglass, ServerCrash } from 'lucide-react';
+import { SkeletonState } from '../components/ui/skeleton';
+import { BookMarked, ServerCrash } from 'lucide-react';
 import { useState } from 'react';
 import type { CatalogModel, StrategyRole } from '../api/types';
 import { ConfirmDelete } from '../components/ConfirmDelete';
@@ -73,14 +74,23 @@ export function LibraryRail({
   onDeleted: (strategyId: string) => void;
 }) {
   return (
-    <aside aria-label="Strategy library" className="flex min-h-0 flex-col gap-3" data-testid="library-rail">
+    <aside
+      aria-label="Strategy library"
+      className="flex min-h-0 flex-col gap-3"
+      data-testid="library-rail"
+    >
       <TabBar<LibraryList>
         label="Library"
         idPrefix="library"
         value={list}
         onChange={onListChange}
         items={[
-          { id: 'mine', label: 'Mine', badge: library.items.length, badgeLabel: `${library.items.length} saved` },
+          {
+            id: 'mine',
+            label: 'Mine',
+            badge: library.items.length,
+            badgeLabel: `${library.items.length} saved`,
+          },
           { id: 'templates', label: 'Templates' },
           { id: 'signals', label: 'Signals' },
         ]}
@@ -102,7 +112,7 @@ export function LibraryRail({
         ) : list === 'templates' ? (
           <TemplateShelves templates={templates} onLoad={onLoadTemplate} />
         ) : modelsLoading ? (
-          <EmptyState icon={Hourglass} title="Loading the registry…" role="status" />
+          <SkeletonState label="Loading the registry…" />
         ) : (
           <SignalCatalogue catalog={catalog} coverage={coverage} onAdd={onAdd} />
         )}
@@ -126,7 +136,7 @@ function SavedStrategies({
 }) {
   const [query, setQuery] = useState('');
   if (library.status === 'loading') {
-    return <EmptyState icon={Hourglass} title="Loading…" role="status" />;
+    return <SkeletonState label="Loading…" />;
   }
   if (library.status === 'error') {
     return (
@@ -205,9 +215,15 @@ function SavedStrategies({
   );
 }
 
-function TemplateShelves({ templates, onLoad }: { templates: Templates; onLoad: (id: string) => void }) {
+function TemplateShelves({
+  templates,
+  onLoad,
+}: {
+  templates: Templates;
+  onLoad: (id: string) => void;
+}) {
   if (templates.status === 'loading') {
-    return <EmptyState icon={Hourglass} title="Loading templates…" role="status" />;
+    return <SkeletonState label="Loading templates…" />;
   }
   if (templates.status === 'error') {
     return (
@@ -255,9 +271,7 @@ function TemplateShelves({ templates, onLoad }: { templates: Templates; onLoad: 
           >
             <div className="flex items-baseline justify-between gap-2">
               <h3 className={MICRO}>{shelf.label}</h3>
-              <span className="type-data tabular-nums text-muted-foreground">
-                {items.length}
-              </span>
+              <span className="type-data tabular-nums text-muted-foreground">{items.length}</span>
             </div>
             {shelf.note ? <p className="text-xs text-muted-foreground">{shelf.note}</p> : null}
             <ul data-testid="template-list" className="space-y-2">

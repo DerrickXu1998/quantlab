@@ -55,7 +55,9 @@ describe('CompanyView, before a name is chosen', () => {
   it('opens on the two controls and one line asking for a company', async () => {
     renderView(null);
     expect(screen.getByRole('combobox')).toBeInTheDocument();
-    expect(screen.getByTestId('company-no-selection')).toHaveTextContent(/pick a company to begin/i);
+    expect(screen.getByTestId('company-no-selection')).toHaveTextContent(
+      /pick a company to begin/i,
+    );
   });
 
   it('names the first action instead of showing an empty workspace', async () => {
@@ -214,9 +216,14 @@ describe('CompanyView, while the backend is still being written', () => {
     );
     renderView('CAT');
 
-    const state = await screen.findByTestId('company-coverage-state');
-    expect(state).toHaveTextContent(/not served by this backend/i);
-    expect(state).toHaveTextContent(/nothing here means “there is none”/i);
+    await waitFor(() =>
+      expect(screen.getByTestId('company-coverage-state')).toHaveTextContent(
+        /not served by this backend/i,
+      ),
+    );
+    expect(screen.getByTestId('company-coverage-state')).toHaveTextContent(
+      /nothing here means “there is none”/i,
+    );
     expect(screen.queryByTestId('company-coverage-none')).not.toBeInTheDocument();
   });
 
@@ -224,8 +231,10 @@ describe('CompanyView, while the backend is still being written', () => {
     vi.mocked(apiClient.getCompanyOverview).mockRejectedValue(new apiClient.ApiError(500, 'boom'));
     renderView('CAT');
 
-    const state = await screen.findByTestId('company-signals-state');
-    expect(state).toHaveTextContent(/could not read it/i);
+    await waitFor(() =>
+      expect(screen.getByTestId('company-signals-state')).toHaveTextContent(/could not read it/i),
+    );
+    const state = screen.getByTestId('company-signals-state');
     expect(state).toHaveTextContent(/boom/);
     expect(state).not.toHaveTextContent(/not served by this backend/i);
   });
@@ -237,13 +246,17 @@ describe('CompanyView, while the backend is still being written', () => {
     );
     renderView('CAT');
 
-    const state = await screen.findByTestId('company-signals-state');
-    await user.click(within(state).getByRole('button', { name: /try again/i }));
+    const retry = await waitFor(() =>
+      within(screen.getByTestId('company-signals-state')).getByRole('button', {
+        name: /try again/i,
+      }),
+    );
+    await user.click(retry);
 
     await waitFor(() => expect(screen.getByTestId('company-signals-rows')).toBeInTheDocument());
   });
 
-  it('says what it is doing while it loads, in words', async () => {
+  it('names what is loading for screen readers while it shows the outline', async () => {
     let release: () => void = () => undefined;
     vi.mocked(apiClient.getPrices).mockReturnValue(
       new Promise<apiClient.PriceBarList>((resolve) => {
@@ -255,7 +268,7 @@ describe('CompanyView, while the backend is still being written', () => {
 
     const state = await screen.findByTestId('company-price-state');
     expect(state).toHaveTextContent(/reading the price history/i);
-    expect(state).toHaveTextContent(/resolved as of the date above/i);
+    expect(state).toHaveAttribute('role', 'status');
     release();
   });
 

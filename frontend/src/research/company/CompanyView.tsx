@@ -1,3 +1,4 @@
+import { SkeletonState } from '../../components/ui/skeleton';
 import { Search } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { ChartLine, ChartLineLook, ChartSignal } from '../../components/CandlestickChart';
@@ -188,7 +189,13 @@ export function CompanyView({
         </div>
       </div>
 
-      {symbol === null ? (
+      {symbol === null && defaultSymbol && instruments.status === 'loading' ? (
+        // A company is about to open: hold its outline rather than flash
+        // "pick a company" for the moment the catalogue takes to arrive.
+        <ScrollRegion>
+          <SkeletonState label="Opening the company…" shape="detail" testId="company-opening" />
+        </ScrollRegion>
+      ) : symbol === null ? (
         <ScrollRegion>
           <EmptyState
             icon={Search}

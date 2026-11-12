@@ -1,13 +1,6 @@
+import { SkeletonState } from '../components/ui/skeleton';
 import { displaySymbol } from '../research/format';
-import {
-  ArrowLeft,
-  Ban,
-  Copy,
-  FlaskConical,
-  Hourglass,
-  RotateCcw,
-  ServerCrash,
-} from 'lucide-react';
+import { ArrowLeft, Ban, Copy, FlaskConical, RotateCcw, ServerCrash } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { isActiveRun } from '../api/client';
 import type { RunDetailV2, RunV2 } from '../api/types';
@@ -273,7 +266,7 @@ function RunsTable({
     });
 
   if (runsStatus === 'loading' && allRuns.length === 0) {
-    return <EmptyState icon={Hourglass} title="Loading runs…" role="status" />;
+    return <SkeletonState label="Loading runs…" rows={8} />;
   }
   if (runsStatus === 'error' && allRuns.length === 0) {
     return (
@@ -682,7 +675,7 @@ function RunDetail({
     activeRun?.id === runId ? ({ ...activeRun, ...(listed ?? {}) } as RunDetailV2) : null;
 
   if (!run) {
-    return <EmptyState icon={Hourglass} title="Loading the run…" role="status" />;
+    return <SkeletonState label="Loading the run…" shape="detail" />;
   }
   const name = runDisplayName(run);
   const active = isActiveRun(run);

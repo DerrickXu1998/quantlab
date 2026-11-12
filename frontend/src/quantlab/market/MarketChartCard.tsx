@@ -1,3 +1,4 @@
+import { SkeletonState } from '../../components/ui/skeleton';
 import { displaySymbol } from '../../research/format';
 import { Activity, Moon, PlugZap, ServerCrash, X } from 'lucide-react';
 import { useMemo, type ReactNode } from 'react';
@@ -274,12 +275,7 @@ export function MarketChartCard({
             testId="chart-error"
           />
         ) : daily.status === 'loading' ? (
-          <EmptyState
-            icon={Activity}
-            title={`Loading ${symbol}…`}
-            role="status"
-            testId="chart-loading"
-          />
+          <SkeletonState label={`Loading ${symbol}…`} shape="chart" testId="chart-loading" />
         ) : !lastDaily || !view ? (
           <EmptyState icon={Activity} title={`${symbol} has no stored bars`} testId="chart-empty" />
         ) : (
