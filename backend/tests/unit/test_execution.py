@@ -472,6 +472,54 @@ def test_a_deferred_signal_on_the_last_bar_has_nowhere_to_fill(timing):
     assert result.trades == []
 
 
+@pytest.mark.parametrize("timing", ["next_open", "next_close", "next_typical", "next_vwap"])
+@pytest.mark.parametrize("execution_price", [200.0, 50.0])
+def test_deferred_entries_size_once_at_the_execution_price(timing, execution_price):
+    series = {
+        "AAA": bars(
+            [100.0, execution_price, execution_price],
+            opens=[100.0, execution_price, execution_price],
+            high=[101.0, execution_price, execution_price],
+            low=[99.0, execution_price, execution_price],
+        )
+    }
+    result = simulate(
+        ["AAA"],
+        series,
+        [decision("d000", "entry", "bullish")],
+        idealized_config(
+            fill_timing=timing,
+            intraday_resolution="minute" if timing == "next_vwap" else "daily",
+            position_sizing="fixed_notional",
+            sizing_value=10_000.0,
+        ),
+    )
+
+    assert len(result.fills) == 1
+    fill = result.fills[0]
+    assert (fill.date, fill.price) == ("d001", execution_price)
+    assert fill.qty == pytest.approx(10_000.0 / execution_price)
+    assert result.summary.filled_notional == pytest.approx(10_000.0)
+    assert result.summary.unfilled_orders == 0
+
+
+def test_deferred_partial_entry_keeps_its_execution_sized_target():
+    result = simulate(
+        ["AAA"],
+        {"AAA": volume_bars([100.0, 200.0, 400.0, 400.0], [1_000, 200, 200, 100])},
+        [decision("d000", "entry", "bullish")],
+        volume_config(
+            fill_timing="next_open",
+            position_sizing="fixed_notional",
+            sizing_value=10_000.0,
+        ),
+    )
+
+    assert [fill.qty for fill in result.fills] == [20.0, 20.0, 10.0]
+    assert result.trades[0].qty == pytest.approx(50.0)
+    assert result.summary.unfilled_orders == 0
+
+
 @pytest.mark.parametrize(
     ("timing", "phrase"),
     [
