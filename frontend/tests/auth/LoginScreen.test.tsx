@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../src/api/client';
@@ -49,6 +49,27 @@ describe('password strength', () => {
 });
 
 describe('LoginScreen', () => {
+  it('keeps the way in one click away: the nav links pick the tab and focus the form', async () => {
+    const person = userEvent.setup();
+    render(<LoginScreen />);
+
+    // The page tells the whole story above the form, so every chapter is there.
+    for (const headline of [/no code/i, /every trade/i, /any company/i, /costs included/i]) {
+      expect(screen.getByRole('heading', { name: headline })).toBeInTheDocument();
+    }
+
+    const nav = screen.getByRole('navigation', { name: 'QuantLab' });
+    await person.click(within(nav).getByRole('link', { name: 'Create account' }));
+    expect(screen.getByRole('tab', { name: /create account/i })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(screen.getByLabelText('Email')).toHaveFocus();
+
+    await person.click(within(nav).getByRole('link', { name: 'Sign in' }));
+    expect(screen.getByRole('tab', { name: /sign in/i })).toHaveAttribute('aria-selected', 'true');
+  });
+
   it('opens on sign in, with create account one tab away', () => {
     render(<LoginScreen />);
 
@@ -114,9 +135,12 @@ describe('LoginScreen', () => {
     await person.click(screen.getByRole('button', { name: /create account/i }));
 
     expect(register).not.toHaveBeenCalled();
-    expect(screen.getAllByRole('alert').map((node) => node.textContent).join(' ')).toMatch(
-      /at least 8 characters/i,
-    );
+    expect(
+      screen
+        .getAllByRole('alert')
+        .map((node) => node.textContent)
+        .join(' '),
+    ).toMatch(/at least 8 characters/i);
   });
 
   it('shows the strength hint only on the register tab', async () => {
