@@ -13,6 +13,7 @@ import dataclasses
 
 import pytest
 
+from quantlab.execution import ExecutionConfig
 from quantlab.replay import engine as replay_engine
 from quantlab.replay.engine import (
     ReplayBar,
@@ -79,7 +80,10 @@ def _batch_events(bars_by_symbol, model_name="sma-crossover", overrides=None):
         symbol: [b for b in bars if START <= b.date <= END]
         for symbol, bars in bars_by_symbol.items()
     }
-    run = {"id": "batch", "symbols": list(SYMBOLS)}
+    # Stored as a run recorded today would be: live replays under the current
+    # defaults, so the batch run must name them rather than leave them unset
+    # (an unset config means a run from before execution criteria existed).
+    run = {"id": "batch", "symbols": list(SYMBOLS), "execution": ExecutionConfig().to_dict()}
     return list(replay_engine.replay_events(run, signals, window_bars))
 
 

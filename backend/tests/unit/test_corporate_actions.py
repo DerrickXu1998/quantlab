@@ -223,6 +223,25 @@ def test_a_run_stored_before_the_setting_existed_reexecutes_unadjusted():
     assert execution_config_for(stored).price_adjustment == "split"
 
 
+def test_a_run_stored_before_volume_capacity_reexecutes_with_unlimited_liquidity():
+    """Its stored result had no capacity limit; filling the gap with today's
+    1% default made its replay disagree with the result it shows."""
+    pre_capacity = {k: v for k, v in idealized_config().to_dict().items()
+                    if k not in ("max_volume_participation", "order_expiry_days")}
+    assert execution_config_for({"execution": pre_capacity}).max_volume_participation is None
+    # Stored explicitly, by a build that had the setting: kept as stored.
+    capped = {**idealized_config().to_dict(), "max_volume_participation": 0.05}
+    assert execution_config_for({"execution": capped}).max_volume_participation == 0.05
+
+
+def test_a_run_stored_before_execution_criteria_reexecutes_as_it_ran():
+    config = execution_config_for({})
+    assert config.fill_timing == "signal_close"
+    assert config.commission_bps == 0.0
+    assert config.slippage_bps == 0.0
+    assert config.max_volume_participation is None
+
+
 def test_new_configs_default_to_split_and_dividend_adjustment():
     assert idealized_config().price_adjustment == "split_dividend"
     with pytest.raises(ValueError, match="price_adjustment"):
