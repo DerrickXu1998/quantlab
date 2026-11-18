@@ -1,4 +1,4 @@
-import { ArrowDown } from 'lucide-react';
+import { ArrowDown, ArrowUpRight, Check } from 'lucide-react';
 import { useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { Button } from '../../components/ui/button';
 import { cn } from '../../lib/utils';
@@ -231,7 +231,10 @@ export function LandingNav({ onGo }: { onGo: (mode: AuthMode) => void }) {
         aria-label="QuantLab"
         className="mx-auto flex h-14 w-full max-w-[84rem] items-center gap-2 px-4 lg:px-8"
       >
-        <p className="flex-1 font-display text-lg tracking-[-0.02em]">QuantLab</p>
+        <p className="flex flex-1 items-center gap-2.5 font-display text-lg tracking-[-0.02em]">
+          <span aria-hidden="true" className="h-2 w-2 bg-primary" />
+          QuantLab
+        </p>
         <Button asChild variant="ghost" size="sm">
           <a href="#sign-in" onClick={go('login')}>
             Sign in
@@ -250,18 +253,26 @@ export function LandingNav({ onGo }: { onGo: (mode: AuthMode) => void }) {
 function HeroCopy({ onGo }: { onGo: (mode: AuthMode) => void }) {
   return (
     <>
-      <p className="type-label text-primary">Systematic stock research</p>
+      <p className="type-label flex items-center justify-center gap-3 text-primary">
+        <span aria-hidden="true" className="h-px w-8 bg-primary/50" />
+        Systematic stock research
+        <span aria-hidden="true" className="h-px w-8 bg-primary/50" />
+      </p>
       <h1
         id="landing-headline"
         className="mx-auto mt-5 max-w-4xl text-balance font-display text-5xl leading-[1.02] tracking-[-0.03em] sm:text-6xl lg:text-7xl"
       >
-        Does your strategy beat buy-and-hold?
+        Does your strategy beat{' '}
+        <span className="relative inline-block">
+          buy-and-hold?
+          <span aria-hidden="true" className="absolute inset-x-0 bottom-1 h-px bg-primary/70" />
+        </span>
       </h1>
       <p className="mx-auto mt-6 max-w-2xl text-pretty text-lg leading-relaxed text-muted-foreground">
         Build a trading strategy, test it on real market history, and see what it would have earned.
       </p>
       <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-        <Button asChild>
+        <Button asChild className="h-11 px-5">
           <a
             href="#sign-in"
             onClick={(event) => {
@@ -270,9 +281,10 @@ function HeroCopy({ onGo }: { onGo: (mode: AuthMode) => void }) {
             }}
           >
             Create account
+            <ArrowUpRight size={16} strokeWidth={1.5} aria-hidden="true" />
           </a>
         </Button>
-        <Button asChild variant="ghost">
+        <Button asChild variant="ghost" className="h-11 px-5">
           <a
             href="#tour"
             onClick={(event) => {
@@ -285,6 +297,17 @@ function HeroCopy({ onGo }: { onGo: (mode: AuthMode) => void }) {
           </a>
         </Button>
       </div>
+      <ul
+        aria-label="What is included"
+        className="mt-7 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 type-label text-muted-foreground"
+      >
+        {['No-code builder', 'Real market history', 'Benchmark included'].map((item) => (
+          <li key={item} className="flex items-center gap-1.5">
+            <Check size={16} strokeWidth={1.5} aria-hidden="true" className="text-primary" />
+            {item}
+          </li>
+        ))}
+      </ul>
     </>
   );
 }
@@ -321,6 +344,9 @@ function PinnedHero({ onGo }: { onGo: (mode: AuthMode) => void }) {
   return (
     <div ref={track} style={{ height: '200vh' }}>
       <div className="sticky top-0 h-screen overflow-hidden">
+        <div aria-hidden="true" className="pointer-events-none absolute inset-0 px-8">
+          <div className="mx-auto h-full max-w-[84rem] border-x border-border/40" />
+        </div>
         <div ref={copy} className="relative z-10 px-8 pt-28 text-center will-change-transform">
           <HeroCopy onGo={onGo} />
         </div>
@@ -330,7 +356,12 @@ function PinnedHero({ onGo }: { onGo: (mode: AuthMode) => void }) {
             className="flex h-full w-full max-w-[84rem] origin-top items-center justify-center will-change-transform"
             style={{ transform: 'translate3d(0, 50vh, 0) scale(0.8)' }}
           >
-            <Shot picture={HERO} eager contain />
+            <Shot
+              picture={HERO}
+              eager
+              contain
+              className="rounded-sm border border-border/80 bg-card"
+            />
           </div>
         </div>
       </div>
@@ -351,7 +382,7 @@ function StackedHero({ onGo }: { onGo: (mode: AuthMode) => void }) {
 }
 
 const PINNED =
-  '(min-width: 1024px) and (min-height: 640px) and (prefers-reduced-motion: no-preference)';
+  '(min-width: 1024px) and (min-height: 800px) and (prefers-reduced-motion: no-preference)';
 
 function Hero({ onGo }: { onGo: (mode: AuthMode) => void }) {
   const pinned = useMediaQuery(PINNED);
