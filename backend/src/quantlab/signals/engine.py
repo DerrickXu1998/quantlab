@@ -1,7 +1,8 @@
 """Signal engine: run every registered rule over the universe.
 
 Deterministic output ordering (symbol, date, rule_name); rules are skipped
-until their declared ``lookback_days`` of history is available.
+until the history their effective parameters need
+(:meth:`SignalRule.required_lookback`) is available.
 """
 
 from __future__ import annotations
@@ -54,9 +55,9 @@ def compute_signals(
     for symbol in sorted(bars_by_symbol):
         bars = bars_by_symbol[symbol]
         for rule in rules:
-            if len(bars) < rule.lookback_days:
-                continue
             effective = effective_by_rule[(rule.name, rule.version)]
+            if len(bars) < rule.required_lookback(effective):
+                continue
             for event in rule.compute(bars, **effective):
                 out.append(
                     ComputedSignal(

@@ -12,6 +12,8 @@ import {
 export type ReplayStatus =
   | 'idle'
   | 'connecting'
+  /** The server is rebuilding an older run's replay; retrying. */
+  | 'preparing'
   | 'streaming'
   | 'paused'
   | 'done'
@@ -23,8 +25,13 @@ export interface ReplayState {
   /** One point per equity event, in stream order. */
   equity: EquityPoint[];
   /** Latest book state, straight off the wire. */
-  equityNow: { equity: number; cash: number; positions: number; realizedPnl: number } | null;
-  closes: Record<string, number>;
+  equityNow: {
+    equity: number | null;
+    cash: number;
+    positions: number;
+    realizedPnl: number;
+  } | null;
+  closes: Record<string, number | null>;
   currentDate: string | null;
   /** Newest first, capped for the DOM. */
   fills: ReplayFillEvent[];
@@ -55,15 +62,29 @@ const MAX_ROWS = 100;
 type Action =
   | { type: 'reset' }
   | { type: 'connecting' }
+  | { type: 'preparing' }
   | { type: 'paused' }
+  | { type: 'resumed' }
   | { type: 'error'; message: string }
   | { type: 'event'; event: ReplayEvent };
 
 function reduce(state: ReplayState, action: Action): ReplayState {
   if (action.type === 'reset') return INITIAL;
   if (action.type === 'connecting') return { ...state, status: 'connecting' };
+  // A pause taken while the server prepares the replay holds.
+  if (action.type === 'preparing') {
+    return state.status === 'paused' ? state : { ...state, status: 'preparing' };
+  }
   if (action.type === 'paused') {
-    return state.status === 'streaming' ? { ...state, status: 'paused' } : state;
+    // Pausable whenever the panel shows Pause: also before the first frame.
+    return ['streaming', 'connecting', 'preparing'].includes(state.status)
+      ? { ...state, status: 'paused' }
+      : state;
+  }
+  if (action.type === 'resumed') {
+    // Back to whatever the stream is doing; the next frame (or 409) refines it.
+    if (state.status !== 'paused') return state;
+    return { ...state, status: state.currentDate ? 'streaming' : 'connecting' };
   }
   if (action.type === 'error') {
     return { ...state, status: 'error', error: action.message };
@@ -101,7 +122,11 @@ function reduce(state: ReplayState, action: Action): ReplayState {
           positions: event.positions,
           realizedPnl: event.realized_pnl,
         },
-        equity: [...state.equity, { date: event.date, value: event.equity }],
+        // An undefined mark has no place on the curve; the book shows a dash.
+        equity:
+          event.equity === null
+            ? state.equity
+            : [...state.equity, { date: event.date, value: event.equity }],
       };
     case 'summary':
       return { ...state, status: 'done', summary: event };
@@ -148,6 +173,7 @@ export function useReplay(runId: string | null, intervalMs: number): ReplayContr
       pausedRef.current = false;
       const buffered = bufferRef.current;
       bufferRef.current = [];
+      dispatch({ type: 'resumed' });
       for (const event of buffered) {
         dispatch({ type: 'event', event });
         if (event.event === 'summary' || event.event === 'truncated') stop();
@@ -164,6 +190,13 @@ export function useReplay(runId: string | null, intervalMs: number): ReplayContr
       onEvent: (event) => {
         if (pausedRef.current) {
           bufferRef.current.push(event);
+          // The stream is complete even though the display is paused: close
+          // it now, or the server ending its response reads as a failure and
+          // throws the buffered summary away. (The handle stays set, so Play
+          // resumes from the buffer rather than starting over.)
+          if (event.event === 'summary' || event.event === 'truncated') {
+            streamRef.current?.close();
+          }
           return;
         }
         dispatch({ type: 'event', event });
@@ -175,6 +208,7 @@ export function useReplay(runId: string | null, intervalMs: number): ReplayContr
         stop();
         dispatch({ type: 'error', message });
       },
+      onPreparing: () => dispatch({ type: 'preparing' }),
     });
   }, [runId, intervalMs, stop]);
 

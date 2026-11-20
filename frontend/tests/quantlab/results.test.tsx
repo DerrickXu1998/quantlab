@@ -147,6 +147,23 @@ describe('run results, with execution criteria', () => {
     expect(within(second).getByText('-160.00')).toHaveClass('text-destructive');
   });
 
+  it('says when its results were rebuilt later rather than recorded', async () => {
+    vi.mocked(apiClient.getRunPerformance).mockResolvedValue({
+      ...performanceV2(),
+      reconstructed: true,
+    });
+    renderResults(runWithStrategy());
+    expect(await screen.findByTestId('performance-reconstructed')).toHaveTextContent(
+      /re-executed once/i,
+    );
+  });
+
+  it('says nothing extra for results recorded as the run completed', async () => {
+    renderResults(runWithStrategy());
+    await screen.findByTestId('trade-log');
+    expect(screen.queryByTestId('performance-reconstructed')).not.toBeInTheDocument();
+  });
+
   it('breaks the exits down by reason and totals what trading cost', async () => {
     renderResults(runWithStrategy());
 

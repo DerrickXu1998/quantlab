@@ -188,6 +188,10 @@ class RunResult:
     #: computes performance from them rather than reading every bar twice.
     #: Never persisted.
     bars: dict | None = field(default=None, repr=False, compare=False)
+    #: What the run traded on beside its bars -- its execution config,
+    #: corporate actions and minute source -- kept with ``bars``, so its
+    #: replay and performance are recorded from exactly these, never re-read.
+    traded_on: dict | None = field(default=None, repr=False, compare=False)
 
 
 def _parse(value: str, field_name: str) -> _date:
@@ -326,7 +330,7 @@ class PreparedRun:
 
     @property
     def large(self) -> bool:
-        return self.estimated_bars > LARGE_RUN_BARS
+        return is_large(self.estimated_bars)
 
     def request(self) -> dict[str, Any]:
         """Everything the worker needs to run this later, as plain JSON.
@@ -396,12 +400,30 @@ def run_experiment(
         overrides=overrides,
         execution=execution,
     )
-    if not prepared.large:
-        return execute_prepared(backend, prepared, owner_id=owner_id)
-    with backend.large_run_slot(LARGE_RUN_WAIT_SECONDS) as acquired:
+    return in_large_slot(
+        backend,
+        prepared.large,
+        LARGE_RUN_WAIT_SECONDS,
+        lambda: execute_prepared(backend, prepared, owner_id=owner_id),
+    )
+
+
+def is_large(estimated_bars: int) -> bool:
+    """Whether a run of this many bars needs the large-run slot. The one
+    copy of the threshold, for prepared runs and rebuilt ones alike."""
+    return estimated_bars > LARGE_RUN_BARS
+
+
+def in_large_slot(backend, large: bool, wait_seconds: float, fn):
+    """``fn()``, inside the server-wide large-run slot when ``large``, so a
+    large run is never in memory beside another. LargeRunBusyError when the
+    slot is not free within ``wait_seconds``. The one copy of this rule."""
+    if not large:
+        return fn()
+    with backend.large_run_slot(wait_seconds) as acquired:
         if not acquired:
             raise errors.LargeRunBusyError()
-        return execute_prepared(backend, prepared, owner_id=owner_id)
+        return fn()
 
 
 def prepare_run(
@@ -494,8 +516,11 @@ def prepare_run(
 
     lookback_days = spec.lookback_days  # in bars, whatever the frequency
     window_bars = int(window_days * _BARS_PER_CALENDAR_DAY) * BARS_PER_SESSION[frequency]
-    if window_bars < lookback_days:
-        raise errors.WindowTooShortError(lookback_days, window_days)
+    # Against the declared floor, as always: a parameter that deepens the
+    # warm-up (slow=200) loads more history before the window, it does not
+    # make a window that was long enough too short.
+    if window_bars < spec.declared_lookback_days:
+        raise errors.WindowTooShortError(spec.declared_lookback_days, window_days)
 
     warmup_start = warmup_start_for(start, lookback_days, frequency)
     # Refused before a single bar is read: the estimate is cheap, the read and
@@ -644,15 +669,11 @@ def _execute(
     # Execute over the full loaded series -- an ATR stop set on the first
     # session of the window needs the bars behind it -- but score only from the
     # window start. Nothing can happen before it: no decision exists there.
+    # Read lazily, a symbol-month at a time, and only for sessions where an
+    # order or a protective level lands; None for a daily run.
+    minute_source = minutes.source_for(backend, spec.execution)
     result = simulate(
-        requested_symbols,
-        bars_by_symbol,
-        in_window,
-        spec.execution,
-        actions,
-        # Read lazily, a symbol-month at a time, and only for sessions where
-        # an order or a protective level lands; None for a daily run.
-        minutes.source_for(backend, spec.execution),
+        requested_symbols, bars_by_symbol, in_window, spec.execution, actions, minute_source
     )
     checkpoint()
 
@@ -715,9 +736,17 @@ def _execute(
         execution_summary={
             **vars(result.summary),
             "contradictions": composition.contradictions,
+            # Where its bars began: a rebuild (if its recording fails) loads
+            # the same span, not one sized by later warm-up rules.
+            "loaded_from": warmup_start,
         },
         owner_id=owner_id,
         bars=bars_by_symbol if keep_bars else None,
+        traded_on=(
+            {"config": spec.execution, "actions": actions, "minute_source": minute_source}
+            if keep_bars
+            else None
+        ),
     )
 
     logger.info(
@@ -803,10 +832,43 @@ def execution_config_for(run: dict) -> ExecutionConfig:
     stored = run.get("execution")
     if not stored:
         return ExecutionConfig(**_PRE_EXECUTION)
+    merged = {**_LEGACY_EXECUTION, **stored}
     try:
-        return ExecutionConfig.from_dict({**_LEGACY_EXECUTION, **stored})
-    except ValueError:
-        # A stored config this build cannot parse is a forward-compatibility
-        # problem, not a reason to refuse to show the run at all.
+        return ExecutionConfig.from_dict(merged)
+    except (TypeError, ValueError):
+        # A stored config this build cannot parse in full is a
+        # forward-compatibility problem, not a reason to refuse to show the
+        # run -- nor to re-execute it cost-free. Keep every setting this build
+        # can still read (its costs, fill timing, liquidity) and drop only the
+        # ones it cannot.
         logger.warning("run_execution_unreadable", extra={"run_id": run.get("id")})
-        return ExecutionConfig(**_PRE_EXECUTION)
+        return _readable_part(stored)
+
+
+def _readable_part(stored: dict[str, Any]) -> ExecutionConfig:
+    """As much of a stored config as this build can read. An unreadable
+    setting means what a run without it meant (_LEGACY_EXECUTION).
+
+    Settings are kept together where possible, because some are valid only
+    as a pair (volatility_target sizing and its sizing_value are each refused
+    alone): first every setting this build knows, then all but one, and only
+    as a last resort one at a time.
+    """
+    known = {k: v for k, v in stored.items() if k in ExecutionConfig.__dataclass_fields__}
+
+    def readable(settings: dict[str, Any]) -> ExecutionConfig | None:
+        try:
+            return ExecutionConfig.from_dict({**_LEGACY_EXECUTION, **settings})
+        except (TypeError, ValueError):
+            return None
+
+    if (config := readable(known)) is not None:
+        return config
+    for dropped in known:
+        if (config := readable({k: v for k, v in known.items() if k != dropped})) is not None:
+            return config
+    kept: dict[str, Any] = {}
+    for key, value in known.items():
+        if readable({**kept, key: value}) is not None:
+            kept[key] = value
+    return ExecutionConfig.from_dict({**_LEGACY_EXECUTION, **kept})

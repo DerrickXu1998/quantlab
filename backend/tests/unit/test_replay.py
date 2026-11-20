@@ -200,7 +200,7 @@ def test_the_summary_reconciles_with_compute_performance(seeded):
     """The key invariant: the replayed book, reduced, is the performance report."""
     backend, store, run = seeded
     signals, bars = replay_engine.load_replay_inputs(backend, store, run)
-    summary = replay_engine.replay_summary(run, signals, bars)
+    summary = list(replay_engine.replay_events(run, signals, bars))[-1]
 
     expected = performance.compute_performance(
         run_id=run["id"],

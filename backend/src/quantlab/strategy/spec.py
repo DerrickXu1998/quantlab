@@ -201,13 +201,29 @@ class StrategySpec:
     def lookback_days(self) -> int:
         """Warm-up the whole strategy needs.
 
-        The deepest component sets the floor; the agreement window adds to it,
+        The deepest component sets the floor -- measured with that
+        component's own parameters, since ``slow=90`` needs more history than
+        the default ``slow=50`` declares; the agreement window adds to it,
         because a component that fired ``combine_window_days - 1`` sessions ago
         still counts today and so its own warm-up must have completed by then.
         Execution adds its own (an ATR stop needs an ATR).
         """
+        return self._lookback(lambda rule, component: rule.required_lookback(component.parameters))
+
+    @property
+    def declared_lookback_days(self) -> int:
+        """``lookback_days`` from each rule's declared floor, ignoring its
+        parameters. What the window-length check has always compared against:
+        warm-up is loaded before the window, so a long ``slow`` needs more
+        history loaded, not a longer window."""
+        return self._lookback(lambda rule, component: rule.lookback_days)
+
+    def _lookback(self, per_component) -> int:
+        """The deepest component's warm-up (as ``per_component`` measures it),
+        plus the agreement window and execution's own -- one formula for both
+        measures, so they can only differ in that one term."""
         deepest = max(
-            component.resolve(index).lookback_days
+            per_component(component.resolve(index), component)
             for index, component in enumerate(self.components)
         )
         return deepest + self.combine_window_days - 1 + self.execution.extra_lookback_days

@@ -218,3 +218,79 @@ def test_corporate_actions_survive_a_round_trip(store):
 def test_a_run_without_actions_reports_an_empty_list_not_null(store):
     store.save_run(_make_result("clean"))
     assert store.get_run("clean")["corporate_actions"] == []
+
+
+# --- recorded replays -----------------------------------------------------------
+
+
+def test_a_recorded_replay_round_trips_and_is_never_overwritten(store):
+    from quantlab.replay.recording import RecordedReplay
+
+    result = _make_result()
+    store.save_run(result)
+    assert store.get_replay(result.id) is None
+
+    from quantlab.research.jobs import RunOutputs
+
+    original = RecordedReplay(events=b"\x1f\x8bcompressed", summary={"final_equity": 1.5})
+    store.set_rebuilt(result.id, RunOutputs(None, original))
+    later = RecordedReplay(events=b"other", summary={"final_equity": 9.0}, reconstructed=True)
+    store.set_rebuilt(result.id, RunOutputs(None, later))  # first writer wins
+
+    stored = store.get_replay(result.id)
+    assert stored == {
+        "events": b"\x1f\x8bcompressed",
+        "summary": {"final_equity": 1.5},
+        "reconstructed": False,
+        "error": None,
+    }
+
+
+def test_a_failed_rebuild_is_recorded_and_the_run_is_not_offered_again(store):
+    result = _make_result()
+    store.save_run(result)
+    assert store.next_run_without_replay()["id"] == result.id
+    excluded = store.next_run_without_replay(exclude=[result.id])
+    assert excluded is None or excluded["id"] != result.id
+
+    from quantlab.research.jobs import RunOutputs
+
+    store.set_rebuilt(result.id, RunOutputs(None, None, replay_error="bars gone"))
+    stored = store.get_replay(result.id)
+    assert stored["events"] is None and stored["error"] == "bars gone"
+    candidate = store.next_run_without_replay()
+    assert candidate is None or candidate["id"] != result.id
+
+
+def test_a_run_that_just_completed_is_left_to_its_own_process_first(store, monkeypatch):
+    """Its process may still be re-sending the exact replay a blip dropped: a
+    rebuild from today's data must not race that record."""
+    import dataclasses
+    import datetime as dt
+
+    from quantlab.storage import experiments
+
+    monkeypatch.setattr(experiments, "BACKFILL_SETTLE_SECONDS", 60)
+    just_now = dataclasses.replace(
+        _make_result("run-new"), created_at=dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
+    )
+    store.save_run(just_now)
+    store.save_run(_make_result("run-old"))  # completed long ago
+
+    assert store.next_run_without_replay()["id"] == "run-old"
+    assert store.next_run_without_results()["id"] == "run-old"
+
+    monkeypatch.setattr(experiments, "BACKFILL_SETTLE_SECONDS", 0)
+    assert store.next_run_without_replay()["id"] == "run-new"
+
+
+def test_deleting_a_run_takes_its_replay_with_it(store):
+    from quantlab.replay.recording import RecordedReplay
+
+    result = _make_result()
+    store.save_run(result)
+    from quantlab.research.jobs import RunOutputs
+
+    store.set_rebuilt(result.id, RunOutputs(None, RecordedReplay(events=b"x", summary={})))
+    assert store.delete_run(result.id)
+    assert store.get_replay(result.id) is None

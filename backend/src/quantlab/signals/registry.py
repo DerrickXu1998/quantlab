@@ -212,6 +212,12 @@ class SignalRule:
     #: replay uses it to compute over a fixed-size tail instead of the whole
     #: growing window; None keeps the whole-window behaviour.
     windowed_lookback: Callable[[dict], int] | None = None
+    #: Maps the effective parameters to the bars needed before the first event
+    #: can fire, for rules whose requirement moves with a parameter but which
+    #: cannot declare a ``windowed_lookback`` (recursive EMA/RSI/MACD/ADX, or a
+    #: bounded rule whose tail has not been declared). Must equal
+    #: ``lookback_days`` at the declared defaults. See :meth:`required_lookback`.
+    effective_lookback: Callable[[dict], int] | None = None
     #: Price-scale series the rule compares, as ``studies(bars, **params) ->
     #: list[StudyLine]``. Presentation only: the engine never calls it. None
     #: for a rule with nothing drawable on the price axis (RSI lives on its own
@@ -241,6 +247,22 @@ class SignalRule:
             merged[key] = value
         return merged
 
+    def required_lookback(self, overrides: dict[str, Any] | None = None) -> int:
+        """Bars of history needed before this rule can emit, for these parameters.
+
+        ``lookback_days`` is the requirement at the declared defaults; a run
+        with ``slow=90`` needs more than that, and one with ``slow=10`` less.
+        Every caller that loads warm-up or gates a compute uses this, so batch
+        and live agree on when a rule first speaks. Static rules and
+        config-built custom rules keep their declared value.
+        """
+        params = self.effective_params(overrides)
+        if self.effective_lookback is not None:
+            return int(self.effective_lookback(params))
+        if self.windowed_lookback is not None:
+            return int(self.windowed_lookback(params))
+        return self.lookback_days
+
     def validate(self, values: dict[str, Any]) -> None:
         """Raise ValueError naming the first parameter that fails its spec."""
         for key, value in values.items():
@@ -269,6 +291,7 @@ def register_signal_rule(
     requires_facts: tuple[str, ...] = (),
     requires_series: tuple[str, ...] = (),
     windowed_lookback: Callable[[dict], int] | None = None,
+    effective_lookback: Callable[[dict], int] | None = None,
     studies: Callable[..., list[StudyLine]] | None = None,
 ) -> Callable:
     if lookback_days < 1:
@@ -329,7 +352,7 @@ def register_signal_rule(
         key = (name, version)
         if key in _REGISTRY:
             raise ValueError(f"duplicate signal rule registration: {name} v{version}")
-        _REGISTRY[key] = SignalRule(
+        rule = SignalRule(
             name=name,
             version=version,
             param_specs=param_specs,
@@ -343,8 +366,19 @@ def register_signal_rule(
             requires_facts=tuple(requires_facts),
             requires_series=tuple(requires_series),
             windowed_lookback=windowed_lookback,
+            effective_lookback=effective_lookback,
             studies=studies,
         )
+        # The callback describes the declared lookback, not a second opinion:
+        # at the defaults the two must agree, or warm-up would silently change
+        # for every run that never overrode a parameter. Checked before the
+        # rule is registered, so a bad declaration never reaches the registry.
+        if rule.required_lookback() != lookback_days:
+            raise ValueError(
+                f"{name}: lookback at the default parameters is "
+                f"{rule.required_lookback()}, but lookback_days declares {lookback_days}"
+            )
+        _REGISTRY[key] = rule
         return fn
 
     return decorator

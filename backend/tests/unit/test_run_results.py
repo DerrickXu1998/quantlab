@@ -55,6 +55,13 @@ def _legacy_run(db_path, symbols, monkeypatch) -> str:
     monkeypatch.setenv("QUANTLAB_RUN_MODE", "inline")
     with TestClient(create_app(str(db_path))) as inline_client:
         run_id = inline_client.post("/api/v1/runs", json=_body(symbols)).json()["id"]
+    # Inline runs now store results at completion; a pre-queue run had none.
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE experiment_runs SET performance = NULL, headline = NULL WHERE id = ?",
+            (run_id,),
+        )
+        conn.execute("DELETE FROM experiment_replays WHERE run_id = ?", (run_id,))
     monkeypatch.setenv("QUANTLAB_RUN_MODE", "queue")
     return run_id
 
@@ -133,7 +140,9 @@ def test_a_run_whose_results_cannot_be_computed_says_why_once(
     def broken(*args, **kwargs):
         raise errors.UnknownSymbolError(["GONE"])
 
-    monkeypatch.setattr(jobs, "compute_run_performance", broken)
+    # The input loader: under both a performance-only rebuild and the
+    # one-walk rebuild of performance and replay together.
+    monkeypatch.setattr(jobs, "_run_inputs", broken)
     assert _backfill(client) == run_id
     assert _backfill(client) is None  # recorded, and not picked again
 

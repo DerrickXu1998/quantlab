@@ -251,7 +251,8 @@ export interface paths {
          *         or the stream's wall-clock limit cut the stream short:
          *         `{event, detail}`.
          *
-         *     Events on one date arrive in bar, signal, fill, equity order, so a signal never precedes the bar event of its own date. Sizing and filling mirror the run's performance report exactly (equal-weight per-symbol sleeves, close-of-signal-date fills, no costs): the terminal `summary` reconciles with GET /runs/{run_id}/performance.
+         *     Events on one date arrive in bar, signal, fill, equity order, so a signal never precedes the bar event of its own date. Sizing and filling are the run's own: the terminal `summary` reconciles with GET /runs/{run_id}/performance.
+         *     The stream is a **record**, not a re-run. It is captured when the run completes, from the bars, corporate actions and minutes the run executed on, and every replay plays that record back. Re-simulating on request would read data as it is now -- revised prints, restated splits, a re-ingest -- and show a run that never happened. A run completed before replays were recorded is rebuilt once by re-execution on the data as it then stood; its `summary` carries `reconstructed: true` and the response header `X-Replay-Source` is `reconstructed` (otherwise `recorded`). The worker rebuilds it (or the request, when there is no worker); until then the endpoint answers 409 with `Retry-After`, and 422 if the rebuild failed or could not be stored. A long intraday run is recorded at about 5,000 walked bars: every Nth bar's bar and equity frames, plus every bar with a signal or fill, whole. `step` counts walked bars as recorded -- sessions for a daily run, intraday bars for an intraday one. The summary is always the full run's.
          */
         get: operations["streamRunReplay"];
         put?: never;
@@ -272,8 +273,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * The replay engine run to completion, as one object
-         * @description Drives the same engine as the stream endpoint to completion and returns only its terminal summary event. Useful for clients that do not want SSE, and the cheapest way to check a replay reconciles with GET /runs/{run_id}/performance.
+         * The recorded replay's terminal summary, as one object
+         * @description The summary event of the run's recorded replay (see the stream endpoint): read, never recomputed. Useful for clients that do not want SSE, and the cheapest way to check a replay reconciles with GET /runs/{run_id}/performance.
          */
         get: operations["getRunReplaySummary"];
         put?: never;
@@ -293,8 +294,8 @@ export interface paths {
         };
         /**
          * Replay a Kafka bar stream live, as a server-sent event stream
-         * @description The streaming counterpart of GET /runs/{run_id}/replay/stream. A publisher (`quantlab replay-publish`) has turned a warehouse window into a chronological bar stream on the Kafka replay topic; this endpoint consumes the topic from the beginning, re-runs the model's compute on each symbol's growing window as bars arrive (identical to batch by the point-in-time truncation guarantee), and trades the new signals through the same portfolio simulator.
-         *     The frame format is exactly the batch replay's: `bar`, `signal`, `fill`, `equity` and a terminal `summary` (whose `run_id` is `live:<model>`), plus `truncated` if `max_events` or the stream's wall-clock limit cuts the stream short. Bars dated before `start` act as warm-up: they feed the model's lookback but emit no events and no trades, mirroring how a batch run loads history before its window. Because of that warm-up, the terminal summary reconciles with a batch replay of a run over the same model, symbols and window when the publisher's range covers the model's lookback before `start`.
+         * @description The streaming counterpart of GET /runs/{run_id}/replay/stream. A publisher (`quantlab replay-publish`) has turned a warehouse window into a chronological bar stream on the Kafka replay topic; this endpoint consumes the topic from the beginning, re-runs the model's compute on each symbol's history as of each arriving day (identical to batch by the point-in-time truncation guarantee), and trades only the signals dated that day through the same portfolio simulator -- a signal is never released on a later day than its own.
+         *     The frame format is exactly the batch replay's: `bar`, `signal`, `fill`, `equity` and a terminal `summary` (whose `run_id` is `live:<model>`), plus `truncated` if `max_events` or the stream's wall-clock limit cuts the stream short, or `error` (with a `detail`) if the topic delivers a bar dated before one already consumed -- the replay refuses to step backwards in time and ends without a summary. Single-model validation matches a batch run's: a filter-only model (e.g. `adx-trend-filter`) is a 422. Bars dated before `start` act as warm-up: they feed the model's lookback but emit no events and no trades, mirroring how a batch run loads history before its window. Because of that warm-up, the terminal summary reconciles with a batch replay of a run over the same model, symbols and window when the publisher's range covers the model's lookback before `start`.
          *     Requires the streaming stack (`docker compose --profile streaming up`). A 503 means the bus is unconfigured (QUANTLAB_KAFKA_BROKERS unset) or the broker is unreachable -- never a startup failure.
          */
         get: operations["streamLiveReplay"];
@@ -1244,6 +1245,11 @@ export interface components {
             };
             /** @description The strategy's daily returns regressed on the benchmark's (alpha, beta, R squared). Null when fewer than 60 paired daily returns exist or the benchmark never moved -- a fabricated beta of 0 would read as market-neutral. */
             regression?: components["schemas"]["BenchmarkRegression"] | null;
+            /**
+             * @description False for performance recorded as the run completed, from the bars it read. True when it was rebuilt later by re-execution on the data as it then stood (a run that predates stored results, or whose recording failed), which may differ from what the run did.
+             * @default false
+             */
+            reconstructed: boolean;
         };
         /** @description Ordinary least squares of r_t = alpha + beta * b_t on shared dates, risk-free rate taken as zero. The benchmark is the run's own equal-weight buy-and-hold, so beta is exposure to the selected names and alpha is what the strategy's timing added over holding them. */
         BenchmarkRegression: {
@@ -1505,14 +1511,14 @@ export interface components {
             /** @description Trading dates replayed (dates with at least one bar). */
             days: number;
             initial_cash: number;
-            /** @description Book value on the last replayed date. */
-            final_equity: number;
-            /** @description Fraction, e.g. 0.12 for +12%. */
-            total_return: number;
+            /** @description Book value on the last replayed date. Null when undefined (a NaN close in the data), as stored in the recorded replay. */
+            final_equity: number | null;
+            /** @description Fraction, e.g. 0.12 for +12%. Null when undefined. */
+            total_return: number | null;
             /** @description Null when undefined -- fewer than two points, or zero variance. */
             sharpe_ratio: number | null;
-            /** @description Negative fraction, peak to trough. */
-            max_drawdown: number;
+            /** @description Negative fraction, peak to trough. Null when undefined. */
+            max_drawdown: number | null;
             /** @description Share of closed trades that gained. Null when nothing closed. */
             win_rate: number | null;
             /** @description All positions, including any still open. */
@@ -1525,13 +1531,21 @@ export interface components {
                 [key: string]: number;
             } | null;
             /** @default 0 */
-            total_commission: number;
+            total_commission: number | null;
             /** @default 0 */
-            total_slippage: number;
+            total_slippage: number | null;
             /** @default 0 */
-            total_borrow: number;
-            /** @default 0 */
-            total_dividends: number;
+            total_borrow: number | null;
+            /**
+             * @description Like every figure in a recorded summary, null where the run's arithmetic produced no number (NaN, e.g. a cost charged on a missing close).
+             * @default 0
+             */
+            total_dividends: number | null;
+            /**
+             * @description False for a replay recorded as the run completed. True when the run predates recorded replays and this one was rebuilt once by re-execution on the data -- and under the warm-up rules -- as they then stood, which may differ from what the run executed on.
+             * @default false
+             */
+            reconstructed: boolean;
         };
         FundamentalFact: {
             concept: string;
@@ -2372,8 +2386,17 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The run failed, so there is nothing to replay */
+            /** @description The run failed, so there is nothing to replay; or it predates recorded replays and its one-time rebuild has not run yet (with `Retry-After`). */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The replay could not be recorded (or, for an older run, rebuilt); the detail says why */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2412,8 +2435,17 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The run failed, so there is nothing to replay */
+            /** @description The run failed, so there is nothing to replay; or its one-time replay rebuild has not run yet (with `Retry-After`). */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The replay could not be recorded (or, for an older run, rebuilt); the detail says why */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

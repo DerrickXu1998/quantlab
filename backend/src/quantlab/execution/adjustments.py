@@ -57,6 +57,24 @@ class CorporateAction:
         return self.action_type != "split" and bool(self.dividend) and self.dividend > 0
 
 
+def canonical_order(action: CorporateAction) -> tuple[str, int]:
+    """Sort key every consumer applies actions in: by ex-date, splits first.
+
+    Two actions can share an ex-date (a split and the first dividend quoted on
+    the new share count). The dividend is cash per share *as of the ex-date*,
+    which is the post-split share, so the split has to land first -- in the
+    book, so the dividend is paid on the shares actually held that morning,
+    and in the back-adjustment, so the dividend is compared with the prior
+    close in the same share terms. Input row order must never decide it.
+    """
+    return (action.ex_date, 0 if action.is_split else 1)
+
+
+def canonical(actions: list[CorporateAction] | None) -> list[CorporateAction]:
+    """``actions`` in :func:`canonical_order`; a new list."""
+    return sorted(actions or [], key=canonical_order)
+
+
 @dataclass(frozen=True)
 class AdjustedBar:
     """A bar as signals see it, plus the close that actually traded.
@@ -113,7 +131,7 @@ def by_symbol(
         if applies(action, mode):
             out.setdefault(row["symbol"], []).append(action)
     for items in out.values():
-        items.sort(key=lambda a: (a.ex_date, a.action_type))
+        items.sort(key=canonical_order)
     return out
 
 
@@ -130,26 +148,42 @@ def factors(bars: Any, actions: list[CorporateAction]) -> tuple[Any, Any]:
     factor, using the raw close of the session before the ex-date. A dividend
     with no earlier bar, or one at least as large as that close, is skipped
     rather than allowed to produce a zero or negative price.
+
+    A dividend that takes effect on the same bar as splits applied before it
+    (canonical order) is quoted per post-split share, while ``close_before``
+    is a pre-split price; it is compared as ``D x R``, R being the product of
+    those splits' ratios, so the two are in the same share terms whatever
+    order the actions arrived in -- and whether or not their ex-date strings
+    match (a weekend split and a Monday dividend share Monday's bar).
     """
     n = len(bars)
     columnar = isinstance(bars, BarSeries)
     price = np.ones(n)
     volume = np.ones(n)
     if n and actions:
-        for action in actions:
+        # Splits already applied on each bar, in canonical order -- keyed by
+        # the bar an action takes effect on, not its ex-date string, because
+        # the engine applies every action dated on or before a bar's date (a
+        # Saturday split and a Monday dividend both land on Monday's bar).
+        split_on_bar: dict[int, float] = {}
+        for action in canonical(actions):
             # First bar on or after the ex-date; everything before it is
             # adjusted. For intraday bars that is the session's first bar.
             cut = first_at_or_after(bars, action.ex_date)
+            if action.is_split:
+                ratio = float(action.split_ratio)
+                split_on_bar[cut] = split_on_bar.get(cut, 1.0) * ratio
             if cut == 0 or cut >= n:
                 # Nothing before it in this series, or not in force by the last bar.
                 continue
             if action.is_split:
-                ratio = float(action.split_ratio)
                 price[:cut] /= ratio
                 volume[:cut] *= ratio
             elif action.is_dividend:
                 before = float(bars[cut - 1].close)
-                dividend = float(action.dividend)
+                # In the pre-split share terms of ``before``: the splits the
+                # engine applied on this bar ahead of the dividend.
+                dividend = float(action.dividend) * split_on_bar.get(cut, 1.0)
                 if before <= 0 or dividend >= before:
                     continue
                 price[:cut] *= (before - dividend) / before

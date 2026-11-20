@@ -9,6 +9,7 @@ import { navigate } from '../chrome/router';
 import { useRunPerformance } from '../quantlab/data/useRunPerformance';
 import { EquityCurve } from '../quantlab/charts/EquityCurve';
 import { Assumptions } from '../quantlab/panels/Assumptions';
+import { ReconstructedNotice } from '../quantlab/panels/ReconstructedNotice';
 import { BenchmarkPanel } from '../quantlab/panels/BenchmarkPanel';
 import { ExitBreakdown } from '../quantlab/panels/ExitBreakdown';
 import { StatRow } from '../quantlab/panels/StatRow';
@@ -402,6 +403,7 @@ export function RunResultsView({ run }: { run: RunDetailV2 }) {
             />
           ) : performance.status === 'ready' ? (
             <div className="mt-4 space-y-4">
+              <ReconstructedNotice reconstructed={performance.performance.reconstructed} />
               <StatRow metrics={performance.performance.metrics} />
               <EquityCurve
                 equity={performance.performance.equity}

@@ -183,3 +183,92 @@ def test_engine_orders_output_deterministically():
     # Filters describe a state and emit every bar; they must never reach a
     # table of materialised signals.
     assert "rsi-zone" not in [s.rule_name for s in signals]
+
+
+# --- effective lookback --------------------------------------------------------
+
+
+@pytest.mark.parametrize("rule", list_rules(), ids=lambda r: r.name)
+def test_required_lookback_at_the_defaults_is_the_declared_lookback(rule):
+    """Runs that never override a parameter keep exactly their warm-up."""
+    assert rule.required_lookback() == rule.lookback_days
+    assert rule.required_lookback({}) == rule.lookback_days
+
+
+@pytest.mark.parametrize(
+    ("name", "overrides", "expected"),
+    [
+        # Bounded rules (from their windowed lookback).
+        ("sma-crossover", {"fast": 5, "slow": 90}, 91),
+        ("sma-crossover", {"fast": 3, "slow": 10}, 11),
+        ("breakout-20d", {"window": 60}, 61),
+        ("breakout-20d", {"window": 5}, 6),
+        ("bollinger-reversion", {"window": 60}, 62),
+        ("donchian-breakout", {"entry_window": 55, "exit_window": 20}, 57),
+        ("donchian-breakout", {"entry_window": 5, "exit_window": 8}, 10),
+        # Recursive rules (from their effective-lookback callback).
+        ("rsi-threshold", {"period": 30}, 32),
+        ("rsi-threshold", {"period": 5}, 7),
+        ("ema-crossover", {"fast": 10, "slow": 60}, 62),
+        ("ema-crossover", {"fast": 3, "slow": 8}, 10),
+        ("macd-crossover", {"fast": 12, "slow": 50, "signal": 15}, 66),
+        ("macd-crossover", {"fast": 3, "slow": 8, "signal": 3}, 12),
+        ("adx-trend-filter", {"period": 30}, 62),
+        ("adx-trend-filter", {"period": 5}, 12),
+    ],
+)
+def test_required_lookback_follows_the_parameters(name, overrides, expected):
+    assert get_rule(name).required_lookback(overrides) == expected
+
+
+@pytest.mark.parametrize(
+    ("name", "overrides"),
+    [
+        ("sma-crossover", {"fast": 5, "slow": 90}),
+        # Zone edges at 50 so a zone exit is common enough to observe early.
+        ("rsi-threshold", {"period": 30, "overbought": 50, "oversold": 50}),
+        ("ema-crossover", {"fast": 10, "slow": 60}),
+        ("macd-crossover", {"fast": 12, "slow": 50, "signal": 15}),
+    ],
+)
+def test_a_rule_can_fire_on_the_first_bar_its_required_lookback_allows(name, overrides):
+    """The requirement is never short: with exactly ``required_lookback`` bars
+    the rule's indicators are defined on the last of them, so a run whose
+    warm-up holds that many bars can emit on its window's first session."""
+    import numpy as np
+
+    rule = get_rule(name)
+    required = rule.required_lookback(overrides)
+    params = rule.effective_params(overrides)
+    fired_at = set()
+    for seed in range(60):
+        rng = np.random.default_rng(seed)
+        closes = list(100 * np.exp(np.cumsum(rng.normal(0, 0.05, required + 40))))
+        bars = make_bars(closes)
+        index = {bar.date: i for i, bar in enumerate(bars)}
+        fired_at |= {index[event.date] for event in rule.compute(bars, **params)}
+    # Index required - 1 is the last bar of a history exactly that long.
+    assert min(fired_at) <= required - 1, "the rule needs more history than it declares"
+
+
+def test_compute_signals_gates_on_the_effective_lookback():
+    from quantlab.signals.engine import compute_signals
+
+    rule = get_rule("sma-crossover")
+    import numpy as np
+
+    closes = list(100 + 10 * np.sin(np.arange(40) / 4.0))
+    bars = {"AAA": make_bars(closes)}
+    # 40 bars: enough for slow=10 (11 bars), though fewer than the default's
+    # declared 51 -- the static gate skipped this run entirely -- and not
+    # enough for slow=90 (91).
+    assert compute_signals(bars, rules=[rule], overrides={"fast": 3, "slow": 10})
+    assert compute_signals(bars, rules=[rule], overrides={"fast": 5, "slow": 90}) == []
+
+
+def test_sma_crossover_warm_up_covers_whichever_window_is_longer():
+    from quantlab.signals.registry import get_rule
+
+    rule = get_rule("sma-crossover")
+    assert rule.required_lookback({"fast": 100, "slow": 30}) == 101
+    assert rule.required_lookback({"fast": 20, "slow": 50}) == 51

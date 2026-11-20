@@ -8,7 +8,8 @@ import { getToken, reportUnauthorized } from '../auth/session';
 export interface ReplayBarEvent {
   event: 'bar';
   date: string;
-  closes: Record<string, number>;
+  /** Null where the data had no usable close (NaN is stored as null). */
+  closes: Record<string, number | null>;
 }
 
 export interface ReplaySignalEvent {
@@ -34,7 +35,8 @@ export interface ReplayFillEvent {
 export interface ReplayEquityEvent {
   event: 'equity';
   date: string;
-  equity: number;
+  /** Null when undefined -- a NaN close makes the book's mark NaN. */
+  equity: number | null;
   cash: number;
   /** Open positions at the mark — the engine's `positions` field. */
   positions: number;
@@ -47,16 +49,22 @@ export interface ReplaySummaryEvent {
   run_id: string;
   days: number;
   initial_cash: number;
-  final_equity: number;
-  total_return: number;
+  /** These three are null when undefined (a NaN close); render a dash. */
+  final_equity: number | null;
+  total_return: number | null;
   /** Null when not measurable; render a dash, never a zero. */
   sharpe_ratio: number | null;
-  max_drawdown: number;
+  max_drawdown: number | null;
   win_rate: number | null;
   trade_count: number;
   winning_trades: number;
   losing_trades: number;
   assumptions: string[];
+  /**
+   * True when the run predates recorded replays and this one was rebuilt by
+   * re-executing it on later data -- it may differ from what the run did.
+   */
+  reconstructed?: boolean;
 }
 
 export interface ReplayTruncatedEvent {
@@ -93,6 +101,8 @@ export interface ReplayStreamOptions {
   onEvent: (event: ReplayEvent) => void;
   /** The stream failed (or the run cannot be replayed); the source is closed. */
   onError?: (message: string) => void;
+  /** The run's replay is still being prepared server-side; retrying. */
+  onPreparing?: () => void;
 }
 
 export interface ReplayStream {
@@ -100,6 +110,40 @@ export interface ReplayStream {
 }
 
 const STREAM_FAILED = 'The replay stream failed or was closed before the summary arrived.';
+
+/**
+ * A run older than recorded replays gets its replay rebuilt once, in the
+ * background; until then the server answers 409 with Retry-After. Waited out
+ * this many times before giving up (a 409 without Retry-After -- a failed run
+ * -- is final at once).
+ */
+export const PREPARING_ATTEMPTS = 120;
+const MAX_RETRY_AFTER_MS = 30_000;
+export const STILL_PREPARING =
+  "This run's replay is still being prepared in the background. Nothing is wrong; " +
+  'try again later.';
+
+/** Milliseconds a 409 "being prepared" asks to wait, or null if it is final. */
+function retryAfterMs(response: Response): number | null {
+  if (response.status !== 409) return null;
+  const header = response.headers.get('Retry-After');
+  if (header === null) return null;
+  const seconds = Number(header);
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  return Math.min(seconds * 1000, MAX_RETRY_AFTER_MS);
+}
+
+function wait(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener('abort', done, { once: true });
+  });
+}
 
 /** Why the server refused to open a stream, in words a person can act on. */
 async function refusal(response: Response): Promise<string> {
@@ -149,7 +193,7 @@ export function parseSseFrames(buffer: string): { frames: string[]; rest: string
  * ends the stream for good and starting over is the caller's explicit act.
  */
 export function streamReplay(runId: string, options: ReplayStreamOptions): ReplayStream {
-  const { intervalMs = 0, step = 1, onEvent, onError } = options;
+  const { intervalMs = 0, step = 1, onEvent, onError, onPreparing } = options;
   const abort = new AbortController();
   // Set once the stream is over for any reason -- closed by the caller,
   // failed, or ended -- so nothing is reported twice or after a close.
@@ -164,23 +208,37 @@ export function streamReplay(runId: string, options: ReplayStreamOptions): Repla
 
   void (async () => {
     let response: Response;
-    try {
-      const token = getToken();
-      response = await fetch(replayStreamUrl(runId, { intervalMs, step }), {
-        headers: {
-          Accept: 'text/event-stream',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        cache: 'no-store',
-        signal: abort.signal,
-      });
-    } catch {
-      fail(STREAM_FAILED);
-      return;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const token = getToken();
+        response = await fetch(replayStreamUrl(runId, { intervalMs, step }), {
+          headers: {
+            Accept: 'text/event-stream',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          cache: 'no-store',
+          signal: abort.signal,
+        });
+      } catch {
+        fail(STREAM_FAILED);
+        return;
+      }
+      const delay = retryAfterMs(response);
+      if (delay === null || attempt >= PREPARING_ATTEMPTS) break;
+      // Release the refused response's body before asking again.
+      void response.body?.cancel().catch(() => {});
+      onPreparing?.();
+      await wait(delay, abort.signal);
+      if (over) return;
     }
 
     if (!response.ok || !response.body) {
       if (response.status === 401) reportUnauthorized();
+      if (retryAfterMs(response) !== null) {
+        // Gave up waiting, not refused: say it will be ready later.
+        fail(STILL_PREPARING);
+        return;
+      }
       fail(response.ok ? STREAM_FAILED : await refusal(response));
       return;
     }

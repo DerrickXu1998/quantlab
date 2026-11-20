@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from quantlab.storage import warehouse
-from quantlab.storage.warehouse import _MemoryRetryingClient, _server_memory_exhausted
+from quantlab.storage.warehouse import _MemoryRetryingClient, server_memory_exhausted
 
 TOTAL = (
     "Code: 241. DB::Exception: Memory limit (total) exceeded: would use 2.09 GiB "
@@ -61,7 +61,7 @@ def _client(failures):
     ],
 )
 def test_only_server_wide_memory_cancellations_count(exc, expected):
-    assert _server_memory_exhausted(exc) is expected
+    assert server_memory_exhausted(exc) is expected
 
 
 def test_a_cancelled_read_is_retried_until_it_succeeds():

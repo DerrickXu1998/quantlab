@@ -56,7 +56,7 @@ MEMORY_LIMIT_EXCEEDED = 241
 MEMORY_RETRY_DELAYS: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 16.0)
 
 
-def _server_memory_exhausted(exc: Exception) -> bool:
+def server_memory_exhausted(exc: Exception) -> bool:
     """True for a query cancelled because the server, not the query, ran out."""
     code = getattr(exc, "code", None)
     message = str(exc)
@@ -85,7 +85,7 @@ class _MemoryRetryingClient:
             try:
                 return self._client.query(*args, **kwargs)
             except Exception as exc:
-                if not _server_memory_exhausted(exc):
+                if not server_memory_exhausted(exc):
                     raise
                 self._sleep(delay)
         return self._client.query(*args, **kwargs)

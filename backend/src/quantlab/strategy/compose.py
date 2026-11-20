@@ -88,7 +88,7 @@ def _fire_map(
     which concepts to load.
     """
     rule = component.resolve(index)
-    if len(bars) < rule.lookback_days:
+    if len(bars) < rule.required_lookback(component.parameters):
         return {}
     parameters = rule.effective_params(component.parameters)
     if rule.requires_facts:
@@ -211,6 +211,7 @@ def compose(
     entry_weight = sum(c.weight for _, c in entries)
     exit_weight = sum(c.weight for _, c in exits)
 
+    namespaces = _namespaces(spec)
     decisions: list[Decision] = []
     dates_evaluated = 0
     contradictions = 0
@@ -295,7 +296,7 @@ def compose(
                     _decision(
                         date, symbol, kind, direction, members,
                         filters if kind != "exit" else (),
-                        active_by_component, spec,
+                        active_by_component, spec, namespaces,
                         entry_score[direction] if kind != "exit" else None,
                     )
                 )
@@ -310,6 +311,41 @@ def compose(
     return decisions, stats
 
 
+def _namespaces(spec: StrategySpec) -> dict[int, str]:
+    """The ``trigger_values`` prefix of each component, by component index.
+
+    A rule's name alone when every component running it runs it the same way
+    -- identical evidence under one key, which is also exactly what every
+    single-model run (one rule as entry *and* exit) has always recorded. When
+    one rule runs with different parameters (SMA 5/20 and SMA 50/200), each
+    configuration is ``rule#i``, i being the index of the first component
+    with that configuration -- stable for a given spec, and the same index
+    the run's studies key their lines by -- so neither can overwrite the
+    other's values.
+    """
+    identities: dict[int, tuple] = {}
+    for index, component in enumerate(spec.components):
+        # Resolved once: an unpinned rule runs the current version, so it is
+        # the same configuration as one pinned to that version.
+        rule = component.resolve(index)
+        identities[index] = (
+            component.rule_name,
+            rule.version,
+            tuple(sorted(rule.effective_params(component.parameters).items())),
+        )
+    first: dict[tuple, int] = {}
+    configurations: dict[str, set[tuple]] = {}
+    for index, identity in identities.items():
+        first.setdefault(identity, index)
+        configurations.setdefault(identity[0], set()).add(identity)
+    return {
+        index: identity[0]
+        if len(configurations[identity[0]]) == 1
+        else f"{identity[0]}#{first[identity]}"
+        for index, identity in identities.items()
+    }
+
+
 def _decision(
     date: str,
     symbol: str,
@@ -319,30 +355,32 @@ def _decision(
     filters: Iterable[tuple[int, StrategyComponent]],
     active_by_component: dict[int, dict[str, dict[str, _Firing]]],
     spec: StrategySpec,
+    namespaces: dict[int, str],
     score: float | None = None,
 ) -> Decision:
     """Build one decision, carrying why it fired.
 
-    ``trigger_values`` is namespaced by rule so two components of the same kind
-    cannot overwrite each other's evidence, and so a user reading a signal can
-    see which part of their strategy produced it.
+    ``trigger_values`` is namespaced per component configuration
+    (:func:`_namespaces`) so two components cannot overwrite each other's
+    evidence -- not even two instances of one rule -- and so a user reading a
+    signal can see which part of their strategy produced it.
     """
     trigger: dict[str, Any] = {}
     window_end = date
-    for _, component, firing in members:
+    for index, _, firing in members:
         for key, value in firing.trigger_values.items():
-            trigger[f"{component.rule_name}.{key}"] = value
+            trigger[f"{namespaces[index]}.{key}"] = value
         if firing.data_window_end > window_end:  # pragma: no cover - defensive
             window_end = firing.data_window_end
 
-    for index, component in filters:
+    for index, _ in filters:
         firing = active_by_component[index].get(date, {}).get("bullish")
         if firing is not None:
             for key, value in firing.trigger_values.items():
-                trigger[f"{component.rule_name}.{key}"] = value
+                trigger[f"{namespaces[index]}.{key}"] = value
 
     trigger["_logic"] = spec.exit_logic if kind == "exit" else spec.entry_logic
-    trigger["_components"] = [component.rule_name for _, component, _ in members]
+    trigger["_components"] = [namespaces[index] for index, _, _ in members]
     if score is not None:
         # Only the entry members count -- on a ``both`` decision the exit
         # members are listed in ``_components`` but carry no conviction.

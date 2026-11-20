@@ -1,4 +1,4 @@
-import { displaySymbol } from '../../research/format';
+import { NOT_APPLICABLE, displaySymbol } from '../../research/format';
 import {
   ChartLine,
   Hourglass,
@@ -34,6 +34,7 @@ const SPEEDS: { label: string; intervalMs: number }[] = [
 const STATUS_LABEL: Record<ReplayStatus, string> = {
   idle: 'Idle',
   connecting: 'Connecting',
+  preparing: 'Preparing replay',
   streaming: 'Streaming',
   paused: 'Paused',
   done: 'Complete',
@@ -125,7 +126,8 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
     );
   }
 
-  const playing = state.status === 'streaming' || state.status === 'connecting';
+  const playing =
+    state.status === 'streaming' || state.status === 'connecting' || state.status === 'preparing';
   const finished = state.status === 'done' || state.status === 'truncated';
   const percent = run ? progressPercent(state.currentDate, run) : null;
 
@@ -282,7 +284,7 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
           {Object.keys(state.closes).length > 0 ? (
             <p data-testid="replay-prices" className="mt-3 type-data text-muted-foreground">
               {Object.entries(state.closes)
-                .map(([symbol, price]) => `${displaySymbol(symbol)} ${price.toFixed(2)}`)
+                .map(([symbol, price]) => `${displaySymbol(symbol)} ${price === null ? NOT_APPLICABLE : price.toFixed(2)}`)
                 .join(' · ')}
             </p>
           ) : null}
@@ -405,6 +407,12 @@ export function ReplayPanel({ runs }: { runs: Run[] }) {
         {state.summary ? (
           <Panel title="Replay summary" className="shrink-0 border-primary/40" bodyClassName="p-3">
             <div data-testid="replay-summary" className="space-y-4">
+              {state.summary.reconstructed ? (
+                <p data-testid="replay-reconstructed" className="text-xs text-muted-foreground">
+                  Rebuilt: this run predates recorded replays, so it was re-executed once on
+                  the data available later. Fills and equity may differ from what the run did.
+                </p>
+              ) : null}
               <StatRow metrics={state.summary} />
               <dl className="flex flex-wrap gap-x-6 gap-y-1 text-xs">
                 <div className="flex gap-1">
