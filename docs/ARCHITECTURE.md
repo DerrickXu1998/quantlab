@@ -200,7 +200,7 @@ This is Constitution V, and it is a merge gate, not a preference.
 ```
 BATCH     POST /runs ──▶ runner (loads start−lookback for warm-up) ──▶ signals
                      ──▶ GET /runs/{id}/performance ──▶ trades, equity, metrics
-                     ──▶ GET /runs/{id}/replay/stream ──▶ SSE re-read of a stored run
+                     ──▶ GET /runs/{id}/replay/stream ──▶ SSE playback of the replay recorded at completion
 
 STREAMED  clickhouse ──▶ quantlab-data replay-publish (pipeline) ──▶ redpanda ──▶ GET /replay/live/stream
            (warehouse)    (ingest image)          (quantlab.bars)  (SSE)

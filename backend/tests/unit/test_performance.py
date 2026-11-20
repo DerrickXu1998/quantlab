@@ -246,11 +246,11 @@ def test_a_single_point_curve_has_no_sharpe():
 
 def test_win_rate_counts_closed_trades_only():
     trades = [
-        performance.Trade("AAA", "2024-01-01", 100.0, "2024-01-02", 120.0, 0.2, False),
-        performance.Trade("BBB", "2024-01-01", 100.0, "2024-01-02", 80.0, -0.2, False),
-        performance.Trade("CCC", "2024-01-01", 100.0, "2024-01-02", 150.0, 0.5, False),
+        performance.Trade("AAA", "2024-01-01", 100.0, "2024-01-02", 120.0, 0.2, False, pnl=20.0),
+        performance.Trade("BBB", "2024-01-01", 100.0, "2024-01-02", 80.0, -0.2, False, pnl=-20.0),
+        performance.Trade("CCC", "2024-01-01", 100.0, "2024-01-02", 150.0, 0.5, False, pnl=50.0),
         # Open: marked up, but not a win yet.
-        performance.Trade("DDD", "2024-01-01", 100.0, None, 900.0, 8.0, True),
+        performance.Trade("DDD", "2024-01-01", 100.0, None, 900.0, 8.0, True, pnl=800.0),
     ]
 
     result = performance.metrics(_equity(100.0, 150.0), trades)
@@ -260,6 +260,42 @@ def test_win_rate_counts_closed_trades_only():
     assert result.losing_trades == 1
     assert result.win_rate == pytest.approx(2 / 3)
 
+
+
+def test_a_trade_that_beat_its_entry_price_but_not_its_fees_is_a_loss():
+    """return_pct is the price move before commission; the win rate must agree
+    with the P&L and cost breakdown shipped beside it."""
+    trades = [
+        performance.Trade(
+            "AAA", "2024-01-01", 100.0, "2024-01-02", 100.05, 0.0005, False,
+            qty=10.0, pnl=-0.5, fees=1.0,
+        ),
+    ]
+
+    result = performance.metrics(_equity(100.0, 99.5), trades)
+
+    assert result.winning_trades == 0
+    assert result.losing_trades == 1
+    assert result.win_rate == 0.0
+
+
+def test_return_and_drawdown_are_measured_from_initial_capital_not_the_first_mark():
+    """A fill on the window's first session has paid its costs by that close;
+    measuring from the first mark would drop them from the result."""
+    curve = _equity(99_900.0, 100_100.0, 100_000.0)
+
+    from_capital = performance.metrics(curve, [], initial_capital=100_000.0)
+    from_first_mark = performance.metrics(curve, [])
+
+    assert from_capital.total_return == pytest.approx(0.0)
+    assert from_first_mark.total_return == pytest.approx(100.0 / 99_900.0)
+    # The day-one dip below capital (-0.100%) is the worst fall, just deeper
+    # than 100,100 -> 100,000 (-0.0999%); from the first mark it is invisible.
+    assert from_capital.max_drawdown == pytest.approx(-0.001)
+    assert from_first_mark.max_drawdown == pytest.approx(100_000.0 / 100_100.0 - 1.0)
+    assert performance.metrics(
+        _equity(99_000.0, 99_500.0), [], initial_capital=100_000.0
+    ).max_drawdown == pytest.approx(-0.01)
 
 def test_win_rate_is_absent_when_nothing_has_closed():
     trades = [performance.Trade("AAA", "2024-01-01", 100.0, None, 110.0, 0.1, True)]
@@ -424,3 +460,25 @@ def test_the_benchmark_applies_only_what_the_runs_mode_applies():
 
     assert result.benchmark[-1].value == pytest.approx(INITIAL * 0.98)
     assert result.equity[-1].value == pytest.approx(result.benchmark[-1].value)
+
+
+def test_win_counts_from_pre_execution_trades_use_the_price_move():
+    """pair_trades / PortfolioSimulator records carry no qty or P&L."""
+    trades = [
+        performance.Trade("A", "2024-01-02", 10.0, "2024-01-09", 11.0, 0.10, False),
+        performance.Trade("B", "2024-01-02", 10.0, "2024-01-09", 9.0, -0.10, False),
+    ]
+    stats = performance.metrics([], trades, 100_000.0)
+    assert (stats.winning_trades, stats.losing_trades, stats.win_rate) == (1, 1, 0.5)
+
+
+def test_sharpe_counts_the_first_sessions_move_like_return_and_drawdown():
+    curve = [
+        performance.EquityPoint(date=f"2024-01-{i + 1:02d}", value=v)
+        for i, v in enumerate([99_000.0, 99_500.0, 99_200.0, 99_900.0])
+    ]
+    from_capital = performance.metrics(curve, [], initial_capital=100_000.0)
+    from_first_mark = performance.metrics(curve, [])
+    # A day-one fill paid 1,000 before the first close: part of every figure.
+    assert from_capital.total_return == pytest.approx(-0.001)
+    assert from_capital.sharpe_ratio < from_first_mark.sharpe_ratio

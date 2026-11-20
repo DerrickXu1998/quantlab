@@ -115,6 +115,22 @@ CREATE TABLE IF NOT EXISTS experiment_signals (
 CREATE INDEX IF NOT EXISTS idx_experiment_signals_run
     ON experiment_signals (run_id, symbol, date);
 
+-- A completed run's replay, recorded as it finished and only read afterwards
+-- (quantlab.replay.recording): re-simulating it later would read today's bars,
+-- which can have changed since the run executed. `events` is gzip, one
+-- `kind<TAB>json` frame per line;
+-- `reconstructed` marks a run that predates recording and was rebuilt once by
+-- re-execution; `error` records why that rebuild failed, so it is not retried.
+CREATE TABLE IF NOT EXISTS experiment_replays (
+    run_id         TEXT PRIMARY KEY REFERENCES experiment_runs (id) ON DELETE CASCADE,
+    events         BLOB,
+    summary        TEXT,
+    reconstructed  INTEGER NOT NULL DEFAULT 0,
+    error          TEXT,
+    recorded_at    TEXT NOT NULL,
+    CHECK ((events IS NULL) = (error IS NOT NULL))
+);
+
 -- Identity. Until this existed every run lived in one global table, so any
 -- caller could list, rename and delete every other caller's work.
 CREATE TABLE IF NOT EXISTS users (
@@ -290,6 +306,41 @@ class SignalRow:
     direction: str
     trigger_values: str  # canonical JSON (sorted keys)
     data_window_end: str
+
+
+def not_ready(exc: BaseException) -> bool:
+    """The store is not set up for this write yet -- a table or column a
+    migration adds, a grant not given -- rather than refusing the data: a
+    deploy ahead of its migration must not fail every run it touches."""
+    names = {klass.__name__ for klass in type(exc).__mro__}
+    if names & {"UndefinedTable", "UndefinedColumn", "InsufficientPrivilege"}:
+        return True
+    text = str(exc).lower()
+    return any(
+        words in text
+        for words in ("no such table", "no such column", "permission denied")
+    ) or ("relation" in text and "does not exist" in text)
+
+
+def write_refused(exc: BaseException) -> bool:
+    """The store refused the write itself -- a value larger than it will
+    keep -- and will refuse it again.
+
+    Not a lock wait, a dropped connection, a full pool, or a cancelled
+    statement -- not even one cancelled by statement_timeout, which an IO
+    stall trips as readily as a huge write: those are the moment, and a
+    later attempt can succeed. (A rebuild that keeps timing out is still
+    finalised, by the outage clock.) Recognised by what the store says.
+    """
+    text = str(exc).lower()
+    if "lock timeout" in text or "deadlock" in text:
+        return False
+    if any(klass.__name__ == "ProgramLimitExceeded" for klass in type(exc).__mro__):
+        return True
+    return any(
+        words in text
+        for words in ("too long", "too large", "too big", "exceeds")
+    )
 
 
 def canonical_json(obj: object) -> str:

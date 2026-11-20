@@ -38,7 +38,7 @@ from typing import Any
 
 import numpy as np
 
-from quantlab.execution.adjustments import CorporateAction, applies
+from quantlab.execution.adjustments import CorporateAction, applies, canonical_order
 from quantlab.execution.adjustments import factors as adjustment_factors
 from quantlab.execution.allocation import (
     AllocationSignal,
@@ -215,11 +215,17 @@ class _Position:
     borrow_accrued: float = 0.0
     #: Dividend cash so far (negative on a short); realised with the trade.
     dividends: float = 0.0
-    #: The same per share held, in today's share terms, for the trade's return.
-    dividends_per_share: float = 0.0
     initial_qty: float = 0.0
+    #: Cash put up across every entry (qty x fill price, summed as filled):
+    #: what a trade's return is measured on. Unchanged by a split, which
+    #: scales quantity and price inversely.
+    entry_notional: float = 0.0
     exit_qty: float = 0.0
     exit_notional: float = 0.0
+    #: Gross P&L realised by each exit against the entry price AT that exit.
+    #: Not re-derivable later from exit_notional: an add after a partial exit
+    #: re-averages entry_price, which would re-price shares already sold.
+    closed_gross: float = 0.0
     closed_entry_fees: float = 0.0
     closed_exit_fees: float = 0.0
     closed_borrow: float = 0.0
@@ -368,9 +374,11 @@ class ExecutionSimulator:
         # the engine's to enforce, not something it trusts a caller to have done.
         mode = self.config.price_adjustment
         self._actions: dict[str, list[CorporateAction]] = {
+            # Splits before dividends on a shared ex-date, whatever the input
+            # order: the dividend is per post-split share (canonical_order).
             s: sorted(
                 (a for a in (corporate_actions or {}).get(s) or [] if applies(a, mode)),
-                key=lambda a: a.ex_date,
+                key=canonical_order,
             )
             for s in self.symbols
         }
@@ -447,15 +455,13 @@ class ExecutionSimulator:
 
         # Incremental state so `ingest` can extend both series in O(1) a bar
         # instead of recomputing them over the whole history. Gated on the
-        # same truthiness `ingest` tests, evaluated once here: the dicts only
-        # ever gain entries, so a gate that starts false stays false (a
-        # simulator constructed with no bars at all never maintains ATR,
-        # exactly as the recompute this replaces behaved), and one that starts
-        # true stays true.
+        # config alone, never on whether the constructor had bars: a stream
+        # that starts empty and ingests every bar must reach exactly the ATR
+        # and volatility a batch run over the same bars computes.
         self._atr_state: dict[str, _AtrState] = {}
         self._vol_state: dict[str, _VolState] = {}
         # Columnar runs are batch-only (no `ingest`), so need no running state.
-        if (self._atr or self._vol) and not self._columnar:
+        if not self._columnar:
             if self.config.atr_stop_multiple is not None:
                 self._atr_state = {
                     symbol: self._seed_atr_state(bars)
@@ -772,6 +778,7 @@ class ExecutionSimulator:
                 target_price=target_price,
                 best_close=fill_price,
                 initial_qty=qty,
+                entry_notional=qty * fill_price,
             )
         else:
             total = position.qty + qty
@@ -780,6 +787,9 @@ class ExecutionSimulator:
             ) / total
             position.qty = total
             position.initial_qty += qty
+            # Not the re-averaged price times every share ever bought: after
+            # a partial exit that average covers only the shares still held.
+            position.entry_notional += qty * fill_price
             position.entry_fees += commission
             position.filled_at_open = position.filled_at_open or at_open
 
@@ -879,6 +889,7 @@ class ExecutionSimulator:
         )
         net = gross - commission - borrow + dividends
         self._realized += net
+        position.closed_gross += gross
         position.exit_qty += qty
         position.exit_notional += notional
         position.closed_entry_fees += entry_fee
@@ -895,11 +906,7 @@ class ExecutionSimulator:
             total_borrow = position.closed_borrow + position.borrow_accrued
             total_dividends = position.closed_dividends + position.dividends
             exit_price = position.exit_notional / position.exit_qty
-            total_gross = (
-                position.exit_notional - position.entry_price * position.exit_qty
-                if position.side == "long"
-                else position.entry_price * position.exit_qty - position.exit_notional
-            )
+            total_gross = position.closed_gross
             fees = total_entry_fees + position.closed_exit_fees + total_borrow
             self.closed_trades.append(
                 ExecutedTrade(
@@ -907,8 +914,8 @@ class ExecutionSimulator:
                     entry_price=position.entry_price, exit_date=date, exit_price=exit_price,
                     qty=position.initial_qty,
                     return_pct=self._return_pct(
-                        position.side, position.entry_price, exit_price,
-                        position.dividends_per_share,
+                        total_gross + total_dividends,
+                        position.entry_notional,
                     ),
                     open=False, exit_reason=reason,
                     pnl=total_gross - fees + total_dividends,
@@ -928,14 +935,20 @@ class ExecutionSimulator:
         return fill
 
     @staticmethod
-    def _return_pct(
-        side: str, entry_price: float, exit_price: float, dividends_per_share: float = 0.0
-    ) -> float:
-        """Total return: a long earns its dividends, a short pays them."""
-        if entry_price == 0:
+    def _return_pct(gross_with_dividends: float, entry_notional: float) -> float:
+        """Total return before costs, on the capital the trade put up.
+
+        ``gross_with_dividends`` is the price P&L (signed for the side) plus
+        the dividend cash actually received (long) or paid (short, negative);
+        ``entry_notional`` is the cash put up across every entry (each fill's
+        quantity times its price). Measured in cash rather than per share, so a
+        dividend counts only on the shares held on its ex-date -- not on a later
+        add, and not on shares already sold -- and splits need no bookkeeping.
+        Fees are excluded here and included in ``pnl``.
+        """
+        if entry_notional == 0:
             return 0.0
-        raw = (exit_price + dividends_per_share) / entry_price - 1.0
-        return raw if side == "long" else -raw
+        return gross_with_dividends / entry_notional
 
     # -- corporate actions -------------------------------------------------
 
@@ -973,7 +986,6 @@ class ExecutionSimulator:
             position.exit_qty *= ratio
             position.entry_price /= ratio
             position.best_close /= ratio
-            position.dividends_per_share /= ratio
             if position.stop_price is not None:
                 position.stop_price /= ratio
             if position.target_price is not None:
@@ -986,17 +998,42 @@ class ExecutionSimulator:
             cash = position.qty * per_share * (1.0 if position.side == "long" else -1.0)
             self._credit(symbol, cash)
             position.dividends += cash
-            position.dividends_per_share += per_share
             self._dividends += cash
             self._dividends_applied += 1
 
     # -- protective exits --------------------------------------------------
 
+    def _stop_levels(self, position: _Position) -> list[tuple[str, float]]:
+        """The active fixed and trailing stops, in the order price reaches them.
+
+        Highest first for a long and lowest first for a short: the stop nearer
+        the market is the one a falling (or, for a short, rising) price touches
+        first, so it is the one that fills. Testing the fixed stop first
+        regardless would let a looser fixed stop override a trailing stop that
+        has ratcheted above it, and fill a long lower than it really exited.
+        Ties keep the fixed stop first, so the reason is stable.
+        """
+        long = position.side == "long"
+        levels: list[tuple[str, float]] = []
+        if position.stop_price is not None:
+            levels.append(("stop_loss", position.stop_price))
+        trailing = self.config.trailing_stop_pct
+        if trailing is not None:
+            levels.append((
+                "trailing_stop",
+                position.best_close * (1 - trailing)
+                if long
+                else position.best_close * (1 + trailing),
+            ))
+        # sorted() is stable, so equal levels keep fixed-before-trailing.
+        return sorted(levels, key=lambda item: -item[1] if long else item[1])
+
     def _protective_exit(self, bar: Any, position: _Position) -> tuple[str, float] | None:
         """The first protective level this bar touched, and where it filled.
 
-        Tested in a fixed order -- stop, trailing stop, target, time -- so a bar
-        that contains both a stop and a target resolves to the stop. A daily bar
+        Stops are tested before the target, and among the stops the one nearer
+        the market first (:meth:`_stop_levels`), then time. A bar that contains
+        both a stop and a target resolves to the stop. A daily bar
         cannot say which came first, and taking the favourable one is how a
         backtest quietly awards itself the benefit of every doubt.
 
@@ -1013,29 +1050,13 @@ class ExecutionSimulator:
           the target. Awarding yourself every favourable gap adds up to a
           material edge that no live book ever collects.
         """
-        config = self.config
         long = position.side == "long"
 
-        if position.stop_price is not None:
-            hit = bar.low <= position.stop_price if long else bar.high >= position.stop_price
+        for reason, level in self._stop_levels(position):
+            hit = bar.low <= level if long else bar.high >= level
             if hit:
-                price = (
-                    min(position.stop_price, bar.open)
-                    if long
-                    else max(position.stop_price, bar.open)
-                )
-                return "stop_loss", price
-
-        if config.trailing_stop_pct is not None:
-            trail = (
-                position.best_close * (1 - config.trailing_stop_pct)
-                if long
-                else position.best_close * (1 + config.trailing_stop_pct)
-            )
-            hit = bar.low <= trail if long else bar.high >= trail
-            if hit:
-                price = min(trail, bar.open) if long else max(trail, bar.open)
-                return "trailing_stop", price
+                price = min(level, bar.open) if long else max(level, bar.open)
+                return reason, price
 
         if position.target_price is not None:
             hit = (
@@ -1082,18 +1103,8 @@ class ExecutionSimulator:
         """
         if not minutes:
             return None
-        config = self.config
         long = position.side == "long"
-        stops: list[tuple[str, float]] = []
-        if position.stop_price is not None:
-            stops.append(("stop_loss", position.stop_price))
-        if config.trailing_stop_pct is not None:
-            trail = (
-                position.best_close * (1 - config.trailing_stop_pct)
-                if long
-                else position.best_close * (1 + config.trailing_stop_pct)
-            )
-            stops.append(("trailing_stop", trail))
+        stops = self._stop_levels(position)
         target = position.target_price
 
         opening = float(bar.open)
@@ -1136,22 +1147,15 @@ class ExecutionSimulator:
         self._index_on.setdefault(bar.date, {})[symbol] = index
         # Extend the ATR/vol series in O(1) rather than recomputing them over
         # the whole history per bar, which was quadratic. The state dicts are
-        # empty unless the constructor's gate passed, so configs without an
-        # ATR stop or volatility sizing -- and the all-empty-constructor ATR
-        # corner -- keep paying nothing, as before.
+        # empty unless the config asks for an ATR stop or volatility sizing,
+        # so other configs keep paying nothing.
         atr_state = self._atr_state.get(symbol)
         if atr_state is not None:
             atr = atr_state.observe(float(bar.high), float(bar.low), float(bar.close))
-            existing = self._atr.get(symbol)
-            # A symbol empty at construction has no array yet; the batch
-            # precompute only adds one once the symbol has bars.
-            self._atr[symbol] = (
-                np.array([atr]) if existing is None else np.append(existing, atr)
-            )
+            _append(self._atr, symbol, atr)
         vol_state = self._vol_state.get(symbol)
         if vol_state is not None:
-            vol = vol_state.observe(float(bar.close))
-            self._vol[symbol] = np.append(self._vol[symbol], vol)
+            _append(self._vol, symbol, vol_state.observe(float(bar.close)))
 
     def step_day(self, date: str, decisions_today: list[Decision]) -> DayState:
         """Process exactly one date and return the book at its close.
@@ -1830,12 +1834,7 @@ class ExecutionSimulator:
         for symbol in sorted(self._positions):
             position = self._positions[symbol]
             last = self._last_price.get(symbol, position.entry_price)
-            closed_gross = (
-                position.exit_notional - position.entry_price * position.exit_qty
-                if position.side == "long"
-                else position.entry_price * position.exit_qty - position.exit_notional
-            )
-            gross = closed_gross + (
+            gross = position.closed_gross + (
                 position.qty * (last - position.entry_price)
                 if position.side == "long"
                 else position.qty * (position.entry_price - last)
@@ -1851,7 +1850,7 @@ class ExecutionSimulator:
                     entry_price=position.entry_price, exit_date=None, exit_price=mark,
                     qty=position.initial_qty,
                     return_pct=self._return_pct(
-                        position.side, position.entry_price, mark, position.dividends_per_share
+                        gross + dividends, position.entry_notional
                     ),
                     open=True, exit_reason="end_of_window",
                     pnl=gross - entry_fees - exit_fees - borrow + dividends,
@@ -1907,17 +1906,40 @@ def simulate(
     )
     curve: list[EquityPoint] = []
     for day in simulator.iter_days(decisions):
-        # Only dates with a bar enter the curve: a date on which nothing in the
-        # selection traded is not a mark, it is a holiday.
-        if day.closes:
-            # One mark per session: an intraday run keeps each session's last
-            # bar, so the curve -- and every daily statistic built on it -- is
-            # in sessions whatever the bar frequency.
-            session = day.date[:10]
-            if curve and curve[-1].date == session:
-                curve[-1] = EquityPoint(date=session, value=day.equity)
-            else:
-                curve.append(EquityPoint(date=session, value=day.equity))
+        mark_session(curve, day)
+    return result_of(simulator, curve)
+
+
+def _append(series: dict, symbol: str, value: float) -> None:
+    """Grow a streamed per-bar series in O(1): the batch precompute's array
+    becomes a list on the first streamed bar (readers only index it and take
+    its length), where np.append would copy the whole array every bar."""
+    existing = series.get(symbol)
+    if existing is None:
+        series[symbol] = [value]  # empty at construction: nothing precomputed
+        return
+    if not isinstance(existing, list):
+        existing = series[symbol] = existing.tolist()
+    existing.append(value)
+
+
+def mark_session(curve: list[EquityPoint], day: DayState) -> None:
+    """Add one walked date to a session equity curve, as ``simulate`` keeps it."""
+    # Only dates with a bar enter the curve: a date on which nothing in the
+    # selection traded is not a mark, it is a holiday.
+    if day.closes:
+        # One mark per session: an intraday run keeps each session's last
+        # bar, so the curve -- and every daily statistic built on it -- is
+        # in sessions whatever the bar frequency.
+        session = day.date[:10]
+        if curve and curve[-1].date == session:
+            curve[-1] = EquityPoint(date=session, value=day.equity)
+        else:
+            curve.append(EquityPoint(date=session, value=day.equity))
+
+
+def result_of(simulator: ExecutionSimulator, curve: list[EquityPoint]) -> ExecutionResult:
+    """A walked simulator's result, as ``simulate`` returns it."""
     return ExecutionResult(
         equity=curve,
         trades=simulator.trades(),

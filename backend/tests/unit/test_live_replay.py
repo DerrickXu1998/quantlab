@@ -259,16 +259,16 @@ def test_bounded_rules_compute_over_a_fixed_tail_not_the_growing_window(
 
 
 def test_short_warmup_still_emits_the_batch_signal_dates(bars_by_symbol):
-    """Warm-up shorter than the lookback: the first compute day must run over
-    the whole window, or the retroactive in-window signals a batch run emits
-    would be truncated away."""
+    """Warm-up shorter than the declared lookback: every in-window signal a
+    batch run over the same bars emits is emitted live too (and, see below,
+    on its own date)."""
     warmup = 10
     truncated = {}
     for symbol in SYMBOLS:
         series = bars_by_symbol[symbol]
         first_in_window = next(i for i, bar in enumerate(series) if bar.date >= START)
         truncated[symbol] = series[first_in_window - warmup :]
-    # tail = slow + 1 = 9 < lookback_days = 51, the case the guard exists for.
+    # tail = slow + 1 = 9, far below the default's declared lookback of 51.
     overrides = {"fast": 3, "slow": 8}
 
     live_signals = [
@@ -315,3 +315,119 @@ def test_unreachable_broker_raises_bus_unavailable():
     with pytest.raises(bus.BusUnavailable):
         stream.open()
     assert kafka  # the skip above is the real guard
+
+
+# --- causal emission with a short warm-up -------------------------------------
+
+
+def _short_warmup(bars_by_symbol, warmup=10):
+    truncated = {}
+    for symbol in SYMBOLS:
+        series = bars_by_symbol[symbol]
+        first_in_window = next(i for i, bar in enumerate(series) if bar.date >= START)
+        truncated[symbol] = series[first_in_window - warmup :]
+    return truncated
+
+
+def _signal_days(events):
+    """(signal date, date of the bar frame it was emitted under), in order."""
+    current = None
+    out = []
+    for event in events:
+        if isinstance(event, ReplayBar):
+            current = event.date
+        elif isinstance(event, ReplaySignal):
+            out.append((event.date, current))
+    return out
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"fast": 3, "slow": 8}, {"fast": 5, "slow": 30}, None],
+    ids=["tail-below-warmup", "tail-above-warmup", "defaults"],
+)
+def test_short_warmup_live_is_the_batch_run_event_for_event(bars_by_symbol, overrides):
+    """Not just the same set of signals: the same signals in the same order on
+    their own dates, the same fills on the same dates at the same prices, the
+    same equity curve and the same result."""
+    truncated = _short_warmup(bars_by_symbol)
+    live_events = list(
+        live.live_replay_events(
+            "sma-crossover", overrides, list(SYMBOLS), START, END, _stream(truncated)
+        )
+    )
+    batch_events = _batch_events(truncated, overrides=overrides)
+
+    def signals(events):
+        return [(e.date, e.symbol, e.direction) for e in events if isinstance(e, ReplaySignal)]
+
+    def fills(events):
+        return [
+            (e.date, e.symbol, e.side, round(e.qty, 9), round(e.price, 9), e.reason)
+            for e in events if isinstance(e, replay_engine.ReplayFill)
+        ]
+
+    def marks(events):
+        return [(e.date, round(e.equity, 6)) for e in events if isinstance(e, ReplayEquity)]
+
+    assert signals(live_events), "the fixture must fire in-window signals"
+    assert signals(live_events) == signals(batch_events)
+    assert fills(live_events) == fills(batch_events)
+    assert marks(live_events) == marks(batch_events)
+    live_summary, batch_summary = live_events[-1], batch_events[-1]
+    for field in ("final_equity", "total_return", "trade_count", "win_rate"):
+        assert getattr(live_summary, field) == pytest.approx(getattr(batch_summary, field))
+
+
+def test_a_january_signal_is_never_emitted_or_traded_in_february(bars_by_symbol):
+    """The reproduced bug: with 10 warm-up bars and slow=8, replay waited for
+    the *declared* 51-bar lookback, then released every January signal on a
+    February arrival date -- and the simulator filled them at February prices."""
+    truncated = _short_warmup(bars_by_symbol)
+    events = list(
+        live.live_replay_events(
+            "sma-crossover", {"fast": 3, "slow": 8}, list(SYMBOLS), START, END,
+            _stream(truncated),
+        )
+    )
+    days = _signal_days(events)
+    assert any(signal.startswith("2024-01") for signal, _ in days), "needs a January signal"
+    assert all(signal == emitted for signal, emitted in days), days[:5]
+    # Every signal's fill (signal-day decision, next-open default) lands after
+    # it, never before, and no fill is dated before a bar frame for it.
+    bar_dates = [e.date for e in events if isinstance(e, ReplayBar)]
+    fill_dates = [e.date for e in events if isinstance(e, replay_engine.ReplayFill)]
+    assert fill_dates and set(fill_dates) <= set(bar_dates)
+    assert bar_dates == sorted(bar_dates)
+
+
+def test_a_filter_only_rule_is_refused_by_live_replay_as_by_batch(bars_by_symbol):
+    from quantlab.research import runner
+
+    with pytest.raises(errors.ParameterValidationError) as batch_error:
+        runner.resolve_spec(model_name="adx-trend-filter")
+    with pytest.raises(errors.ParameterValidationError) as live_error:
+        live.live_replay_events(
+            "adx-trend-filter", None, list(SYMBOLS), START, END, _stream(bars_by_symbol)
+        )
+    assert str(live_error.value) == str(batch_error.value)
+    with pytest.raises(errors.ParameterValidationError):
+        live.resolve_rule("adx-trend-filter", {})
+
+
+def test_an_out_of_order_bar_stops_the_replay_instead_of_rewinding_it(bars_by_symbol):
+    stream = [m for m in _stream(bars_by_symbol, start="2024-03-01", end="2024-03-31")]
+    late = next(m for m in stream if m.get("date") == "2024-03-05")
+    stream.remove(late)
+    stream.insert(len(stream) - 1, late)  # after the last March bar, before "end"
+
+    emitted = []
+    with pytest.raises(live.OutOfOrderBarError, match="2024-03-05"):
+        for event in live.live_replay_events(
+            "sma-crossover", {"fast": 3, "slow": 8}, list(SYMBOLS), "2024-03-01",
+            "2024-03-31", stream,
+        ):
+            emitted.append(event)
+    dates = [e.date for e in emitted if isinstance(e, ReplayBar | ReplayEquity)]
+    assert dates == sorted(dates)
+    assert not any(isinstance(e, ReplaySummary) for e in emitted)

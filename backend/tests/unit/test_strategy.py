@@ -765,3 +765,94 @@ def test_an_old_spec_without_weights_scores_by_equal_weight(series):
     pairs = _entry_scores(strategy, series, {"rsi-threshold": 1.0, "macd-crossover": 1.0})
     assert pairs and all(got == pytest.approx(expected) for got, expected in pairs)
     assert {got for got, _ in pairs} <= {0.5, 1.0}
+
+
+def test_lookback_uses_each_components_own_parameters():
+    """The deepest *effective* component sets the floor: slow=90 needs 91 bars,
+    though sma-crossover's declared (default) lookback is 51."""
+    deep = spec(
+        component("sma-crossover", "entry", fast=5, slow=90),
+        component("rsi-threshold", "exit", period=30),
+    )
+    assert deep.lookback_days == 91
+    shallow = spec(component("sma-crossover", "entry", fast=3, slow=10))
+    assert shallow.lookback_days == 11
+    # Then the agreement window and execution warm-up, after the maximum.
+    composed = spec(
+        component("sma-crossover", "entry", fast=5, slow=90),
+        component("rsi-threshold", "exit", period=30),
+        combine_window_days=3,
+        execution=ExecutionConfig(atr_stop_multiple=2.0, atr_period=20),
+    )
+    assert composed.lookback_days == 91 + 2 + 21
+
+
+def test_a_rebuild_loads_the_warm_up_the_run_loaded():
+    from quantlab.execution import ExecutionConfig
+    from quantlab.replay import engine as replay_engine
+
+    deep = spec(component("sma-crossover", "entry", fast=5, slow=90)).to_dict()
+    # A run records where its bars began; a rebuild loads the same span.
+    recorded = {"strategy": deep, "start_date": "2024-06-03",
+                "execution_summary": {"loaded_from": "2023-12-01"}}
+    assert replay_engine.warmup_start(recorded, ExecutionConfig()) == "2023-12-01"
+    # One from before that loaded each rule's DECLARED lookback, whatever its
+    # parameters -- so its rebuild does too, rather than a deeper span.
+    assert replay_engine._lookback_days({"strategy": deep}) == 51
+    legacy = {"model_name": "sma-crossover", "parameters": {"fast": 5, "slow": 90}}
+    assert replay_engine._lookback_days(legacy) == 51
+
+
+def test_two_instances_of_one_rule_keep_their_own_trigger_values(series):
+    """Two SMA crossovers with different windows: each component's evidence
+    survives under its own key, with its own values. Before, both wrote
+    ``sma-crossover.sma_slow`` and the later one silently replaced the other."""
+    configs = {"sma-crossover#0": {"fast": 5, "slow": 20},
+               "sma-crossover#1": {"fast": 10, "slow": 40}}
+    composed, _ = compose(
+        spec(
+            *(component("sma-crossover", "entry", **params) for params in configs.values()),
+            entry_logic="any",
+            combine_window_days=15,
+        ),
+        series,
+    )
+    rule = get_rule("sma-crossover")
+    own_values = {
+        (prefix, symbol): {
+            event.trigger_values["sma_slow"] for event in rule.compute(bars, **params)
+        }
+        for prefix, params in configs.items()
+        for symbol, bars in series.items()
+    }
+    assert composed, "the fixture must fire"
+    assert not any("sma-crossover.sma_slow" in d.trigger_values for d in composed)
+    both = 0
+    for decision_ in composed:
+        present = [p for p in configs if f"{p}.sma_slow" in decision_.trigger_values]
+        assert present and sorted(decision_.trigger_values["_components"]) == present
+        both += len(present) == 2
+        for prefix in present:
+            value = decision_.trigger_values[f"{prefix}.sma_slow"]
+            assert value in own_values[(prefix, decision_.symbol)]
+    assert both, "the fixture must have both instances active on one decision"
+
+
+def test_a_single_model_run_keeps_its_plain_trigger_keys(series):
+    """One rule as entry and exit, with the same parameters, is one source of
+    evidence: its keys stay ``rule.key``, as every stored run records them."""
+    composed, _ = compose(promote_legacy("sma-crossover", None, {"fast": 5, "slow": 20}), series)
+    assert composed
+    for decision_ in composed:
+        assert "sma-crossover.sma_slow" in decision_.trigger_values
+        assert not any("#" in key for key in decision_.trigger_values)
+
+
+def test_a_pinned_and_an_unpinned_rule_at_the_same_version_share_one_key():
+    from quantlab.signals.registry import get_rule
+    from quantlab.strategy.compose import _namespaces
+
+    current = get_rule("sma-crossover").version
+    pinned = StrategyComponent(rule_name="sma-crossover", role="exit", rule_version=current)
+    names = _namespaces(spec(component("sma-crossover", "entry"), pinned))
+    assert set(names.values()) == {"sma-crossover"}

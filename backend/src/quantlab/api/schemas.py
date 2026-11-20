@@ -372,6 +372,8 @@ class RunPerformance(BaseModel):
     exit_reasons: dict[str, int] = {}
     # Null when there are too few paired returns to estimate it.
     regression: BenchmarkRegression | None = None
+    # Rebuilt later on the data as it then stood, not recorded at completion.
+    reconstructed: bool = False
 
 
 # --- Historical replay ------------------------------------------------------
@@ -385,21 +387,27 @@ class ReplaySummary(BaseModel):
     run_id: str
     days: int
     initial_cash: float
-    final_equity: float
-    total_return: float
+    # Null when undefined: a recorded replay stores NaN (a NaN close) as null.
+    final_equity: float | None
+    total_return: float | None
     # Null rather than 0.0 when undefined, as in PerformanceMetrics.
     sharpe_ratio: float | None = None
-    max_drawdown: float
+    max_drawdown: float | None
     win_rate: float | None = None
     trade_count: int
     winning_trades: int
     losing_trades: int
     assumptions: list[str]
     exit_reasons: dict[str, int] | None = None
-    total_commission: float = 0.0
-    total_slippage: float = 0.0
-    total_borrow: float = 0.0
-    total_dividends: float = 0.0
+    # Nullable like every recorded figure: a NaN (a cost on a missing close)
+    # is stored as null, and a stored record must always be servable.
+    total_commission: float | None = 0.0
+    total_slippage: float | None = 0.0
+    total_borrow: float | None = 0.0
+    total_dividends: float | None = 0.0
+    # True when the run predates recorded replays and this one was rebuilt once
+    # by re-execution on the data as it then stood.
+    reconstructed: bool = False
 
 
 # --- Identity ---------------------------------------------------------------

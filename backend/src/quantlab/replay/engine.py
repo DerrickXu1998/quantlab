@@ -21,11 +21,12 @@ that produced the same numbers had them.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass
 from typing import Any
 
 from quantlab.execution import ExecutionConfig, ExecutionSimulator
+from quantlab.execution.engine import DayState, mark_session
 from quantlab.research import performance
 from quantlab.research.runner import execution_config_for
 
@@ -102,6 +103,11 @@ class ReplaySummary:
     total_slippage: float = 0.0
     total_borrow: float = 0.0
     total_dividends: float = 0.0
+    #: False when this stream was recorded as the run completed. True when the
+    #: run predates recorded replays and it was rebuilt once by re-executing
+    #: the run on the data as it stood then -- which may have changed since
+    #: the run itself executed.
+    reconstructed: bool = False
 
 
 ReplayEvent = ReplayBar | ReplaySignal | ReplayFill | ReplayEquity | ReplaySummary
@@ -113,6 +119,11 @@ _KIND = {
     ReplayEquity: "equity",
     ReplaySummary: "summary",
 }
+
+
+def kind_of(event: ReplayEvent) -> str:
+    """The frame kind an event is sent as ("bar", "fill", ...)."""
+    return _KIND[type(event)]
 
 
 def to_dict(event: ReplayEvent) -> dict:
@@ -134,15 +145,46 @@ def load_replay_inputs(backend, experiments, run: dict) -> tuple[list[dict], dic
 
     signals = experiments.get_run_signals(run["id"])
     config = execution_config_for(run)
-    warmup_start = _warmup_start(run, config)
+    loaded_from = warmup_start(run, config)
     # At the run's own frequency: an intraday run re-executes on its bars.
     bars = research_runner.load_bars(
-        backend, list(run["symbols"]), warmup_start, run["end_date"], config
+        backend, list(run["symbols"]), loaded_from, run["end_date"], config
     )
     return signals, bars
 
 
-def _warmup_start(run: dict, config: ExecutionConfig) -> str:
+def _lookback_days(run: dict) -> int:
+    """The warm-up a run that did not record its own loaded under.
+
+    Runs record where their warm-up began (``loaded_from``); one from before
+    that never did, and every such run loaded it from each rule's DECLARED
+    lookback -- warm-up sized by the run's parameters came with the record.
+    Its one-time rebuild loads the same span, so only the data has moved.
+    """
+    from quantlab.strategy import StrategySpec, StrategyValidationError
+
+    stored = run.get("strategy")
+    if stored:
+        try:
+            return StrategySpec.from_dict(stored).declared_lookback_days
+        except (StrategyValidationError, ValueError, KeyError, TypeError):
+            pass
+    # A run recorded before strategies existed, or one whose spec this build
+    # cannot read: the rule it names, then nothing.
+    from quantlab.signals.registry import get_rule
+
+    try:
+        return get_rule(run["model_name"], run.get("model_version")).lookback_days
+    except (KeyError, TypeError):
+        return 0
+
+
+def warmup_start(run: dict, config: ExecutionConfig) -> str:
+    """Where a stored run's bars begin: where it recorded loading them from,
+    or, for a run that predates that, where it loaded them then."""
+    recorded = (run.get("execution_summary") or {}).get("loaded_from")
+    if recorded:
+        return recorded
     from datetime import date
 
     from quantlab.research import runner as research_runner
@@ -164,30 +206,9 @@ def load_corporate_actions(backend, run: dict, config: ExecutionConfig | None = 
     config = config or execution_config_for(run)
     if config.price_adjustment == "none":
         return {}
-    warmup_start = _warmup_start(run, config)
-    rows = backend.corporate_actions(list(run["symbols"]), warmup_start, run["end_date"])
+    loaded_from = warmup_start(run, config)
+    rows = backend.corporate_actions(list(run["symbols"]), loaded_from, run["end_date"])
     return adjustments.by_symbol(rows, config.price_adjustment, end=run["end_date"])
-
-
-def _lookback_days(run: dict) -> int:
-    """How much warm-up this run's strategy needs, from its stored spec."""
-    from quantlab.strategy import StrategySpec, StrategyValidationError
-
-    stored = run.get("strategy")
-    if stored:
-        try:
-            return StrategySpec.from_dict(stored).lookback_days
-        except (StrategyValidationError, ValueError):
-            pass
-    # A run recorded before strategies existed, or one whose spec this build
-    # cannot read: fall back to the rule it names, then to nothing.
-    from quantlab.signals.registry import get_rule
-
-    try:
-        return get_rule(run["model_name"], run.get("model_version")).lookback_days
-    except (KeyError, TypeError):
-        return 0
-
 
 
 def replay_events(
@@ -200,12 +221,18 @@ def replay_events(
     config: ExecutionConfig | None = None,
     corporate_actions: dict | None = None,
     minute_source: Any = None,
+    simulator: ExecutionSimulator | None = None,
+    on_day: Callable[[DayState], None] | None = None,
 ) -> Iterator[ReplayEvent]:
     """Yield the run's window as a chronological event stream.
 
     ``step`` thins bar events to every Nth date (equity, signal and fill events
     are never thinned); a date that carries a signal always gets its bar event
     regardless, so a fill never appears without the price that produced it.
+
+    ``simulator`` (built over the same inputs) and ``on_day`` -- called for
+    every walked date, warm-up included -- let a caller reuse this one walk,
+    e.g. to compute the run's performance from it without simulating again.
     """
     symbols = list(run["symbols"])
     config = config or execution_config_for(run)
@@ -221,9 +248,10 @@ def replay_events(
     for same_day in signals_on.values():
         same_day.sort(key=lambda s: s["symbol"])  # deterministic within a date
 
-    simulator = ExecutionSimulator(
-        symbols, bars_by_symbol, config, corporate_actions, minute_source
-    )
+    if simulator is None:
+        simulator = ExecutionSimulator(
+            symbols, bars_by_symbol, config, corporate_actions, minute_source
+        )
     # Absent when a caller hands over only the window's bars and has no warm-up
     # to skip -- in which case every date supplied is part of the replay.
     window_start = run.get("start_date")
@@ -231,12 +259,16 @@ def replay_events(
     emitted = 0
 
     for day in simulator.iter_days(decisions):
+        if on_day is not None:
+            on_day(day)
         # Warm-up sessions are inputs, not part of the period being replayed.
         # Nothing can have happened in them: no decision is dated there.
         if window_start is not None and day.date < window_start:
             continue
 
-        if day.closes and (emitted % step == 0 or day.date in signals_on):
+        # A day with a signal or a fill always keeps its bar frame: a fill
+        # never appears without the prices it filled against.
+        if day.closes and (emitted % step == 0 or day.date in signals_on or day.fills):
             yield ReplayBar(date=day.date, closes=day.closes)
         emitted += 1
 
@@ -272,8 +304,9 @@ def replay_events(
             positions=day.positions,
             realized_pnl=day.realized_pnl,
         )
-        if day.closes:
-            curve.append(performance.EquityPoint(date=day.date, value=day.equity))
+        # One mark per session, as performance keeps it: an intraday run's
+        # recorded summary must agree with its performance, not count bars.
+        mark_session(curve, day)
 
     yield summary_event(run["id"], simulator, curve)
 
@@ -289,7 +322,7 @@ def summary_event(
     paths reduce the book with exactly the same helpers.
     """
     trades = simulator.trades()
-    stats = performance.metrics(curve, trades)
+    stats = performance.metrics(curve, trades, simulator.config.initial_capital)
     summary = simulator.summary()
     reasons: dict[str, int] = {}
     for trade in trades:
@@ -315,31 +348,6 @@ def summary_event(
         total_borrow=summary.total_borrow,
         total_dividends=summary.total_dividends,
     )
-
-
-def replay_summary(
-    run: dict,
-    signals: list[dict],
-    bars_by_symbol: dict,
-    *,
-    initial_cash: float | None = None,
-    config: ExecutionConfig | None = None,
-    corporate_actions: dict | None = None,
-    minute_source: Any = None,
-) -> ReplaySummary:
-    """Run the same engine to completion and keep only the terminal event."""
-    for event in replay_events(
-        run,
-        signals,
-        bars_by_symbol,
-        initial_cash=initial_cash,
-        config=config,
-        corporate_actions=corporate_actions,
-        minute_source=minute_source,
-    ):
-        if isinstance(event, ReplaySummary):
-            return event
-    raise AssertionError("replay_events always ends with a summary")  # pragma: no cover
 
 
 #: Kept as a name for callers that imported it. It is no longer the source of

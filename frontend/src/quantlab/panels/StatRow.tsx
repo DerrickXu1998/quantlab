@@ -25,13 +25,16 @@ function Stat({
   );
 }
 
+/** Any figure may be null (not measurable). */
+type Figures = { [K in keyof PerformanceMetrics]: PerformanceMetrics[K] | null };
+
 /**
  * Sharpe, max drawdown and win rate, as the backend computed them.
  *
  * A null is rendered as a dash, not as zero: "not measurable" and "measured,
  * and zero" are different statements about a strategy.
  */
-export function StatRow({ metrics }: { metrics: PerformanceMetrics }) {
+export function StatRow({ metrics }: { metrics: Figures }) {
   return (
     <div data-testid="stat-row">
       <StatGrid min="8rem">

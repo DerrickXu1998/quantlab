@@ -271,3 +271,211 @@ def test_studies_restated_in_traded_terms_sit_on_raw_candles():
     assert on_signal_basis["d003"] == pytest.approx(100.0)
     assert traded["d003"] == pytest.approx(2000.0)
     assert traded["d008"] == pytest.approx(100.0) == on_signal_basis["d008"]
+
+
+# --- a split and a dividend on the same ex-date --------------------------------
+#
+# 100 shares at 100. On d002 a 2:1 split and a $1 dividend (per post-split
+# share, as dividends are quoted on their ex-date) go ex together; the stock
+# closes at 49. The holder has 200 shares x 49 = 9,800 plus 200 x $1 = 200 in
+# cash: exactly the 10,000 they started with. The input order of the two rows
+# must not matter, and the loader used to sort "dividend" before "split".
+
+SAME_DAY = [split("d002", 2.0), dividend("d002", 1.0)]
+SAME_DAY_CLOSES = [100.0, 100.0, 49.0, 49.0]
+
+
+def _same_day(actions, direction="bullish", **config):
+    return run(
+        SAME_DAY_CLOSES, actions, decisions=[buy(direction=direction)],
+        initial_capital=10_000.0, allow_shorts=True, **config,
+    )
+
+
+@pytest.mark.parametrize("actions", [SAME_DAY, SAME_DAY[::-1]], ids=["split-first", "div-first"])
+def test_a_same_day_split_and_dividend_leave_a_long_whole(actions):
+    result = _same_day(actions)
+    trade = result.trades[0]
+    assert trade.qty == pytest.approx(200.0)
+    assert trade.dividends == pytest.approx(200.0)
+    assert result.summary.total_dividends == pytest.approx(200.0)
+    assert trade.pnl == pytest.approx(0.0)
+    assert trade.return_pct == pytest.approx(0.0)
+    assert result.equity[-1].value == pytest.approx(10_000.0)
+
+
+@pytest.mark.parametrize("actions", [SAME_DAY, SAME_DAY[::-1]], ids=["split-first", "div-first"])
+def test_a_same_day_split_and_dividend_leave_a_short_whole(actions):
+    result = _same_day(actions, direction="bearish")
+    trade = result.trades[0]
+    assert trade.side == "short"
+    assert trade.qty == pytest.approx(200.0)
+    assert trade.dividends == pytest.approx(-200.0)
+    assert trade.pnl == pytest.approx(0.0)
+    assert result.equity[-1].value == pytest.approx(10_000.0)
+
+
+def test_the_loader_orders_a_split_before_a_same_day_dividend():
+    rows = [
+        {"symbol": "AAA", "ex_date": "d002", "action_type": "dividend", "dividend": 1.0},
+        {"symbol": "AAA", "ex_date": "d002", "action_type": "split", "split_ratio": 2.0},
+    ]
+    for ordered in (rows, rows[::-1]):
+        loaded = adjustments.by_symbol(ordered, "split_dividend")["AAA"]
+        assert [a.action_type for a in loaded] == ["split", "dividend"]
+        assert _same_day(loaded).equity[-1].value == pytest.approx(10_000.0)
+
+
+@pytest.mark.parametrize("actions", [SAME_DAY, SAME_DAY[::-1]], ids=["split-first", "div-first"])
+def test_back_adjustment_compares_a_same_day_dividend_in_pre_split_terms(actions):
+    """Pre-ex factor = 1/2 for the split x (100 - 1 x 2) / 100 for the dividend:
+    the $1 is per new share, $2 per share of the 100 close. The adjusted series
+    is flat across the ex-date, as the holder's wealth is."""
+    raw = bars(SAME_DAY_CLOSES)
+    price, volume = adjustments.factors(raw, actions)
+    assert price == pytest.approx([0.49, 0.49, 1.0, 1.0])
+    assert volume == pytest.approx([2.0, 2.0, 1.0, 1.0])
+    closes = [bar.close for bar in adjustments.adjust(raw, actions)]
+    assert closes == pytest.approx([49.0, 49.0, 49.0, 49.0])
+
+
+def test_back_adjustment_multiplies_several_same_day_splits():
+    actions = [dividend("d002", 1.0), split("d002", 2.0), split("d002", 1.5)]
+    price, _ = adjustments.factors(bars([90.0, 90.0, 29.0, 29.0]), actions)
+    # Ratio 3: $1 per new share is $3 on the 90 close; (90 - 3) / 90 / 3.
+    assert price[0] == pytest.approx(87.0 / 90.0 / 3.0)
+
+
+@pytest.mark.parametrize("actions", [SAME_DAY, SAME_DAY[::-1]], ids=["split-first", "div-first"])
+def test_columnar_bars_agree_with_row_wise_on_a_same_day_split_and_dividend(actions):
+    import numpy as np
+
+    from quantlab.execution.bars import BarSeries
+
+    raw = bars(SAME_DAY_CLOSES)
+    stamps = np.array([f"2024-01-0{i + 1}" for i in range(4)], dtype="datetime64[D]")
+    columns = BarSeries(
+        stamps, [b.open for b in raw], [b.high for b in raw], [b.low for b in raw],
+        [b.close for b in raw], [b.volume for b in raw],
+    )
+    dated = [
+        CorporateAction(f"2024-01-0{int(a.ex_date[1:]) + 1}", a.action_type,
+                        a.split_ratio, a.dividend)
+        for a in actions
+    ]
+    price, _ = adjustments.factors(columns, dated)
+    assert list(price) == pytest.approx([0.49, 0.49, 1.0, 1.0])
+
+    result = simulate(
+        ["AAA"], {"AAA": columns},
+        [Decision(date="2024-01-01", symbol="AAA", kind="entry", direction="bullish")],
+        idealized_config(initial_capital=10_000.0), {"AAA": dated},
+    )
+    assert result.trades[0].qty == pytest.approx(200.0)
+    assert result.trades[0].dividends == pytest.approx(200.0)
+    assert result.equity[-1].value == pytest.approx(10_000.0)
+
+
+@pytest.mark.parametrize("actions", [SAME_DAY, SAME_DAY[::-1]], ids=["split-first", "div-first"])
+def test_the_benchmark_is_whole_across_a_same_day_split_and_dividend(actions):
+    from quantlab.research import performance
+
+    raw = [
+        Bar(date=f"2024-01-0{i + 1}", open=c, high=c, low=c, close=c, volume=1_000)
+        for i, c in enumerate(SAME_DAY_CLOSES)
+    ]
+    dated = [
+        CorporateAction("2024-01-03", a.action_type, a.split_ratio, a.dividend)
+        for a in actions
+    ]
+    result = performance.compute_performance(
+        run_id="same-day",
+        signals=[{"symbol": "AAA", "date": "2024-01-01", "direction": "bullish",
+                  "trigger_values": {}, "data_window_end": "2024-01-01"}],
+        bars_by_symbol={"AAA": raw},
+        symbols=["AAA"],
+        execution=idealized_config(initial_capital=10_000.0),
+        corporate_actions={"AAA": dated},
+    )
+    assert result.benchmark[-1].value == pytest.approx(10_000.0)
+    assert result.equity[-1].value == pytest.approx(10_000.0)
+    assert result.trades[0].pnl == pytest.approx(0.0)
+
+
+def test_a_partly_unreadable_config_keeps_the_settings_it_can_read():
+    """A newer build's key, or a value newer validation rejects, must not turn
+    a run that paid costs into a cost-free one at the signal close."""
+    stored = {
+        "fill_timing": "next_open",
+        "commission_bps": 7.0,
+        "slippage_bps": 3.0,
+        "price_adjustment": "split",
+        "a_setting_from_a_newer_build": True,
+        "max_volume_participation": -5,  # invalid here
+    }
+    config = execution_config_for({"execution": stored})
+    assert config.fill_timing == "next_open"
+    assert config.commission_bps == 7.0
+    assert config.slippage_bps == 3.0
+    assert config.price_adjustment == "split"
+    # The unreadable value falls back to what a run without it meant.
+    assert config.max_volume_participation is None
+
+
+def test_an_unreadable_config_keeps_settings_that_depend_on_each_other():
+    """volatility_target sizing is valid only beside its sizing_value; taken
+    one at a time in stored order, it would be dropped for equal weight."""
+    stored = {
+        "position_sizing": "volatility_target",
+        "sizing_value": 0.15,
+        "commission_bps": 4.0,
+        "a_setting_from_a_newer_build": 1,
+    }
+    config = execution_config_for({"execution": stored})
+    assert config.position_sizing == "volatility_target"
+    assert config.sizing_value == 0.15
+    assert config.commission_bps == 4.0
+
+
+#: Every ExecutionConfig setting, as of the last time someone decided what a
+#: stored run *without* it meant. A run's stored config is the full to_dict of
+#: the build that ran it, so a key it lacks is a setting added since -- and if
+#: that setting's default changes behaviour, an old run rebuilt or backfilled
+#: would silently run under it (as max_volume_participation once did).
+_DECIDED = {
+    "initial_capital", "position_sizing", "sizing_value", "max_positions",
+    "max_position_pct", "fill_timing", "commission_bps", "slippage_bps",
+    "stop_loss_pct", "take_profit_pct", "trailing_stop_pct", "atr_stop_multiple",
+    "atr_period", "max_holding_days", "allow_shorts", "borrow_cost_bps",
+    "price_adjustment", "intraday_resolution", "bar_frequency",
+    "max_volume_participation", "order_expiry_days", "min_holding_days", "cooldown_days",
+    # Allocation sizing: each defaults to None (off), which is how every run
+    # before it executed, so a stored config without them needs no legacy value.
+    "target_exposure", "min_allocation_score", "rebalance_frequency",
+    "rebalance_threshold", "max_turnover",
+}
+
+
+def test_a_new_execution_setting_must_say_what_its_absence_meant():
+    from quantlab.execution import ExecutionConfig
+
+    added = set(ExecutionConfig.__dataclass_fields__) - _DECIDED
+    assert not added, (
+        f"new execution setting(s) {sorted(added)}: if the default changes how a run "
+        "executes, add what a run stored before it meant to runner._LEGACY_EXECUTION; "
+        "then add the name to _DECIDED here"
+    )
+
+
+def test_a_weekend_split_and_a_monday_dividend_share_a_bar_and_its_share_terms():
+    """No bar on d002 (a Saturday): the split takes effect on d003's bar, as
+    the dividend does, split first -- so the dividend is per post-split share
+    there too, though the two ex-date strings differ."""
+    from dataclasses import replace as dc_replace
+
+    raw = [dc_replace(b, date=d) for b, d in zip(
+        bars(SAME_DAY_CLOSES), ["d000", "d001", "d003", "d004"], strict=True
+    )]
+    actions = [split("d002", 2.0), dividend("d003", 1.0)]
+    price, _ = adjustments.factors(raw, actions)
+    assert price == pytest.approx([0.49, 0.49, 1.0, 1.0])

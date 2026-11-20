@@ -329,8 +329,10 @@ def benchmark_series(
     return _combine(per_symbol, symbols, initial_capital)
 
 
-def _max_drawdown(equity: list[EquityPoint]) -> float:
-    peak = float("-inf")
+def _max_drawdown(equity: list[EquityPoint], base: float | None = None) -> float:
+    # Seeded with the starting capital, so a loss already booked by the first
+    # mark (a day-one fill's costs) is part of the fall rather than its peak.
+    peak = base if base is not None else float("-inf")
     worst = 0.0
     for point in equity:
         peak = max(peak, point.value)
@@ -339,8 +341,12 @@ def _max_drawdown(equity: list[EquityPoint]) -> float:
     return worst
 
 
-def _sharpe(equity: list[EquityPoint]) -> float | None:
-    returns = [
+def _sharpe(equity: list[EquityPoint], base: float | None = None) -> float | None:
+    # From the same base as the return and drawdown beside it: with the
+    # starting capital, the first session's move (a day-one fill's costs) is
+    # one of the returns rather than lost before the series begins.
+    returns = [equity[0].value / base - 1.0] if equity and base else []
+    returns += [
         equity[i].value / equity[i - 1].value - 1.0
         for i in range(1, len(equity))
         if equity[i - 1].value != 0
@@ -406,21 +412,39 @@ def regression(
     )
 
 
-def metrics(equity: list[EquityPoint], trades: list[Trade]) -> PerformanceMetrics:
-    """Summary statistics over the curve and the realised trades."""
-    if equity and equity[0].value != 0:
-        total_return = equity[-1].value / equity[0].value - 1.0
+def metrics(
+    equity: list[EquityPoint], trades: list[Trade], initial_capital: float | None = None
+) -> PerformanceMetrics:
+    """Summary statistics over the curve and the realised trades.
+
+    ``initial_capital``, when given, is the base return and drawdown are
+    measured from. The curve's first point is a close, so a fill on the
+    window's first session has already paid its costs by then; measuring from
+    that mark would drop them from the result. Without it, the first point is
+    the base.
+    """
+    base = initial_capital if initial_capital is not None else (
+        equity[0].value if equity else None
+    )
+    if equity and base:
+        total_return = equity[-1].value / base - 1.0
     else:
         total_return = 0.0
 
+    # Won or lost on net P&L: return_pct is the price move (plus dividends)
+    # before commission and borrow, so a trade that cleared its entry price
+    # but not its fees is a loss, not a win.
+    # A trade with no quantity is a pre-execution record (pair_trades,
+    # PortfolioSimulator): it carries no money, so its price move decides.
     closed = [t for t in trades if not t.open]
-    winning = sum(1 for t in closed if t.return_pct > 0)
-    losing = sum(1 for t in closed if t.return_pct < 0)
+    outcome = [t.pnl if t.qty else t.return_pct for t in closed]
+    winning = sum(1 for x in outcome if x > 0)
+    losing = sum(1 for x in outcome if x < 0)
 
     return PerformanceMetrics(
         total_return=total_return,
-        sharpe_ratio=_sharpe(equity),
-        max_drawdown=_max_drawdown(equity),
+        sharpe_ratio=_sharpe(equity, initial_capital),
+        max_drawdown=_max_drawdown(equity, initial_capital),
         win_rate=(winning / len(closed)) if closed else None,
         trade_count=len(trades),
         winning_trades=winning,
@@ -470,8 +494,12 @@ def compute_performance(
     window_end: str | None = None,
     corporate_actions: dict | None = None,
     minute_source: Any = None,
+    simulated: Any = None,
 ) -> RunPerformance:
     """The whole answer for one run, from its signals and its window's bars.
+
+    ``simulated`` is an ExecutionResult already walked over exactly these
+    inputs (as the replay recorder does), so the run is not simulated twice.
 
     Re-executed rather than re-derived: the stored decisions are replayed
     through the same simulator the run itself used, under the same criteria.
@@ -493,7 +521,7 @@ def compute_performance(
     # the window only. Warm-up bars are inputs to the signals, not part of the
     # period being measured, and a curve that began in the warm-up would put a
     # flat stretch of untraded capital at the front of every result.
-    result = simulate(
+    result = simulated if simulated is not None else simulate(
         symbols, bars_by_symbol, to_decisions(signals), config, corporate_actions, minute_source
     )
 
@@ -567,7 +595,7 @@ def compute_performance(
         initial_capital=config.initial_capital,
         equity=curve,
         benchmark=benchmark,
-        metrics=metrics(curve, trades),
+        metrics=metrics(curve, trades, config.initial_capital),
         trades=trades,
         # Generated from the config that actually ran, so the caveats can no
         # longer contradict the numbers they ship with.

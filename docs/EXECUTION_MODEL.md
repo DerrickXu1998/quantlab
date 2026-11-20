@@ -39,7 +39,7 @@ list than people expect.
   signals/engine.py : compute_signals()
         |
         |  for each symbol, for each component rule:
-        |      skip if len(bars) < rule.lookback_days
+        |      skip if len(bars) < rule.required_lookback(params)
         |      rule.compute(bars, **effective_params)
         |          -> [SignalEvent(date, direction, trigger_values,
         |                          data_window_end)]
@@ -71,7 +71,7 @@ list than people expect.
         |    1. mark the book at this bar's close
         |    2. fill orders queued yesterday   (fill_timing: next_open)
         |    3. protective exits vs THIS BAR'S HIGH/LOW:
-        |         stop -> trailing -> target -> max_holding
+        |         stops (nearer first) -> target -> max_holding
         |    4. signal exits   (if min_holding_days elapsed)
         |    5. signal entries (if cash, slots, cooldown, filters allow)
         |       -- under portfolio allocation sizing, step 5 is a
@@ -93,7 +93,34 @@ list than people expect.
 ```
 
 The same `ExecutionSimulator` drives all three consumers — the batch run, the
-SSE replay (`replay/engine.py`) and the live Kafka-fed replay. That is the point
+SSE replay (`replay/engine.py`) and the live Kafka-fed replay.
+
+**A run's replay is a record, not a re-run.** The worker records the replay
+stream when a run completes — from the very bars, corporate actions and minutes
+the run executed on, in the same transaction as its results — and
+`GET /runs/{id}/replay/stream` and `/replay/summary` only play that record back
+(`replay/recording.py`, table `experiment_replays`). Re-simulating on request
+would read the data as it is *now*: a revised print, a restated split or a
+re-ingest would then show fills and a result the run never had. A run completed
+before recording existed is rebuilt once by re-execution, by the worker in the
+background (the endpoints answer 409 with `Retry-After` until then), stored
+with `reconstructed: true` — also the `X-Replay-Source` header — and never
+recomputed again. Performance follows the same rule: stored at completion,
+backfilled once for older runs, never re-derived on view.
+
+The live replay (`streaming/live.py`) computes each arriving day against the
+history that existed that day — a bounded rule against its trailing
+`windowed_lookback` bars, a recursive one against all of it — and emits and
+trades **only an event dated that day**. It never waits for a lookback and then
+releases older events: with a short warm-up that used to emit January signals on
+a February arrival date and fill them at February prices, which no batch run
+does. It validates a single model through the batch path (`runner.resolve_spec`),
+so a filter-only rule such as `adx-trend-filter` is refused with the same
+`ParameterValidationError`; and a bar dated before one already consumed stops
+the stream with `OutOfOrderBarError` (an `error` frame over SSE) rather than
+stepping the book backwards. A simulator constructed with no bars and fed by
+`ingest` maintains the same ATR (and volatility) series a batch run computes, so
+an ATR stop exists in a stream that starts empty. That is the point
 of it. Before it existed the same rules were written twice, once for the batch
 report and once for the day-by-day stream, and "keeping two implementations
 agreeing by hand is a bug waiting for a quiet afternoon".
@@ -191,12 +218,23 @@ So the engine has to choose. The resolution order, from `ExecutionSimulator`:
   1. mark
   2. fill orders queued yesterday          (next_open only; next_close and
                                             next_typical fill after step 3)
-  3. stop_loss -> trailing_stop -> take_profit -> max_holding_days
+  3. stops (stop_loss / trailing_stop, the nearer one first)
+       -> take_profit -> max_holding_days
   4. signal exits
   5. signal entries
 ```
 
 Stop first. The engine takes the loss.
+
+Between the two stops, the one **nearer the market** is tested first: the
+higher of the fixed and trailing levels for a long, the lower for a short
+(`ExecutionSimulator._stop_levels`). Once a trailing stop has ratcheted above a
+long's fixed stop, a falling session meets the trail first, so that is where the
+position leaves. Testing the fixed stop first regardless filled the long at the
+lower, looser level, and booked a loss where the trail had locked in a gain.
+The same order holds at the official open and minute by minute under
+`intraday_resolution="minute"`; at an exact tie the fixed stop keeps the
+reason.
 
 Two of those orderings carry a reason worth repeating, both from the engine's
 own docstring. **Protective exits precede signal exits** because a stop hit
@@ -506,6 +544,20 @@ already decided to enter.
 
 A rule declares `lookback_days`. `rsi-threshold` declares 16: RSI(14) is first
 defined at index 14, and detecting a *crossing* needs the value at `T-1` as well.
+
+That number is the requirement **at the declared defaults**. Parameters move it:
+`sma-crossover` with `slow=90` needs 91 bars, not the default's 51, and with
+`slow=10` only 11. `SignalRule.required_lookback(overrides)` returns the
+requirement for the parameters a run actually uses — from the rule's
+`windowed_lookback` for bounded rules, from an `effective_lookback` callback for
+recursive ones (EMA, RSI, MACD, ADX), and the declared value for static and
+config-built rules. Every warm-up and every gate uses it: the runner,
+`compute_signals`, the composer, replay of a stored run, and live replay. A
+registration whose callback disagrees with its own `lookback_days` at the
+defaults is refused at import, so a run that never overrides a parameter keeps
+exactly the warm-up it always had. Loading only the default 51 bars for a
+`slow=90` run left SMA(90) undefined for the window's first ~40 sessions, and
+the crossovers in them disappeared without a word.
 If a run loaded only bars inside `[start_date, end_date]`, the first 16 bars of
 the window could emit nothing, and a 30-bar window would silently report half a
 strategy.
@@ -513,7 +565,7 @@ strategy.
 So the runner loads earlier:
 
 ```python
-warmup_start = start - timedelta(days=rule.lookback_days * _CALENDAR_DAYS_PER_BAR)
+warmup_start = start - timedelta(days=spec.lookback_days * _CALENDAR_DAYS_PER_BAR)
 bars_by_symbol = backend.load_bars_for(requested_symbols, warmup_start, end_date)
 ```
 
@@ -546,7 +598,9 @@ together once the execution layer grew a lookback of its own:
 - `runner.py` reports only signals dated inside `[start_date, end_date]`.
 - `replay/engine.py: load_replay_inputs` loads from
   `start_date - StrategySpec.lookback_days`, and `replay_events` suppresses
-  every event dated before `start_date`.
+  every event dated before `start_date`. (These run when a replay is
+  *recorded* — at completion, or once for an older run — never when one is
+  played back.)
 - `compute_performance` takes `window_start` / `window_end` and trims the equity
   curve to them. **The benchmark is normalised from the window's first close,
   not the warm-up's** — otherwise buy-and-hold would be credited with a move
@@ -566,7 +620,7 @@ run — an incomplete warm-up is a data fact, not an error.
 A composed strategy's warm-up is `StrategySpec.lookback_days`:
 
 ```
-  max(component.lookback_days)
+  max(component.required_lookback(component.parameters))
     + combine_window_days - 1        # a component may have fired that long ago
     + execution.extra_lookback_days  # atr_period + 1, when an ATR stop is set
                                      # or sizing is signal_inverse_volatility
@@ -899,14 +953,21 @@ hard-to-borrow name can exceed any edge the signal has, can be recalled at the
 worst possible moment, and may not be locatable at all. Short results from this
 engine are an upper bound with an unmodelled and unbounded cost line.
 
-**No dividends, no corporate-action adjustment.** Stored bars are unadjusted. A
-2-for-1 split appears as a −50% day and will trigger every long stop in the book.
-`runner.py` calls `backend.corporate_actions(...)` and persists the result on the
-run, so reopening a saved run still warns — *reported, never applied*. If your
-window contains a split, the run is wrong and the run tells you it is wrong. It
-does not fix it. Dividends are simply absent: a total-return series and this
-price series diverge by the dividend yield, compounding, which on income names
-over multi-year windows is not a rounding error.
+**Corporate actions are applied as events, not modelled exhaustively.** Under
+`price_adjustment="split_dividend"` (the default for new runs) execution trades
+raw prices and is told about each split and dividend on its ex-date; signals and
+the benchmark read back-adjusted bars (`execution/adjustments.py`). Actions that
+share an ex-date are applied in one canonical order — **splits before
+dividends**, whatever order the rows arrived in — because a dividend is quoted
+per share *as of its ex-date*, the post-split share: the book pays it on the
+post-split holding, and the back-adjustment compares it with the pre-split
+prior close as `D × r` (r the product of that day's split ratios). A trade's
+`return_pct` is its price P&L plus the dividend cash it actually received (or,
+short, paid), over its split-adjusted entry notional — so a dividend counts only
+on the shares held on its ex-date, never on a later add or on shares already
+sold. Fees stay out of `return_pct` and in `pnl`. Not modelled: withholding
+tax, special-dividend treatment, spin-off shares (applied as a split ratio),
+rights issues and mergers.
 
 **No order book or queue model.** OHLCV bars cap each order at a configurable
 share of traded volume and carry partial fills, but they cannot reconstruct the
@@ -983,6 +1044,23 @@ A ninth was found while writing the tests, and is the one worth remembering:
 > windfall. The asymmetry is the point. Pessimism has to be applied in the
 > direction that hurts, on both sides, or it is not pessimism — it is a
 > preference for good news.
+
+### Bug-bash remediation
+
+Nine defects confirmed by differential testing, each now pinned by a
+regression test:
+
+| # | Defect | Fix |
+|---|---|---|
+| 1 | A looser fixed stop was tested before a tighter trailing stop and filled first | Stops are tested nearer-the-market first, daily and per minute |
+| 2 | Live replay with a short warm-up released backdated signals on a later arrival date and traded them | Each day is computed causally; only that day's events are emitted and traded |
+| 3 | Warm-up and gating read the default `lookback_days`, ignoring parameters | `required_lookback(parameters)` everywhere |
+| 4 | Live replay accepted filter-only rules | Validated through `runner.resolve_spec`, as batch |
+| 5 | A same-ex-date split and dividend paid the dividend on pre-split shares and mis-adjusted prices and the benchmark | Canonical splits-before-dividends order; `D × r` in the back-adjustment |
+| 6 | A stream starting with no bars never initialised its ATR | ATR/volatility state is gated on the config alone |
+| 7 | `return_pct` credited a dividend to shares not held on its ex-date | Computed from actual dividend cash |
+| 8 | An out-of-order bar moved replay backwards in time | Refused with `OutOfOrderBarError` |
+| 9 | Two instances of one rule overwrote each other's trigger values | Distinct configurations are keyed `rule#i.key`; a rule used one way keeps `rule.key` |
 
 ### Where the contract had to change
 

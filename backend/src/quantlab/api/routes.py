@@ -12,6 +12,7 @@ import asyncio
 import json
 import threading
 import time
+import weakref
 from dataclasses import asdict
 from datetime import UTC, date, datetime
 from typing import Annotated, Literal, get_args
@@ -25,9 +26,10 @@ from quantlab import auth as auth_lib
 from quantlab import settings as user_settings_model
 from quantlab.api import schemas, security
 from quantlab.api.security import CurrentUser, owner_scope
-from quantlab.execution import adjustments, minutes
+from quantlab.execution import adjustments
 from quantlab.logging import get_logger
 from quantlab.replay import engine as replay_engine
+from quantlab.replay import recording as replay_recording
 from quantlab.research import errors as research_errors
 from quantlab.research import jobs, performance, runner, studies
 from quantlab.signals import registry as signal_registry
@@ -86,13 +88,18 @@ class _StreamSlots:
                 self._counts[user_id] = held - 1
 
 
+#: Guards the lazy per-app helpers on ``app.state``.
+_APP_STATE_GUARD = threading.Lock()
+
+
 def _stream_slots(request: Request) -> _StreamSlots:
     # Per app, on its state -- like the seeded cache below, a module-level
     # instance would leak counts between the apps tests create.
-    slots = getattr(request.app.state, "_stream_slots", None)
-    if slots is None:
-        slots = request.app.state._stream_slots = _StreamSlots()
-    return slots
+    with _APP_STATE_GUARD:  # two first requests must not each make one
+        slots = getattr(request.app.state, "_stream_slots", None)
+        if slots is None:
+            slots = request.app.state._stream_slots = _StreamSlots()
+        return slots
 
 
 def _acquire_stream_slot(request: Request, user) -> _StreamSlots:
@@ -738,7 +745,7 @@ def create_run(
             store.enqueue_run(record)
             stored = store.get_run(record["id"], owner_scope(user))
             return _run_response(stored, active.name, queue=store.queued_run_ids())
-        result = runner.run_experiment(active, owner_id=user.id, **arguments)
+        result, outputs = jobs.run_inline(active, owner_id=user.id, **arguments)
     except research_errors.UnknownModelError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except research_errors.UnknownSymbolError as exc:
@@ -761,7 +768,11 @@ def create_run(
     ) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    store.save_run(result)
+    # Performance and replay recorded from the very bars the run read, in the
+    # run's own transaction, as the worker does at completion: both are read
+    # later, never re-simulated.
+    store.save_run(result, outputs)
+    jobs.keep_outputs(store, result.id, outputs)
     stored = store.get_run(result.id, owner_scope(user))
     response.status_code = 201
     return _run_response(stored, active.name)
@@ -878,10 +889,28 @@ def get_run_performance(request: Request, run_id: str, user: CurrentUser) -> dic
             detail=f"results for run {run_id} could not be computed: {run['results_error']}",
         )
     if run_mode(request) == "inline":
-        # No worker in this mode to do it: computed once, stored, then read.
-        computed = jobs.compute_run_performance(backend(request), store, run)
-        store.set_performance(run_id, computed)
-        return computed
+        # No worker to do it: built once, with the replay from the same walk
+        # if that is missing too, then read like any other run's. (In queue
+        # mode the worker does it; see _rebuild_old_run.) Bounded per user
+        # by the stream slot, as the replay endpoints' rebuilds are; with none
+        # free the answer is "being prepared", below.
+        slots = _stream_slots(request)
+        if slots.acquire(user.id):
+            try:
+                _rebuild_old_run(request, run, perf_missing=True)
+            finally:
+                slots.release(user.id)
+        stored = store.get_performance(run_id)
+        if stored is not None:
+            return stored
+        _refused(run)
+        failed = store.get_run(run_id, owner_scope(user))
+        if failed and failed.get("results_error"):
+            raise HTTPException(
+                status_code=422,
+                detail=f"results for run {run_id} could not be computed: "
+                f"{failed['results_error']}",
+            )
     raise HTTPException(
         status_code=409,
         detail=f"results for run {run_id} are being prepared; try again shortly",
@@ -1128,6 +1157,121 @@ def _replayable_run(request: Request, run_id: str, user) -> dict:
     return run
 
 
+class _Rebuilds:
+    """Old-run rebuilds running in this app's requests: two at once, and one
+    per run. Per app, like the stream slots -- module-level state would be
+    shared by every app a process (or a test session) creates."""
+
+    def __init__(self) -> None:
+        self.slots = threading.BoundedSemaphore(2)
+        # One lock per run, held weakly: an entry lives only while someone
+        # holds the lock (or is about to), so memory stays bounded and
+        # unrelated runs never block each other.
+        self._locks: weakref.WeakValueDictionary[str, threading.Lock] = (
+            weakref.WeakValueDictionary()
+        )
+        self._guard = threading.Lock()
+
+    def lock(self, run_id: str) -> threading.Lock:
+        with self._guard:
+            lock = self._locks.get(run_id)
+            if lock is None:
+                lock = self._locks[run_id] = threading.Lock()
+            return lock
+
+
+def _rebuilds(request: Request) -> _Rebuilds:
+    with _APP_STATE_GUARD:  # two first requests must not each make one
+        rebuilds = getattr(request.app.state, "_rebuilds", None)
+        if rebuilds is None:
+            rebuilds = request.app.state._rebuilds = _Rebuilds()
+        return rebuilds
+
+
+def _rebuild_old_run(request: Request, run: dict, **known_missing: bool) -> None:
+    """Inline mode only: rebuild what an old run is missing (performance,
+    replay or both), in one walk, at most once at a time per run and twice
+    server-wide. With a worker (queue mode) the worker does it, never the API
+    process -- a re-execution that exhausts memory must take down the
+    worker, never the API, and only one process then rebuilds a run.
+
+    Never waited on: a request that finds this run's rebuild already running,
+    or every slot busy, returns at once and its caller answers "being
+    prepared" (409, which clients retry) instead of holding a thread blocked.
+    Transient failures are left for a retry, never stored as the answer.
+    """
+    rebuilds = _rebuilds(request)
+    lock = rebuilds.lock(run["id"])
+    if not lock.acquire(blocking=False):
+        return
+    try:
+        if not rebuilds.slots.acquire(blocking=False):
+            return
+        try:
+            jobs.rebuild_old_run(
+                backend(request), experiments(request), run,
+                # Not waited on: a busy large-run slot is a 409 now, not a
+                # request thread (and stream slot) held for half a minute.
+                wait_seconds=0, from_request=True, worker_present=False,
+                # What the caller has just read: not read again.
+                **known_missing,
+            )
+        finally:
+            rebuilds.slots.release()
+    finally:
+        lock.release()
+
+
+def _recorded_replay(
+    request: Request, run: dict, *, events: bool = True, known_missing: bool = False
+) -> dict:
+    """The run's recorded replay; never a fresh simulation.
+
+    A replay re-simulated on request would read today's bars, corporate
+    actions and minutes, which can have changed since the run executed, and
+    show a run that never happened. Runs record theirs as they complete. One
+    that predates recording is rebuilt once (marked ``reconstructed``) by the
+    worker -- or here, with no worker (inline); until then the answer is
+    "being prepared". ``known_missing``: the caller has just read the row and
+    found none, so it is not read again first.
+    """
+    store = experiments(request)
+    stored = None if known_missing else store.get_replay(run["id"], events=events)
+    if stored is None and run_mode(request) == "inline":
+        _rebuild_old_run(request, run, replay_missing=True)
+        stored = store.get_replay(run["id"], events=events)
+    return _answer(run, stored)
+
+
+def _refused(run: dict) -> None:
+    """A final answer for a run whose rebuilt outputs the store would not
+    keep: nothing will be prepared, so "being prepared" would be false."""
+    if jobs.refused(run["id"]):
+        raise HTTPException(
+            status_code=422,
+            detail=f"the results of run {run['id']} were rebuilt but could not be stored; "
+            "they are retried after the next restart",
+        )
+
+
+def _answer(run: dict, stored: dict | None) -> dict:
+    """A replay row as the API answers it: being prepared (409), could not be
+    recorded (422), or the record."""
+    if stored is None:
+        _refused(run)
+        raise HTTPException(
+            status_code=409,
+            detail=f"the replay of run {run['id']} is being prepared; try again shortly",
+            headers={"Retry-After": "5"},
+        )
+    if stored["error"] or stored["summary"] is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"the replay of run {run['id']} could not be recorded: {stored['error']}",
+        )
+    return stored
+
+
 @router.get(
     "/runs/{run_id}/replay/stream",
     tags=["replay"],
@@ -1143,12 +1287,26 @@ def stream_run_replay(
     step: Annotated[int, Query(ge=1)] = 1,
 ) -> StreamingResponse:
     run = _replayable_run(request, run_id, user)
-    signals, bars = replay_engine.load_replay_inputs(backend(request), experiments(request), run)
-    actions = replay_engine.load_corporate_actions(backend(request), run)
-    minute_source = minutes.source_for(backend(request), runner.execution_config_for(run))
-    # Acquired only after validation above: a request that raises before the
-    # response exists must not leak a slot its generator would never release.
+    # The slot first, so the per-user stream limit also bounds any rebuild
+    # and the blob read below; released here if they raise, since a request
+    # that fails before the response exists has no generator to release it.
     slots = _acquire_stream_slot(request, user)
+    released = threading.Lock()
+
+    def release() -> None:
+        # Exactly once, whichever of the paths below gets there.
+        if released.acquire(blocking=False):
+            slots.release(user.id)
+
+    try:
+        recorded = _recorded_replay(request, run)
+    except BaseException:
+        release()
+        raise
+    # Only what the stream needs is held for its life, not the whole row.
+    events = recorded["events"]
+    source = "reconstructed" if recorded["reconstructed"] else "recorded"
+    del recorded
 
     def frames():
         emitted = 0
@@ -1157,14 +1315,7 @@ def stream_run_replay(
         # A sync generator: StreamingResponse iterates it in a threadpool, so
         # the optional pacing sleep never blocks the event loop.
         try:
-            for event in replay_engine.replay_events(
-                run,
-                signals,
-                bars,
-                step=step,
-                corporate_actions=actions,
-                minute_source=minute_source,
-            ):
+            for kind, frame in replay_recording.playback_lines(events, step=step):
                 if emitted >= max_events:
                     truncated = f"max_events={max_events} reached before the summary"
                     break
@@ -1173,19 +1324,30 @@ def stream_run_replay(
                     # end it like any other truncation.
                     truncated = "stream wall-clock limit reached before the summary"
                     break
-                yield f"data: {json.dumps(replay_engine.to_dict(event))}\n\n"
+                # Stored as the JSON each frame is sent as: passed through,
+                # never decoded and re-encoded.
+                yield f"data: {frame}\n\n"
                 emitted += 1
-                if interval_ms and isinstance(event, replay_engine.ReplayEquity):
+                if interval_ms and kind == "equity":
                     time.sleep(interval_ms / 1000)
         finally:
-            slots.release(user.id)
+            release()
         if truncated:
             yield f"data: {json.dumps({'event': 'truncated', 'detail': truncated})}\n\n"
 
+    stream = frames()
+    # A client gone before the stream starts (say, during a long rebuild)
+    # leaves a generator that never runs its finally: release when it is
+    # discarded instead, so a dropped request never holds a slot forever.
+    weakref.finalize(stream, release)
     return StreamingResponse(
-        frames(),
+        stream,
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "X-Replay-Source": source,
+        },
     )
 
 
@@ -1198,14 +1360,20 @@ def stream_run_replay(
 )
 def get_run_replay_summary(request: Request, run_id: str, user: CurrentUser) -> dict:
     run = _replayable_run(request, run_id, user)
-    signals, bars = replay_engine.load_replay_inputs(backend(request), experiments(request), run)
-    actions = replay_engine.load_corporate_actions(backend(request), run)
-    minute_source = minutes.source_for(backend(request), runner.execution_config_for(run))
-    return asdict(
-        replay_engine.replay_summary(
-            run, signals, bars, corporate_actions=actions, minute_source=minute_source
-        )
-    )
+    stored = experiments(request).get_replay(run["id"], events=False)
+    if stored is None and run_mode(request) == "inline":
+        # Only a miss may rebuild an old run, and only with no worker; that
+        # rebuild is bounded per user by the stream's slot, as the stream's
+        # own is. With none free, the answer is the one a client retries --
+        # "being prepared" -- never a 429 from an endpoint that is not a stream.
+        slots = _stream_slots(request)
+        if not slots.acquire(user.id):
+            _answer(run, None)
+        try:
+            stored = _recorded_replay(request, run, events=False, known_missing=True)
+        finally:
+            slots.release(user.id)
+    return dict(_answer(run, stored)["summary"])
 
 
 # --- Live replay over the event bus -------------------------------------------
@@ -1287,6 +1455,7 @@ def stream_live_replay(
     def frames():
         emitted = 0
         truncated = None
+        failed = None
         deadline = time.monotonic() + _STREAM_WALL_CLOCK_SECONDS
         # A sync generator: StreamingResponse iterates it in a threadpool, so
         # blocking on the Kafka consumer never stalls the event loop.
@@ -1302,9 +1471,16 @@ def stream_live_replay(
                     break
                 yield f"data: {json.dumps(replay_engine.to_dict(event))}\n\n"
                 emitted += 1
+        except streaming_live.OutOfOrderBarError as exc:
+            # The topic stopped being chronological. Replay refuses the bar
+            # rather than stepping the book backwards; the client is told why
+            # the stream ended without a summary instead of seeing it drop.
+            failed = str(exc)
         finally:
             stream.close()
             slots.release(user.id)
+        if failed:
+            yield f"data: {json.dumps({'event': 'error', 'detail': failed})}\n\n"
         if truncated:
             yield f"data: {json.dumps({'event': 'truncated', 'detail': truncated})}\n\n"
 

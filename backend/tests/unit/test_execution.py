@@ -1785,3 +1785,208 @@ def test_costs_are_charged_on_rebalance_fills():
     assert fill.price == pytest.approx(100.1)
     assert fill.commission == pytest.approx(fill.value * 0.001)
     assert result.summary.total_commission == pytest.approx(fill.commission)
+
+
+# --- stop priority: the stop nearer the market fills first -------------------
+#
+# A fixed stop is set at entry; a trailing stop ratchets with the best close.
+# Once the trail has climbed above the fixed stop, a falling session reaches
+# the trail first and that is where the position leaves. Testing the fixed stop
+# first regardless awarded a long the *lower* fill.
+
+
+def _stop_priority_series(side):
+    if side == "long":
+        # Entry 100; best close 110 -> 5% trail at 104.5; fixed 10% stop at 90.
+        # The last session opens above both and trades through both.
+        return bars(
+            [100.0, 110.0, 95.0],
+            opens=[100.0, 110.0, 106.0],
+            high=[101.0, 111.0, 107.0],
+            low=[99.0, 109.0, 89.0],
+        )
+    # Short at 100; best close 90 -> trail at 94.5; fixed stop at 110.
+    return bars(
+        [100.0, 90.0, 105.0],
+        opens=[100.0, 90.0, 92.0],
+        high=[101.0, 91.0, 111.0],
+        low=[99.0, 89.0, 91.0],
+    )
+
+
+def _stop_priority_config(**kwargs):
+    return idealized_config(
+        stop_loss_pct=0.10, trailing_stop_pct=0.05,
+        position_sizing="fixed_notional", sizing_value=1_000.0,
+        allow_shorts=True, **kwargs,
+    )
+
+
+@pytest.mark.parametrize(
+    ("side", "direction", "level", "pnl"),
+    [("long", "bullish", 104.5, 45.0), ("short", "bearish", 94.5, 55.0)],
+)
+def test_a_tighter_trailing_stop_beats_a_looser_fixed_stop(side, direction, level, pnl):
+    result = simulate(
+        ["AAA"],
+        {"AAA": _stop_priority_series(side)},
+        [decision("d000", "entry", direction)],
+        _stop_priority_config(),
+    )
+    trade = result.trades[0]
+    assert trade.side == side
+    assert trade.qty == pytest.approx(10.0)
+    assert trade.exit_reason == "trailing_stop"
+    assert trade.exit_price == pytest.approx(level)
+    assert trade.pnl == pytest.approx(pnl)
+
+
+def test_a_fixed_stop_still_fires_when_it_is_the_nearer_one():
+    """The reverse ordering: the trail is still far away (best close = entry),
+    so the fixed stop is the level a falling price meets first."""
+    series = {"AAA": bars([100.0, 97.0], opens=[100.0, 99.0], high=[101.0, 99.5],
+                          low=[99.0, 85.0])}
+    result = simulate(
+        ["AAA"], series, [decision("d000", "entry", "bullish")],
+        idealized_config(stop_loss_pct=0.02, trailing_stop_pct=0.10),
+    )
+    assert result.trades[0].exit_reason == "stop_loss"
+    assert result.trades[0].exit_price == pytest.approx(98.0)
+
+
+# --- streaming ATR from an empty constructor --------------------------------
+
+
+def _atr_fixture():
+    # Six sessions with a known range; an entry on the fifth (index 4) has an
+    # ATR(3) and so an ATR stop. The seventh session falls through that stop.
+    return bars(
+        [100.0, 101.0, 102.0, 103.0, 104.0, 104.0, 99.0],
+        opens=[100.0, 101.0, 102.0, 103.0, 104.0, 104.0, 103.5],
+        high=[101.0, 102.0, 103.0, 104.0, 105.0, 105.0, 104.0],
+        low=[99.0, 100.0, 101.0, 102.0, 103.0, 103.0, 98.0],
+    )
+
+
+def test_a_stream_that_starts_empty_maintains_the_atr_a_batch_run_computes():
+    """Before, a simulator constructed with no bars never initialised its ATR
+    state, so a live replay's ATR stop was silently absent (None vs 101)."""
+    import numpy as np
+
+    series = _atr_fixture()
+    config = idealized_config(atr_stop_multiple=1.0, atr_period=3)
+    decisions = [decision("d004", "entry", "bullish")]
+
+    batch = ExecutionSimulator(["AAA"], {"AAA": series[:6]}, config)
+    streamed = ExecutionSimulator(["AAA"], {"AAA": []}, config)
+    for bar in series[:6]:
+        streamed.ingest("AAA", bar)
+    assert np.array_equal(streamed._atr["AAA"], batch._atr["AAA"], equal_nan=True)
+
+    for simulator in (batch, streamed):
+        for day in ("d000", "d001", "d002", "d003", "d004", "d005"):
+            simulator.step_day(day, [d for d in decisions if d.date == day])
+    assert streamed.fills == batch.fills
+    stops = [s._positions["AAA"].stop_price for s in (batch, streamed)]
+    # ATR(3) at d004 is mean(TR[1..3]) = 2.0, so the stop is 104 - 2 = 102.
+    assert stops == [pytest.approx(102.0), pytest.approx(102.0)]
+
+
+def test_a_stream_that_starts_empty_exits_on_its_atr_stop_like_batch():
+    series = _atr_fixture()
+    config = idealized_config(atr_stop_multiple=1.0, atr_period=3)
+    decisions = [decision("d004", "entry", "bullish")]
+    batch = simulate(["AAA"], {"AAA": series}, decisions, config)
+
+    streamed = ExecutionSimulator(["AAA"], {"AAA": []}, config)
+    for bar in series:
+        streamed.ingest("AAA", bar)
+        streamed.step_day(bar.date, [d for d in decisions if d.date == bar.date])
+
+    assert batch.trades[0].exit_reason == "stop_loss"
+    assert batch.trades[0].exit_price == pytest.approx(102.0)
+    assert streamed.trades() == batch.trades
+    assert streamed.fills == batch.fills
+
+
+# --- trade return: dividend cash, not a per-share accumulator ----------------
+
+
+def _dividend_run(closes, volumes, decisions, *, ex_date="d001", side_short=False, **config):
+    from quantlab.execution import CorporateAction
+
+    series = [
+        Bar(date=f"d{i:03d}", open=c, high=c, low=c, close=c, volume=v)
+        for i, (c, v) in enumerate(zip(closes, volumes, strict=True))
+    ]
+    settings = {
+        "position_sizing": "fixed_notional", "sizing_value": 20_000.0,
+        "max_volume_participation": 0.1, "order_expiry_days": 5,
+        "price_adjustment": "split_dividend", "allow_shorts": side_short,
+    }
+    settings.update(config)
+    return simulate(
+        ["AAA"], {"AAA": series}, decisions, idealized_config(**settings),
+        {"AAA": [CorporateAction(ex_date, "dividend", dividend=1.0)]},
+    )
+
+
+def test_a_dividend_counts_only_on_shares_held_on_its_ex_date():
+    """100 bought at 100; a $1 dividend ($100 cash); 100 more at 99 after it;
+    all 200 sold at 99. Price P&L -100, dividends +100: flat. The old per-share
+    sum credited the whole $1 to every share, later ones included (+0.5%)."""
+    result = _dividend_run(
+        [100.0, 99.0, 99.0],
+        [1_000, 1_000, 1_000_000],
+        [decision("d000", "entry", "bullish"), decision("d002", "exit", "bearish")],
+    )
+    trade = result.trades[0]
+    assert trade.qty == pytest.approx(200.0)
+    assert trade.entry_price == pytest.approx(99.5)
+    assert trade.dividends == pytest.approx(100.0)
+    assert trade.pnl == pytest.approx(0.0)
+    assert trade.return_pct == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize(
+    ("direction", "closing", "short", "cash"),
+    [("bullish", "bearish", False, 100.0), ("bearish", "bullish", True, -100.0)],
+)
+def test_a_dividend_is_not_paid_on_shares_already_sold(direction, closing, short, cash):
+    """200 opened at 100; the exit's volume cap closes 100 at 100 before the
+    ex-date and the other 100 at 99 after it. Only the 100 still held receive
+    (or, short, owe) the $1, and the trade is flat. The old return applied the
+    full $1 to the whole position and reported +/-0.5%."""
+    result = _dividend_run(
+        [100.0, 100.0, 99.0],
+        [1_000_000, 1_000, 1_000],
+        [decision("d000", "entry", direction), decision("d001", "exit", closing)],
+        ex_date="d002",
+        side_short=short,
+    )
+    trade = result.trades[0]
+    assert trade.qty == pytest.approx(200.0)
+    assert trade.open is False
+    assert trade.dividends == pytest.approx(cash)
+    assert trade.pnl == pytest.approx(0.0)
+    assert trade.return_pct == pytest.approx(0.0)
+    assert [(f.date, f.qty) for f in result.fills[1:]] == [("d001", 100.0), ("d002", 100.0)]
+
+
+
+def test_a_partial_exit_then_an_add_keeps_the_shares_already_sold_at_their_price():
+    from quantlab.execution.engine import ExecutionSimulator
+
+    sim = ExecutionSimulator(
+        ["AAA"], {"AAA": volume_bars([10.0, 20.0, 30.0, 30.0], [1_000_000] * 4)},
+        idealized_config(),
+    )
+    sim._open("d000", "AAA", "long", 10.0, 0, False, qty_limit=100)
+    sim._close("d001", "AAA", 20.0, 1, "signal", qty_limit=50)  # +500 realised
+    sim._open("d002", "AAA", "long", 30.0, 2, False, qty_limit=50)  # re-averages to 20
+    sim._close("d003", "AAA", 30.0, 3, "signal")  # +1,000 on the 100 held
+    (trade,) = sim.trades()
+    # 2,500 put up (1,000 + 1,500), 4,000 back (1,000 + 3,000): +1,500, +60%.
+    # Re-pricing the 50 sold at d001 at the later average (20) would say 1,000.
+    assert trade.pnl == pytest.approx(1_500.0)
+    assert trade.return_pct == pytest.approx(0.60)

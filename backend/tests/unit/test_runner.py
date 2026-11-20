@@ -565,3 +565,59 @@ def test_a_name_missing_one_of_two_concepts_counts_as_missing():
     assert coverage.instruments_with_facts == 0
     assert coverage.missing_by_concept == {"net_income": 1, "shares_outstanding": 2}
     assert coverage.instruments_missing_facts == ["AAA", "BBB"]
+
+
+# --- (a2) warm-up follows the parameters, not the declared default -----------
+
+
+def test_warmup_follows_the_effective_slow_window(conn):
+    """sma-crossover declares 51 bars for its default slow=50. With slow=90 it
+    needs 91: loading only 51 left SMA(90) undefined for the window's first
+    ~40 sessions, and every crossover in them silently disappeared."""
+    from quantlab.research.runner import prepare_run
+
+    symbols = _symbols(conn)
+    overrides = {"fast": 5, "slow": 90}
+    start, end = "2024-06-01", "2024-11-30"
+
+    prepared = prepare_run(
+        conn, model_name="sma-crossover", overrides=overrides,
+        symbols=symbols, start_date=start, end_date=end,
+    )
+    assert prepared.spec.lookback_days == 91
+
+    short = run_experiment(
+        conn, model_name="sma-crossover", overrides=overrides,
+        symbols=symbols, start_date=start, end_date=end,
+    )
+    long_run = run_experiment(
+        conn, model_name="sma-crossover", overrides=overrides,
+        symbols=symbols, start_date="2023-01-01", end_date=end,
+    )
+    in_window = [(s.symbol, s.date) for s in long_run.signals if start <= s.date <= end]
+    early = [item for item in in_window if item[1] < "2024-07-15"]
+    assert early, "the fixture must cross within the first weeks of the window"
+    assert [(s.symbol, s.date) for s in short.signals] == in_window
+
+
+def test_a_deeper_parameter_loads_more_warm_up_but_does_not_shorten_the_window(tmp_path):
+    """slow=200 needs 201 bars of history -- loaded before the window -- but a
+    six-month window that was long enough stays long enough."""
+    from quantlab.research import runner as research_runner
+    from quantlab.storage import backends, db, repository
+    from quantlab.synthetic.generator import generate_universe
+
+    path = tmp_path / "w.db"
+    conn = db.connect(path)
+    db.bootstrap(conn)
+    repository.upsert_instruments(conn)
+    repository.insert_bars(conn, generate_universe())
+    conn.commit()
+    conn.close()
+    backend = backends.SqliteBackend(str(path))
+    symbol = backend.list_instruments()["items"][0]["symbol"]
+    prepared = research_runner.prepare_run(
+        backend, model_name="sma-crossover", overrides={"fast": 50, "slow": 200},
+        symbols=[symbol], start_date="2024-07-01", end_date="2024-12-31",
+    )
+    assert prepared is not None

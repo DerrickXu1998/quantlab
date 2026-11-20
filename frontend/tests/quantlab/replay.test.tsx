@@ -3,7 +3,9 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   parseSseFrames,
+  PREPARING_ATTEMPTS,
   replayStreamUrl,
+  STILL_PREPARING,
   streamReplay,
   type ReplayEvent,
 } from '../../src/api/replay';
@@ -32,7 +34,8 @@ async function settle(): Promise<void> {
 class FakeStream {
   static instances: FakeStream[] = [];
   /** Set by a test to make the next fetch a refusal instead of a stream. */
-  static refuseNext: { status: number; body: unknown } | null = null;
+  static refuseNext: { status: number; body: unknown; headers?: Record<string, string> } | null =
+    null;
 
   readonly url: string;
   readonly headers: Record<string, string>;
@@ -59,7 +62,7 @@ class FakeStream {
     if (refusal) {
       return new Response(JSON.stringify(refusal.body), {
         status: refusal.status,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...refusal.headers },
       });
     }
     const body = new ReadableStream<Uint8Array>({
@@ -225,6 +228,68 @@ describe('streamReplay', () => {
     expect(errors[0]).toMatch(/too many concurrent replay streams/);
   });
 
+  it('waits out a replay that is still being prepared, then streams it', async () => {
+    FakeStream.refuseNext = {
+      status: 409,
+      body: { detail: 'the replay of run run-1 is being prepared; try again shortly' },
+      headers: { 'Retry-After': '0' },
+    };
+    const errors: string[] = [];
+    const seen: ReplayEvent[] = [];
+    let preparing = 0;
+
+    streamReplay('run-1', {
+      onEvent: (event) => seen.push(event),
+      onError: (message) => errors.push(message),
+      onPreparing: () => (preparing += 1),
+    });
+    await settle();
+
+    expect(preparing).toBe(1);
+    expect(FakeStream.instances).toHaveLength(2);
+    await FakeStream.latest().emit(equityEvent('2024-01-02', 100_123.4));
+    expect(seen).toHaveLength(1);
+    expect(errors).toEqual([]);
+  });
+
+  it('says a long rebuild is still under way when it stops waiting, not that it failed', async () => {
+    vi.useFakeTimers();
+    try {
+      const errors: string[] = [];
+      const preparing = () => ({
+        status: 409,
+        body: { detail: 'being prepared' },
+        headers: { 'Retry-After': '0' },
+      });
+      FakeStream.refuseNext = preparing();
+      const fetchMock = vi.mocked(fetch);
+      fetchMock.mockImplementation((url, init) => {
+        FakeStream.refuseNext = preparing();
+        return Promise.resolve(new FakeStream(String(url), init as RequestInit).response());
+      });
+      streamReplay('run-1', { onEvent: () => {}, onError: (m) => errors.push(m) });
+      await vi.runAllTimersAsync();
+      expect(errors).toEqual([STILL_PREPARING]);
+      expect(FakeStream.instances).toHaveLength(PREPARING_ATTEMPTS);
+    } finally {
+      vi.mocked(fetch).mockImplementation((url, init) =>
+        Promise.resolve(new FakeStream(String(url), init as RequestInit).response()),
+      );
+      vi.useRealTimers();
+    }
+  });
+
+  it('treats a 409 without Retry-After as final: a failed run has nothing to replay', async () => {
+    FakeStream.refuseNext = { status: 409, body: { detail: 'run run-1 failed' } };
+    const errors: string[] = [];
+
+    streamReplay('run-1', { onEvent: () => {}, onError: (message) => errors.push(message) });
+    await settle();
+
+    expect(FakeStream.instances).toHaveLength(1);
+    expect(errors[0]).toMatch(/run run-1 failed/);
+  });
+
   it('reports a failure once, closes, and never reconnects to double-count', async () => {
     const errors: string[] = [];
     const seen: ReplayEvent[] = [];
@@ -341,6 +406,31 @@ describe('ReplayPanel', () => {
     expect(screen.getByTestId('replay-status')).toHaveTextContent('Complete');
   });
 
+  it('says when a replay was rebuilt rather than recorded', async () => {
+    await startReplay();
+    const source = FakeStream.latest();
+    await act(() => source.emit({ ...summaryEvent, reconstructed: true }));
+    expect(screen.getByTestId('replay-reconstructed')).toHaveTextContent(/re-executed once/i);
+  });
+
+  it('says nothing extra for a recorded replay', async () => {
+    await startReplay();
+    await act(() => FakeStream.latest().emit(summaryEvent));
+    expect(screen.queryByTestId('replay-reconstructed')).not.toBeInTheDocument();
+  });
+
+  it('renders a missing close and an undefined mark as dashes, not a crash', async () => {
+    await startReplay();
+    const source = FakeStream.latest();
+    await act(() => source.emit({ event: 'bar', date: '2024-01-02', closes: { ZZTRND: null } }));
+    await act(() =>
+      source.emit({
+        event: 'equity', date: '2024-01-02', equity: null, cash: 1, positions: 0, realized_pnl: 0,
+      }),
+    );
+    expect(screen.getByText(/ZZTRND —/)).toBeInTheDocument();
+  });
+
   it('pauses the display while the stream continues, then catches up on resume', async () => {
     const user = await startReplay();
     const source = FakeStream.latest();
@@ -361,6 +451,24 @@ describe('ReplayPanel', () => {
     expect(stats).toHaveTextContent('2024-01-03');
     expect(stats).toHaveTextContent('$101,000');
     expect(screen.getByTestId('replay-status')).toHaveTextContent('Streaming');
+  });
+
+  it('keeps a replay that finished while paused, then shows it on resume', async () => {
+    const user = await startReplay();
+    const source = FakeStream.latest();
+    // Paused before the first frame; a recorded replay then arrives at once.
+    await user.click(screen.getByRole('button', { name: /pause/i }));
+    await act(() => source.emit(equityEvent('2024-01-02', 100_123.4)));
+    await act(() => source.emit(summaryEvent));
+
+    // Complete, so closed -- the server ending its response is no failure.
+    expect(source.closed).toBe(true);
+    await act(() => source.fail());
+    expect(screen.queryByTestId('replay-error')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /resume/i }));
+    expect(screen.getByTestId('replay-status')).toHaveTextContent('Complete');
+    expect(screen.getByTestId('replay-summary')).toHaveTextContent('+23.21%');
   });
 
   it('resets the display and closes the stream on Reset', async () => {

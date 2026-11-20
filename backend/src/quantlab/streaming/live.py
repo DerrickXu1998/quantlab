@@ -5,7 +5,7 @@ The streaming counterpart of ``replay.engine.replay_events``. A publisher
 warehouse window into a chronological bar stream on a Kafka topic; here the
 backend consumes that stream, re-runs the rule's ``compute`` on each symbol's
 history as every bar arrives, and trades the new signals through the
-same ``PortfolioSimulator``. Rules that declare a ``windowed_lookback`` -- a
+same ``ExecutionSimulator``. Rules that declare a ``windowed_lookback`` -- a
 mathematically bounded window -- are handed only that tail of the history,
 keeping the per-day recompute O(lookback) rather than O(history); recursive
 rules still see the whole growing window, because truncating an EMA or RSI
@@ -13,15 +13,33 @@ would change its values.
 
 The key invariant -- live == batch -- rests on Constitution VII: the rules are
 causal, and the truncation sweep proves ``compute`` on a truncated history is
-identical to batch, so recomputing on a growing window emits exactly the
-signals a batch run over the same bars stores. A ``fired`` set on
-``(symbol, signal date)`` keeps each recompute from re-emitting old signals.
+identical to batch. So each arriving day is computed against exactly the
+history that existed that day, and only an event dated that day is emitted
+and traded. A signal is never released later than its own date: a backdated
+event would be filled at a later session's prices, which no batch run does.
+Each ``(symbol, date)`` is computed once -- a duplicate bar is skipped -- so
+nothing is ever emitted twice; every event the rule dates that day is kept,
+as batch keeps them.
+
+There is no lookback gate here: the rule itself is silent until its
+indicators are defined, and gating on a (conservatively declared) lookback
+would drop the first in-window events of a short warm-up that a batch run
+over the same bars keeps. One divergence is inherent: batch skips a symbol
+whose *whole* loaded history is shorter than the lookback, which a stream
+cannot know until it ends. Such a symbol (say, listed days before ``end``) can
+signal here and not in batch; the summary then does not reconcile.
 
 Warm-up mirrors ``research.runner``: bars dated before ``start`` extend the
 compute windows (a slow SMA needs its lookback) but produce no events and no
 trades. Bars after ``end``, symbols outside the selection, and duplicate
 (symbol, date) bars -- a re-published overlapping range on the same topic --
-are ignored.
+are ignored. A bar dated *before* one already consumed is not ignored: the
+stream has stopped being chronological, and replay refuses it
+(:class:`OutOfOrderBarError`) rather than walking the book backwards. So a
+re-publish is tolerated only as far as it repeats bars already consumed: one
+that brings a selected symbol's history for the first time (publish 1 had
+[A, B], publish 2 adds C over the same range) is out of order, and is refused
+rather than silently dropping C. Publish a selection's symbols together.
 """
 
 from __future__ import annotations
@@ -46,14 +64,32 @@ from quantlab.research import errors, performance, runner
 from quantlab.storage.warehouse import Bar
 
 
+class OutOfOrderBarError(ValueError):
+    """The stream delivered a bar dated before one it already delivered."""
+
+    def __init__(self, symbol: str, date: str, latest: str) -> None:
+        self.symbol = symbol
+        self.date = date
+        self.latest = latest
+        super().__init__(
+            f"out-of-order bar: {symbol} {date} arrived after {latest}; "
+            "a live replay needs a chronological stream (were the selected symbols "
+            "published separately? publish them together)"
+        )
+
+
 def resolve_rule(model_name: str, overrides: dict[str, Any]):
     """Same resolution and validation a batch run gets, with its errors.
 
     Public so the API layer can validate a request eagerly (404/422) before
-    opening a stream, without touching the bus first.
+    opening a stream, without touching the bus first. Role validation goes
+    through the batch path itself (``runner.resolve_spec``), so a filter-only
+    rule -- one that reports a regime, not a tradeable event -- is refused
+    here exactly as a batch run refuses it.
     """
     rule = runner.resolve_model(model_name, None)
     effective = runner.validate_overrides(rule, dict(overrides))
+    runner.resolve_spec(model_name=model_name, parameters=dict(overrides))
     return rule, effective
 
 
@@ -92,7 +128,6 @@ def live_replay_events(
     sim = ExecutionSimulator(symbols, {symbol: [] for symbol in symbols}, config)
     windows: dict[str, list[Bar]] = {symbol: [] for symbol in symbols}
     seen_bars: dict[str, set[str]] = {symbol: set() for symbol in symbols}
-    fired: set[tuple[str, str]] = set()  # (symbol, signal date)
     curve: list[performance.EquityPoint] = []
     # Rules with a mathematically bounded window (declared on the rule) need
     # only their tail of the history, not the whole growing window -- that
@@ -111,26 +146,19 @@ def live_replay_events(
 
         new: list[tuple[str, Any]] = []
         for symbol in sorted(todays):
+            # The history as of today, and nothing else: the window ends with
+            # today's bar. A bounded rule needs only its tail of it.
             window = windows[symbol]
-            # Engine parity: a rule stays silent until its lookback exists.
-            if len(window) < rule.lookback_days:
-                continue
-            # Truncate only past the day the untruncated compute became
-            # possible (len == lookback_days, the `continue` above grows the
-            # window one bar at a time). That day's full-window compute emits
-            # every retroactive in-window signal and records them in `fired`,
-            # so from the next bar on the tail holds nothing new.
-            if tail_days is not None and len(window) > max(tail_days, rule.lookback_days):
+            if tail_days is not None and len(window) > tail_days:
                 window = window[-tail_days:]
             for event in rule.compute(window, **effective):
-                key = (symbol, event.date)
-                if key in fired:
+                # Only today's event. An earlier-dated one was either emitted
+                # on its own day or could not have been (history too short
+                # then); releasing it now would trade a past signal at
+                # today's prices -- a fill no batch run makes.
+                if event.date != day:
                     continue
-                fired.add(key)
-                # Causal rules emit at the arriving bar's date, so new events
-                # land on `day`; an out-of-window date is warm-up history.
-                if start <= event.date <= day:
-                    new.append((symbol, event))
+                new.append((symbol, event))
 
         for symbol, event in new:  # already (symbol)-ordered by the scan above
             yield ReplaySignal(
@@ -183,6 +211,7 @@ def live_replay_events(
     def generate() -> Iterator[ReplayEvent]:
         pending_date: str | None = None
         pending: dict[str, Bar] = {}
+        latest_date: str | None = None  # the newest bar date consumed so far
         for message in bar_stream:
             if message.get("type") == "end":
                 break
@@ -194,10 +223,14 @@ def live_replay_events(
                 break  # the stream is chronological; nothing relevant follows
             if date in seen_bars[symbol]:
                 continue  # an overlapping re-publish on the topic, not a new bar
+            if latest_date is not None and date < latest_date:
+                # Appending it would put a past bar at the end of a window and
+                # step the book back to a date it has already closed.
+                raise OutOfOrderBarError(symbol, date, latest_date)
+            latest_date = date
             # Flush the finished date BEFORE this bar joins a window, so a
             # compute for day T never sees a bar from T+1 (Constitution VII) --
-            # an early-discovered signal would both break chronology and
-            # poison the fired set, suppressing its own emission.
+            # an early-discovered signal would break chronology.
             if pending_date is not None and date != pending_date:
                 yield from process_day(pending_date, pending)
                 pending = {}

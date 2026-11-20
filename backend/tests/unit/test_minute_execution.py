@@ -229,3 +229,67 @@ def test_the_cache_reads_one_symbol_month_once():
     assert len(cache("AAA", "2024-02-05")) == 1
     assert cache("AAA", "2024-02-06") == []
     assert loads == [("AAA", "2024-02-01", "2024-02-29")]
+
+
+# --- stop priority under minute resolution ------------------------------------
+#
+# Entry 100 (10 shares); best close 110 (long) or 90 (short) sets a 5% trail at
+# 104.5 / 94.5, well inside the 10% fixed stop at 90 / 110. Whichever stop is
+# nearer the market is the one the price meets first.
+
+PRIORITY = {
+    "stop_loss_pct": 0.10, "trailing_stop_pct": 0.05,
+    "position_sizing": "fixed_notional", "sizing_value": 1_000.0,
+    "allow_shorts": True, "intraday_resolution": "minute",
+}
+
+
+def _priority_sessions(side, last):
+    best = 110 if side == "long" else 90
+    return [
+        day("2024-01-02", 100, 100, 100, 100),
+        day("2024-01-03", best, best, best, best),
+        day("2024-01-04", *last),
+    ]
+
+
+def _enter(side):
+    direction = "bullish" if side == "long" else "bearish"
+    return [Decision(date="2024-01-02", symbol="AAA", kind="entry", direction=direction)]
+
+
+@pytest.mark.parametrize(
+    ("side", "session", "minutes", "price", "time"),
+    [
+        # Opens above the trail, one minute trades through both stops.
+        ("long", (106, 107, 85, 95), [minute("09:30", 106, 106.5, 105, 105.5),
+                                      minute("09:31", 105.5, 105.5, 85, 88)], 104.5, "09:31"),
+        ("short", (92, 115, 91, 105), [minute("09:30", 92, 93, 91.5, 92.5),
+                                       minute("09:31", 92.5, 115, 92.5, 112)], 94.5, "09:31"),
+        # Gaps through both at the official open: the open, as the trail.
+        ("long", (88, 89, 85, 86), [minute("09:30", 88, 89, 85, 86)], 88, "09:30"),
+        ("short", (112, 115, 111, 113), [minute("09:30", 112, 115, 111, 113)], 112, "09:30"),
+    ],
+)
+def test_minutes_fill_the_nearer_trailing_stop_not_the_looser_fixed_one(
+    side, session, minutes, price, time
+):
+    result, _ = run(
+        _priority_sessions(side, session), {"2024-01-04": minutes}, _enter(side), **PRIORITY
+    )
+    trade = result.trades[0]
+    assert (trade.exit_reason, trade.exit_time) == ("trailing_stop", time)
+    assert trade.exit_price == pytest.approx(price)
+    assert result.summary.minute_resolved_exits == 1
+
+
+def test_one_minute_with_a_stop_and_a_target_still_resolves_to_the_stop():
+    """Unchanged by the stop ordering: inside one minute the order of a stop
+    and a target is unknowable, so the stop wins."""
+    minutes = {"2024-01-03": [minute("09:30", 100, 106, 94, 100)]}
+    result, _ = run(
+        SESSIONS, minutes, [buy("2024-01-02")], intraday_resolution="minute",
+        trailing_stop_pct=0.20, **STOP_AND_TARGET,
+    )
+    assert result.trades[0].exit_reason == "stop_loss"
+    assert result.trades[0].exit_price == pytest.approx(95.0)

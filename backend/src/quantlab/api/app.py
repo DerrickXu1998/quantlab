@@ -213,6 +213,10 @@ def create_app(db_path: str | Path | None = None, backend=None) -> FastAPI:
             # allow_credentials stays off deliberately.
             allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
             allow_headers=["content-type", "authorization"],
+            # Read by the replay client: Retry-After on a 409 "being
+            # prepared", and whether a replay was recorded or rebuilt.
+            # Neither is CORS-safelisted.
+            expose_headers=["Retry-After", "X-Replay-Source"],
         )
 
     @app.middleware("http")

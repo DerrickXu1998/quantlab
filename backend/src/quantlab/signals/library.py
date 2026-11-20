@@ -104,6 +104,7 @@ def _gate_events(
         ),
     },
     lookback_days=28,  # EMA(slow) defined at index slow-1; a cross needs T-1 too
+    effective_lookback=lambda p: max(p["fast"], p["slow"]) + 2,
     scale_class="scale_free",
     direction_semantics=(
         "bullish: EMA(fast) crossed above EMA(slow) on the signal date; "
@@ -151,6 +152,7 @@ def ema_crossover(bars, fast: int = 12, slow: int = 26) -> list[SignalEvent]:
         ),
     },
     lookback_days=30,  # ADX is defined from 2 * period
+    effective_lookback=lambda p: 2 * p["period"] + 2,
     scale_class="scale_free",
     direction_semantics=(
         "A filter, so it emits on every bar: bullish means ADX > threshold and the "
@@ -200,6 +202,7 @@ def adx_trend_filter(bars, period: int = 14, threshold: float = 25.0) -> list[Si
         ),
     },
     lookback_days=36,  # signal line defined at slow + signal - 2; a cross needs T-1
+    effective_lookback=lambda p: max(p["fast"], p["slow"]) + p["signal"] + 1,
     scale_class="scale_free",
     direction_semantics=(
         "bullish: the MACD line crossed above its signal line on the signal date; "
@@ -263,6 +266,7 @@ def macd_crossover(
         ),
     },
     lookback_days=37,  # histogram defined at slow + signal - 2; a turn needs T-2
+    effective_lookback=lambda p: max(p["fast"], p["slow"]) + p["signal"] + 2,
     scale_class="scale_free",
     direction_semantics=(
         "bullish: the histogram's one-bar slope turned from falling-or-flat to "
@@ -324,6 +328,7 @@ def macd_histogram_slope(
         ),
     },
     lookback_days=15,
+    effective_lookback=lambda p: p["period"] + 3,
     scale_class="scale_free",
     direction_semantics=(
         "bullish: the `period`-bar rate of change crossed up through `upper`; "
@@ -391,6 +396,7 @@ def roc_momentum(
         ),
     },
     lookback_days=20,
+    effective_lookback=lambda p: p["k_period"] + p["d_period"] + 3,
     scale_class="scale_free",
     direction_semantics=(
         "bullish: the oscillator exited the oversold zone (was < oversold, now >= "
@@ -457,6 +463,7 @@ def stochastic_threshold(
         ),
     },
     lookback_days=22,
+    effective_lookback=lambda p: p["window"] + 2,
     scale_class="price_scaled",
     direction_semantics=(
         "bullish: the close was below the lower band and has closed back inside it; "
@@ -513,6 +520,7 @@ def bollinger_reversion(
         ),
     },
     lookback_days=22,
+    effective_lookback=lambda p: p["window"] + 2,
     scale_class="scale_free",
     direction_semantics=(
         "bullish: the standard score was below -threshold and has come back above "
@@ -567,6 +575,7 @@ def zscore_reversion(
         ),
     },
     lookback_days=16,
+    effective_lookback=lambda p: p["period"] + 2,
     scale_class="scale_free",
     direction_semantics=(
         "A filter, so it emits on every bar: bullish while RSI is within "
@@ -607,6 +616,7 @@ def rsi_zone(bars, period: int = 14, floor: float = 0.0, ceiling: float = 50.0):
         ),
     },
     lookback_days=22,
+    effective_lookback=lambda p: max(p["entry_window"], p["exit_window"]) + 2,
     scale_class="price_scaled",
     direction_semantics=(
         "bullish: the close exceeded the highest high of the prior `entry_window` "
@@ -669,6 +679,7 @@ def donchian_breakout(
         ),
     },
     lookback_days=22,
+    effective_lookback=lambda p: p["window"] + 2,
     scale_class="scale_free",
     direction_semantics=(
         "A filter, so it emits on every bar: bullish when the day's volume is at "
@@ -774,6 +785,7 @@ def _as_of(series_bars, dates: list[str], max_stale_days: int) -> np.ndarray:
         ),
     },
     lookback_days=25,  # covers the default HY window's warm-up in the loaded series
+    effective_lookback=lambda p: p["hy_window"] + 5,
     scale_class="scale_free",
     direction_semantics=(
         "A filter, so it emits on every bar where the macro state is known: bullish "

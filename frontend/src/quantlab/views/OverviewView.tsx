@@ -16,6 +16,7 @@ import { Chip } from '../chrome/FloatingChips';
 import { Panel } from '../chrome/Panel';
 import { useRunPerformance } from '../data/useRunPerformance';
 import { Assumptions } from '../panels/Assumptions';
+import { ReconstructedNotice } from '../panels/ReconstructedNotice';
 import { PortfolioSummary } from '../panels/PortfolioSummary';
 import { PositionsTable } from '../panels/PositionsTable';
 import { StatRow } from '../panels/StatRow';
@@ -200,6 +201,7 @@ export function OverviewView() {
         ) : performance.status === 'ready' ? (
           <>
             <CascadeItem index={1}>
+              <ReconstructedNotice reconstructed={performance.performance.reconstructed} />
               <PortfolioSummary run={run} performance={performance.performance} />
             </CascadeItem>
 

@@ -39,9 +39,10 @@ def _sma_crossover_studies(bars, fast: int = 20, slow: int = 50) -> list[StudyLi
         ),
     },
     lookback_days=51,  # SMA(slow) must be defined at both T-1 and T
-    # SMA is a bounded window, not a recursion: the last slow + 1 bars fully
-    # determine every value a crossover check can read.
-    windowed_lookback=lambda p: p["slow"] + 1,
+    # SMA is a bounded window, not a recursion: the last max(fast, slow) + 1
+    # bars fully determine every value a crossover check can read. Both
+    # windows count -- nothing requires fast < slow.
+    windowed_lookback=lambda p: max(p["fast"], p["slow"]) + 1,
     studies=_sma_crossover_studies,
     scale_class="scale_free",
     direction_semantics=(
@@ -99,6 +100,7 @@ def sma_crossover(bars, fast: int = 20, slow: int = 50) -> list[SignalEvent]:
         ),
     },
     lookback_days=16,  # RSI(period) defined at index `period`; an exit needs the prior value
+    effective_lookback=lambda p: p["period"] + 2,
     scale_class="scale_free",
     direction_semantics=(
         "bearish: RSI exited the overbought zone (was > overbought, now <= overbought); "
