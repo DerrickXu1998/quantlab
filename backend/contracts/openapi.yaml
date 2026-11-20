@@ -1602,6 +1602,11 @@ paths:
       tags: [research]
       operationId: listUniverses
       summary: The named lists a screen may be run over
+      security: [{ bearerAuth: [] }]
+      description: >
+        The shared universes (the data pipeline's, and the server's default
+        `all`) plus the ones the caller published. Another user's universes
+        are never listed.
       responses:
         "200":
           description: One row per snapshot
@@ -1613,6 +1618,11 @@ paths:
       tags: [research]
       operationId: publishUniverse
       summary: Publish a custom universe snapshot
+      security: [{ bearerAuth: [] }]
+      description: >
+        The snapshot belongs to the caller: only they list, resolve or screen
+        it. A shared universe's name cannot be taken. Snapshots are
+        append-only, so a published one cannot be edited.
       requestBody:
         required: true
         content:
@@ -1627,7 +1637,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/Universe"
         "422":
-          description: Unknown symbols or duplicate snapshot
+          description: >
+            Unknown symbols, a duplicate snapshot, a shared universe's name, or
+            the synthetic demo (which has no universe history)
 
   /universes/{name}:
     parameters:
@@ -1640,10 +1652,13 @@ paths:
       tags: [instruments]
       operationId: getUniverseMembers
       summary: The members of a saved universe
+      security: [{ bearerAuth: [] }]
       description: >
         The newest snapshot of `name` captured on or before `as_of` (today when
         omitted) -- the same point-in-time rule a screen applies. What a
         strategy picker loads when the reader chooses a universe saved earlier.
+        A name the caller published resolves to their own snapshots only;
+        another user's universe is a 404.
       parameters:
         - name: as_of
           in: query
@@ -1671,6 +1686,7 @@ paths:
       tags: [research]
       operationId: screen
       summary: Narrow a universe by ratios built from filed accounts
+      security: [{ bearerAuth: [] }]
       description: >
         `universe` is required rather than defaulting to everything, because
         `fundamentals_pit_idx` leads with `instrument_id`: unbounded the query

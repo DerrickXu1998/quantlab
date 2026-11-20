@@ -381,9 +381,10 @@ def get_company_fundamentals(
     operation_id="listUniverses",
     dependencies=[Depends(require_seeded)],
 )
-def list_universes(request: Request) -> dict:
-    """The dated membership lists a screen may be run over."""
-    return backend(request).list_universes()
+def list_universes(request: Request, user: CurrentUser) -> dict:
+    """The dated membership lists a screen may be run over: the shared ones
+    and the caller's own."""
+    return backend(request).list_universes(user.id)
 
 
 @router.post(
@@ -394,10 +395,19 @@ def list_universes(request: Request) -> dict:
     dependencies=[Depends(require_seeded)],
     status_code=201,
 )
-def publish_universe(request: Request, body: schemas.UniversePublishRequest) -> dict:
-    """Publish a custom list of instruments as a named universe snapshot."""
+def publish_universe(
+    request: Request, body: schemas.UniversePublishRequest, user: CurrentUser
+) -> dict:
+    """Publish a custom list of instruments as a named universe snapshot.
+
+    The snapshot is the caller's: nobody else lists, resolves or screens it.
+    Owned by ``user.id`` rather than ``owner_scope(user)``, so a universe saved
+    in single-user mode belongs to the local account, not to everyone.
+    """
     try:
-        return backend(request).publish_universe(body.name, body.symbols, body.snapshot_date)
+        return backend(request).publish_universe(
+            body.name, body.symbols, body.snapshot_date, owner=user.id
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -409,11 +419,14 @@ def publish_universe(request: Request, body: schemas.UniversePublishRequest) -> 
     operation_id="getUniverseMembers",
     dependencies=[Depends(require_seeded)],
 )
-def get_universe_members(request: Request, name: str, as_of: date | None = None) -> dict:
+def get_universe_members(
+    request: Request, name: str, user: CurrentUser, as_of: date | None = None
+) -> dict:
     """The members of a saved universe, as its newest snapshot on or before
     ``as_of`` (today when omitted) recorded them -- what a strategy picker
-    loads when the reader chooses a universe they saved earlier."""
-    members = backend(request).universe_members(name, _as_of(as_of))
+    loads when the reader chooses a universe they saved earlier. Another
+    user's universe reads as absent: a 404, like their runs."""
+    members = backend(request).universe_members(name, _as_of(as_of), user.id)
     if members is None:
         raise HTTPException(
             status_code=404,
@@ -475,7 +488,7 @@ def _screen_constraints(constraints: str | None) -> list[tuple[str, float | None
     return parsed
 
 
-def _universe_detail(request: Request, universe: str, as_of: str) -> str:
+def _universe_detail(request: Request, universe: str, as_of: str, owner: str) -> str:
     """Say which kind of miss it was: a name nobody has, or a date nobody reaches.
 
     Only ever built on the failure path. "Unknown universe" and "that universe
@@ -484,7 +497,7 @@ def _universe_detail(request: Request, universe: str, as_of: str) -> str:
     """
     dates = [
         item["as_of"]
-        for item in backend(request).list_universes()["items"]
+        for item in backend(request).list_universes(owner)["items"]
         if item["name"] == universe
     ]
     if not dates:
@@ -504,6 +517,7 @@ def _universe_detail(request: Request, universe: str, as_of: str) -> str:
 )
 def screen(
     request: Request,
+    user: CurrentUser,
     universe: Annotated[str, Query(min_length=1, description="A universe from /universes")],
     as_of: date | None = None,
     metrics: Annotated[
@@ -542,10 +556,11 @@ def screen(
         sort_by=sort_by,
         descending=descending,
         limit=limit,
+        owner=user.id,
     )
     if result is None:
         raise HTTPException(
-            status_code=404, detail=_universe_detail(request, universe, resolved)
+            status_code=404, detail=_universe_detail(request, universe, resolved, user.id)
         )
     return result
 
