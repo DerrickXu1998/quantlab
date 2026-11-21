@@ -182,6 +182,19 @@ def _headline(performance: dict | None) -> dict | None:
 BACKFILL_SETTLE_SECONDS = 5 * 60
 
 
+def settling(run: dict) -> bool:
+    """Whether ``run`` completed too recently for anything but its own
+    process to write its outputs (``BACKFILL_SETTLE_SECONDS``). The backfill
+    query applies the same window in SQL; request-path rebuilds use this."""
+    stamp = run.get("finished_at")
+    if not stamp:
+        return False
+    finished = datetime.fromisoformat(stamp)
+    if finished.tzinfo is None:
+        finished = finished.replace(tzinfo=UTC)
+    return finished > _now(-BACKFILL_SETTLE_SECONDS)
+
+
 #: ``where_unset``: a run's performance, or why there is none, is written by
 #: its first writer only -- a reason stored is an answer, never overwritten
 #: by a rebuild from later data.

@@ -1268,3 +1268,28 @@ def test_a_stored_reason_is_never_overwritten_by_a_rebuild(client, symbols, db_p
     store.set_rebuilt(run_id, jobs.RunOutputs({"rebuilt": True}, None))
     assert store.get_performance(run_id) is None
     assert store.get_run(run_id)["results_error"] == "recorded reason"
+
+
+def test_a_request_leaves_a_run_that_just_completed_to_its_own_process(
+    client, symbols, db_path, monkeypatch
+):
+    """With no worker a request rebuilds old runs -- but not one inside the
+    settle window: its process may still be re-sending the exact replay, and
+    a rebuild (or its failure reason) stored first would win over it."""
+    from quantlab.storage import experiments
+
+    run_id = client.post("/api/v1/runs", json=_body(symbols)).json()["id"]
+    _drain(client)
+    _forget_replay(db_path, run_id)
+    _inline(client, monkeypatch)
+
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("rebuilt a run its own process may still be recording")
+
+    monkeypatch.setattr(experiments, "BACKFILL_SETTLE_SECONDS", 300)
+    with monkeypatch.context() as patched:
+        patched.setattr(jobs, "rebuild_results", must_not_run)
+        assert client.get(f"/api/v1/runs/{run_id}/replay/summary").status_code == 409
+
+    monkeypatch.setattr(experiments, "BACKFILL_SETTLE_SECONDS", 0)
+    assert client.get(f"/api/v1/runs/{run_id}/replay/summary").json()["reconstructed"] is True

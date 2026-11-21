@@ -38,7 +38,7 @@ from quantlab.logging import get_logger
 from quantlab.replay import engine as replay_engine
 from quantlab.replay import recording as replay_recording
 from quantlab.research import errors, performance, runner
-from quantlab.storage import db
+from quantlab.storage import db, experiments
 
 logger = get_logger(__name__)
 
@@ -468,8 +468,9 @@ def keep_outputs(store, run_id: str, outputs: RunOutputs | None) -> None:
     """
     if outputs is None:
         return
-    has_perf = outputs.performance is not None or outputs.performance_error is not None
-    has_replay = outputs.replay is not None or outputs.replay_error is not None
+    # As _write_outputs reads them: an empty reason is no reason.
+    has_perf = outputs.performance is not None or bool(outputs.performance_error)
+    has_replay = outputs.replay is not None or bool(outputs.replay_error)
     if not (has_perf or has_replay):
         return
 
@@ -789,9 +790,12 @@ def rebuild_old_run(
     with _bookkeeping:
         cooling = now - _last_retryable.get(run_id, -1e18) < REQUEST_COOLDOWN_SECONDS
         refused = run_id in _unrecordable
-    if from_request and (cooling or refused):
+    if from_request and (cooling or refused or experiments.settling(run)):
         # It just failed transiently: a client's next retry must not re-run
         # the whole thing against the same outage (nor even query for it).
+        # Or it just completed: its own process may still be re-sending the
+        # exact record (keep_outputs), which a rebuild -- or its failure
+        # reason -- would otherwise beat to the store, first writer winning.
         return run_id
     # Each read unless the caller has just made it.
     if run.get("results_error"):
