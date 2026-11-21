@@ -183,7 +183,6 @@ def _headline(performance: dict | None) -> dict | None:
 BACKFILL_SETTLE_SECONDS = 5 * 60
 
 
-
 #: ``where_unset``: a run's performance, or why there is none, is written by
 #: its first writer only -- a reason stored is an answer, never overwritten
 #: by a rebuild from later data.
@@ -834,9 +833,7 @@ class SqliteExperimentStore(_RunOutputWrites):
 
     #: Past BACKFILL_SETTLE_SECONDS (the parameter: that cutoff). Unparseable
     #: time counts as settled: never skipped forever.
-    _SETTLED = (
-        "COALESCE(julianday(COALESCE(finished_at, created_at)) < julianday(?), 1)"
-    )
+    _SETTLED = "COALESCE(julianday(COALESCE(finished_at, created_at)) < julianday(?), 1)"
 
     def settled(self, run_id: str) -> bool:
         """Whether the run completed long enough ago (BACKFILL_SETTLE_SECONDS)
