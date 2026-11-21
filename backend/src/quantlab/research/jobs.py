@@ -462,25 +462,34 @@ def keep_outputs(store, run_id: str, outputs: RunOutputs | None) -> None:
     output, and the run still completes. Without this the record in hand
     would be gone, and the output rebuilt later from data as it then stands.
     A write the store refused for good already left its reason, and is not
-    sent again.
+    sent again. A reason in hand (``performance_error``, ``replay_error``) is
+    re-sent like an output: it is the run's answer, and losing it would let
+    the backfill re-simulate that output on today's data.
     """
-    if outputs is None or (outputs.performance is None and outputs.replay is None):
+    if outputs is None:
+        return
+    has_perf = outputs.performance is not None or outputs.performance_error is not None
+    has_replay = outputs.replay is not None or outputs.replay_error is not None
+    if not (has_perf or has_replay):
         return
 
     def resend() -> None:
-        run = store.get_run(run_id) or {}
-        missing = RunOutputs(
-            outputs.performance
-            if outputs.performance is not None
-            and not run.get("results_error")
-            and not store.has_performance(run_id)
-            else None,
-            outputs.replay
-            if outputs.replay is not None and store.get_replay(run_id, events=False) is None
-            else None,
+        run = store.get_run(run_id)
+        if run is None:
+            return  # deleted meanwhile: nothing to keep
+        perf_missing = has_perf and not (
+            run.get("results_error") or store.has_performance(run_id)
         )
-        if missing.performance is not None or missing.replay is not None:
-            store.set_rebuilt(run_id, missing)
+        replay_missing = has_replay and store.get_replay(run_id, events=False) is None
+        if not (perf_missing or replay_missing):
+            return
+        # Only the side the store lacks: a stored one is never sent again.
+        missing = outputs
+        if not perf_missing:
+            missing = replace(missing, performance=None, performance_error=None)
+        if not replay_missing:
+            missing = replace(missing, replay=None, replay_error=None)
+        store.set_rebuilt(run_id, missing)
 
     try:
         # Reads included: the run is saved already, and nothing here may turn
@@ -785,9 +794,10 @@ def rebuild_old_run(
         # the whole thing against the same outage (nor even query for it).
         return run_id
     # Each read unless the caller has just made it.
-    if perf_missing is None:
+    if run.get("results_error"):
+        perf_missing = False  # its failure is its answer
+    elif perf_missing is None:
         perf_missing = not store.has_performance(run_id)
-    perf_missing = perf_missing and not run.get("results_error")
     if replay_missing is None:
         replay_missing = store.get_replay(run_id, events=False) is None
     if not (perf_missing or replay_missing):

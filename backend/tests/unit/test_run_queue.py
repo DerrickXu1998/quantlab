@@ -1212,3 +1212,59 @@ def test_a_closed_pooled_connection_is_an_outage():
 
     InterfaceError.__module__ = "psycopg"
     assert jobs.transient(InterfaceError("the connection is closed"))
+
+
+class _Store:
+    """Just enough of a store for keep_outputs: nothing stored yet."""
+
+    def __init__(self):
+        self.sent = []
+
+    def get_run(self, run_id):
+        return {"id": run_id}
+
+    def has_performance(self, run_id):
+        return False
+
+    def get_replay(self, run_id, events=True):
+        return None
+
+    def set_rebuilt(self, run_id, outputs):
+        self.sent.append(outputs)
+
+
+def test_a_dropped_reason_is_sent_again_like_an_output():
+    """Why performance could not be computed is the run's answer: lost to a
+    blip, the backfill would re-simulate it on today's data instead."""
+    store = _Store()
+    jobs.keep_outputs(
+        store, "r1", jobs.RunOutputs(None, None, replay_error="r", performance_error="p")
+    )
+    assert store.sent == [jobs.RunOutputs(None, None, replay_error="r", performance_error="p")]
+
+
+def test_nothing_is_kept_for_a_run_deleted_meanwhile():
+    class Gone(_Store):
+        def get_run(self, run_id):
+            return None
+
+    store = Gone()
+    jobs.keep_outputs(store, "r1", jobs.RunOutputs(None, None, replay_error="r"))
+    assert store.sent == []
+
+
+def test_a_stored_reason_is_never_overwritten_by_a_rebuild(client, symbols, db_path):
+    """First writer wins for performance OR why there is none: the store
+    holds that rule, so no caller has to remember it."""
+    store = client.app.state.experiments
+    run_id = client.post("/api/v1/runs", json=_body(symbols)).json()["id"]
+    _drain(client)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE experiment_runs SET performance = NULL, headline = NULL, "
+            "performance_error = 'recorded reason' WHERE id = ?",
+            (run_id,),
+        )
+    store.set_rebuilt(run_id, jobs.RunOutputs({"rebuilt": True}, None))
+    assert store.get_performance(run_id) is None
+    assert store.get_run(run_id)["results_error"] == "recorded reason"

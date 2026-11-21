@@ -177,8 +177,15 @@ def _headline(performance: dict | None) -> dict | None:
 #: How long a completed run is left alone before the idle backfill may rebuild
 #: what it lacks. The run's own process may still be re-sending its exact
 #: replay or performance (``jobs.keep_outputs``); a rebuild from today's data
-#: must not race the record.
-BACKFILL_SETTLE_SECONDS = 60
+#: must not race the record. Well past keep_outputs' retries
+#: (``jobs._retry_transient``), with room for a slow store.
+BACKFILL_SETTLE_SECONDS = 5 * 60
+
+
+#: ``where_unset``: a run's performance, or why there is none, is written by
+#: its first writer only -- a reason stored is an answer, never overwritten
+#: by a rebuild from later data.
+_UNSET = " AND performance IS NULL AND performance_error IS NULL"
 
 
 def _now(offset_seconds: float = 0) -> datetime:
@@ -846,7 +853,7 @@ class SqliteExperimentStore(_RunOutputWrites):
         # where_unset: first writer wins (a rebuild racing another).
         conn.execute(
             "UPDATE experiment_runs SET performance = ?, headline = ?, performance_error = NULL "
-            "WHERE id = ?" + (" AND performance IS NULL" if where_unset else ""),
+            "WHERE id = ?" + (_UNSET if where_unset else ""),
             (canonical_json(performance), _json_or_none(_headline(performance)), run_id),
         )
 
@@ -856,7 +863,7 @@ class SqliteExperimentStore(_RunOutputWrites):
     ) -> None:
         conn.execute(
             "UPDATE experiment_runs SET performance_error = ? WHERE id = ?"
-            + (" AND performance IS NULL" if where_unset else ""),
+            + (_UNSET if where_unset else ""),
             (error, run_id),
         )
 
@@ -1414,7 +1421,7 @@ class PostgresExperimentStore(_RunOutputWrites):
         conn.execute(
             "UPDATE experiment_runs SET performance = %s, headline = %s, "
             "performance_error = NULL WHERE run_id = %s"
-            + (" AND performance IS NULL" if where_unset else ""),
+            + (_UNSET if where_unset else ""),
             (json.dumps(performance), _pg_json(_headline(performance)), run_id),
         )
 
@@ -1424,7 +1431,7 @@ class PostgresExperimentStore(_RunOutputWrites):
     ) -> None:
         conn.execute(
             "UPDATE experiment_runs SET performance_error = %s WHERE run_id = %s"
-            + (" AND performance IS NULL" if where_unset else ""),
+            + (_UNSET if where_unset else ""),
             (error, run_id),
         )
 

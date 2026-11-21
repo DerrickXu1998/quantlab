@@ -57,7 +57,7 @@ def pytest_configure(config):
 def _backfill_without_settling(monkeypatch):
     """Let the idle backfill take a run the moment it completes.
 
-    In service a just-completed run is left alone for a minute while its own
+    In service a just-completed run is left alone for a few minutes while its own
     process re-sends any output a blip dropped; tests that backfill right after
     completing a run would otherwise find nothing. The window has its own test.
     """
