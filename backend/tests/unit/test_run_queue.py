@@ -1258,23 +1258,6 @@ def test_nothing_is_kept_for_a_run_deleted_meanwhile():
     assert store.sent == []
 
 
-def test_a_stored_reason_is_never_overwritten_by_a_rebuild(client, symbols, db_path):
-    """First writer wins for performance OR why there is none: the store
-    holds that rule, so no caller has to remember it."""
-    store = client.app.state.experiments
-    run_id = client.post("/api/v1/runs", json=_body(symbols)).json()["id"]
-    _drain(client)
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            "UPDATE experiment_runs SET performance = NULL, headline = NULL, "
-            "performance_error = 'recorded reason' WHERE id = ?",
-            (run_id,),
-        )
-    store.set_rebuilt(run_id, jobs.RunOutputs({"rebuilt": True}, None))
-    assert store.get_performance(run_id) is None
-    assert store.get_run(run_id)["results_error"] == "recorded reason"
-
-
 def test_a_request_leaves_a_run_that_just_completed_to_its_own_process(
     client, symbols, db_path, monkeypatch
 ):

@@ -246,6 +246,20 @@ def test_a_recorded_replay_round_trips_and_is_never_overwritten(store):
     }
 
 
+def test_a_stored_reason_is_never_overwritten_by_a_rebuild(store):
+    """First writer wins for performance OR why there is none: the store
+    holds that rule (both adapters), so no caller has to remember it."""
+    from quantlab.research.jobs import RunOutputs
+
+    result = _make_result()
+    store.save_run(result)
+    store.set_rebuilt(result.id, RunOutputs(None, None, performance_error="recorded reason"))
+    store.set_rebuilt(result.id, RunOutputs({"rebuilt": True}, None))
+    store.set_rebuilt(result.id, RunOutputs(None, None, performance_error="later reason"))
+    assert store.get_performance(result.id) is None
+    assert store.get_run(result.id)["results_error"] == "recorded reason"
+
+
 def test_a_failed_rebuild_is_recorded_and_the_run_is_not_offered_again(store):
     result = _make_result()
     store.save_run(result)

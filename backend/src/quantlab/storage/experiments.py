@@ -187,7 +187,12 @@ def settling(run: dict) -> bool:
     process to write its outputs (``BACKFILL_SETTLE_SECONDS``). The backfill
     query applies the same window in SQL; request-path rebuilds use this.
     As there, a run saved whole (inline: no ``finished_at``) counts from its
-    ``created_at``, and a time that cannot be read counts as settled."""
+    ``created_at``, and a time that cannot be read counts as settled.
+
+    Limits, accepted: ``created_at`` is stamped before the outputs are built,
+    so an inline run whose recording takes most of the window gets less of
+    it; and the stamp is compared with this process's clock, so a store on a
+    skewed clock shifts the window (in service both share one host)."""
     stamp = run.get("finished_at") or run.get("created_at")
     try:
         finished = datetime.fromisoformat(stamp)
