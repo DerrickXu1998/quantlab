@@ -38,7 +38,7 @@ from quantlab.logging import get_logger
 from quantlab.replay import engine as replay_engine
 from quantlab.replay import recording as replay_recording
 from quantlab.research import errors, performance, runner
-from quantlab.storage import db, experiments
+from quantlab.storage import db
 
 logger = get_logger(__name__)
 
@@ -779,9 +779,7 @@ def rebuild_old_run(
     (MAX_DEFER_SECONDS) from requests and the worker alike, so inline mode,
     with no worker, still reaches an answer; memory failures count only in
     the worker (a request may simply have landed beside another job). After
-    any of these, requests leave the run alone for REQUEST_COOLDOWN_SECONDS;
-    they also leave a run that has just completed (``experiments.settling``)
-    to its own process, as the backfill does.
+    any of these, requests leave the run alone for REQUEST_COOLDOWN_SECONDS.
     This bookkeeping is per process and resets on restart -- it bounds
     wasted work, it is not a server-wide cap.
     """
@@ -792,13 +790,9 @@ def rebuild_old_run(
     with _bookkeeping:
         cooling = now - _last_retryable.get(run_id, -1e18) < REQUEST_COOLDOWN_SECONDS
         refused = run_id in _unrecordable
-    if from_request and (cooling or refused or experiments.settling(run)):
+    if from_request and (cooling or refused):
         # It just failed transiently: a client's next retry must not re-run
         # the whole thing against the same outage (nor even query for it).
-        # Or it just completed: it is listed from save_run on, while its own
-        # request (or a worker sharing the store) may still be re-sending the
-        # exact record (keep_outputs). A rebuild -- or its failure reason --
-        # must not beat that to the store, the first writer winning.
         return run_id
     # Each read unless the caller has just made it.
     if run.get("results_error"):

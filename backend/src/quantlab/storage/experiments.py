@@ -44,6 +44,7 @@ class ExperimentStore(Protocol):
     # (quantlab.replay.recording); ``replay`` is a RecordedReplay.
     def get_replay(self, run_id: str, *, events: bool = True) -> dict | None: ...
     def has_performance(self, run_id: str) -> bool: ...
+    def settled(self, run_id: str) -> bool: ...
     def set_rebuilt(self, run_id: str, outputs: Any) -> None: ...
     def next_run_without_replay(self, exclude: list[str] | None = None) -> dict | None: ...
 
@@ -181,31 +182,6 @@ def _headline(performance: dict | None) -> dict | None:
 #: (``jobs._retry_transient``), with room for a slow store.
 BACKFILL_SETTLE_SECONDS = 5 * 60
 
-
-def settling(run: dict) -> bool:
-    """Whether ``run`` completed too recently for anything but its own
-    process to write its outputs (``BACKFILL_SETTLE_SECONDS``). The backfill
-    query applies the same window in SQL; request-path rebuilds use this.
-    As there, a run saved whole (inline: no ``finished_at``) counts from its
-    ``created_at``, and a time that cannot be read counts as settled.
-
-    Limits, accepted: ``created_at`` is stamped before the outputs are built,
-    so an inline run whose recording takes most of the window gets less of
-    it; and the stamp is compared with this process's clock, so a store on a
-    skewed clock shifts the window (in service both share one host)."""
-    stamp = run.get("finished_at")
-    if stamp is None:  # COALESCE, as the SQL: an empty stamp is unreadable
-        stamp = run.get("created_at")
-    if isinstance(stamp, datetime):
-        finished = stamp
-    else:
-        try:
-            finished = datetime.fromisoformat(stamp)
-        except (TypeError, ValueError):
-            return False
-    if finished.tzinfo is None:
-        finished = finished.replace(tzinfo=UTC)
-    return finished > _now(-BACKFILL_SETTLE_SECONDS)
 
 
 #: ``where_unset``: a run's performance, or why there is none, is written by
@@ -850,13 +826,28 @@ class SqliteExperimentStore(_RunOutputWrites):
             row = conn.execute(
                 f"SELECT {self._READ} FROM experiment_runs WHERE status = 'completed' "
                 f"AND {where} AND id NOT IN (SELECT value FROM json_each(?)) "
-                # Unparseable time counts as settled: never skipped forever.
-                "AND COALESCE(julianday(COALESCE(finished_at, created_at)) "
-                "< julianday(?), 1) "
+                f"AND {self._SETTLED} "
                 "ORDER BY created_at DESC, id DESC LIMIT 1",
                 (json.dumps(list(exclude or [])), _stamp(_now(-BACKFILL_SETTLE_SECONDS))),
             ).fetchone()
         return self._row_to_run(row) if row else None
+
+    #: Past BACKFILL_SETTLE_SECONDS (the parameter: that cutoff). Unparseable
+    #: time counts as settled: never skipped forever.
+    _SETTLED = (
+        "COALESCE(julianday(COALESCE(finished_at, created_at)) < julianday(?), 1)"
+    )
+
+    def settled(self, run_id: str) -> bool:
+        """Whether the run completed long enough ago (BACKFILL_SETTLE_SECONDS)
+        for anything but its own process to write its outputs; the backfill's
+        own test. A run not found is settled: nothing waits on it."""
+        with db.connect(self.db_path) as conn:
+            row = conn.execute(
+                f"SELECT {self._SETTLED} FROM experiment_runs WHERE id = ?",
+                (_stamp(_now(-BACKFILL_SETTLE_SECONDS)), run_id),
+            ).fetchone()
+        return row is None or bool(row[0])
 
     def has_performance(self, run_id: str) -> bool:
         """Whether performance is stored, without reading it."""
@@ -1420,11 +1411,23 @@ class PostgresExperimentStore(_RunOutputWrites):
             row = conn.execute(
                 f"SELECT {self._READ} FROM experiment_runs WHERE status = 'completed' "
                 f"AND {where} AND NOT (run_id = ANY(%s)) "
-                "AND COALESCE(finished_at, created_at) < now() - make_interval(secs => %s) "
+                f"AND {self._SETTLED} "
                 "ORDER BY created_at DESC, run_id DESC LIMIT 1",
                 (list(exclude or []), BACKFILL_SETTLE_SECONDS),
             ).fetchone()
         return self._row_to_run(row) if row else None
+
+    #: Past BACKFILL_SETTLE_SECONDS (the parameter), on the database's clock.
+    _SETTLED = "COALESCE(finished_at, created_at) < now() - make_interval(secs => %s)"
+
+    def settled(self, run_id: str) -> bool:
+        """See SqliteExperimentStore.settled."""
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT {self._SETTLED} FROM experiment_runs WHERE run_id = %s",
+                (BACKFILL_SETTLE_SECONDS, run_id),
+            ).fetchone()
+        return row is None or bool(row[0])
 
     def has_performance(self, run_id: str) -> bool:
         with self._connect() as conn:
