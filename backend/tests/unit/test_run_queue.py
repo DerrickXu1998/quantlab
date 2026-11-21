@@ -1282,3 +1282,30 @@ def test_a_request_leaves_a_run_that_just_completed_to_its_own_process(
 
     monkeypatch.setattr(experiments, "BACKFILL_SETTLE_SECONDS", 0)
     assert client.get(f"/api/v1/runs/{run_id}/replay/summary").json()["reconstructed"] is True
+
+
+def test_inside_the_settle_window_performance_is_being_prepared(
+    client, symbols, db_path, monkeypatch
+):
+    """The inline /performance path holds the same line: 409, nothing rebuilt."""
+    from quantlab.storage import experiments
+
+    _inline(client, monkeypatch)
+    run_id = client.post("/api/v1/runs", json=_body(symbols)).json()["id"]
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE experiment_runs SET performance = NULL, headline = NULL WHERE id = ?",
+            (run_id,),
+        )
+
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("rebuilt a run its own process may still be recording")
+
+    monkeypatch.setattr(experiments, "BACKFILL_SETTLE_SECONDS", 300)
+    with monkeypatch.context() as patched:
+        patched.setattr(jobs, "compute_run_performance", must_not_run)
+        patched.setattr(jobs, "rebuild_results", must_not_run)
+        assert client.get(f"/api/v1/runs/{run_id}/performance").status_code == 409
+
+    monkeypatch.setattr(experiments, "BACKFILL_SETTLE_SECONDS", 0)
+    assert client.get(f"/api/v1/runs/{run_id}/performance").status_code == 200

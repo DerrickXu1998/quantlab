@@ -315,6 +315,7 @@ def test_when_a_run_has_settled(monkeypatch):
     assert settling({"finished_at": naive})
     assert not settling({"finished_at": long_ago})
     assert not settling({"created_at": "garbage"})
+    assert not settling({"finished_at": "", "created_at": now.isoformat()})
     assert not settling({})
 
 

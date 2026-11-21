@@ -193,7 +193,9 @@ def settling(run: dict) -> bool:
     so an inline run whose recording takes most of the window gets less of
     it; and the stamp is compared with this process's clock, so a store on a
     skewed clock shifts the window (in service both share one host)."""
-    stamp = run.get("finished_at") or run.get("created_at")
+    stamp = run.get("finished_at")
+    if stamp is None:  # COALESCE, as the SQL: an empty stamp is unreadable
+        stamp = run.get("created_at")
     if isinstance(stamp, datetime):
         finished = stamp
     else:
