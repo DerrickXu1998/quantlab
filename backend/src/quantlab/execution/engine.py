@@ -1025,8 +1025,13 @@ class ExecutionSimulator:
                 if long
                 else position.best_close * (1 + trailing),
             ))
-        # sorted() is stable, so equal levels keep fixed-before-trailing.
-        return sorted(levels, key=lambda item: -item[1] if long else item[1])
+        # At most two, and this runs per held position per bar: swap rather
+        # than sort. Strictly nearer only, so equal levels keep fixed first.
+        if len(levels) == 2 and (
+            levels[1][1] > levels[0][1] if long else levels[1][1] < levels[0][1]
+        ):
+            levels.reverse()
+        return levels
 
     def _protective_exit(self, bar: Any, position: _Position) -> tuple[str, float] | None:
         """The first protective level this bar touched, and where it filled.
