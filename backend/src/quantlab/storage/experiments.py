@@ -194,10 +194,13 @@ def settling(run: dict) -> bool:
     it; and the stamp is compared with this process's clock, so a store on a
     skewed clock shifts the window (in service both share one host)."""
     stamp = run.get("finished_at") or run.get("created_at")
-    try:
-        finished = datetime.fromisoformat(stamp)
-    except (TypeError, ValueError):
-        return False
+    if isinstance(stamp, datetime):
+        finished = stamp
+    else:
+        try:
+            finished = datetime.fromisoformat(stamp)
+        except (TypeError, ValueError):
+            return False
     if finished.tzinfo is None:
         finished = finished.replace(tzinfo=UTC)
     return finished > _now(-BACKFILL_SETTLE_SECONDS)
@@ -248,8 +251,9 @@ class _RunOutputWrites:
         the run: it rolls back to its savepoint, and is rebuilt once later.
         Never retried here: a wait inside the transaction would hold its
         locks (the whole SQLite file) while it sleeps. A replay never replaces one stored;
-        ``where_unset`` (a rebuild that may race another) writes performance
-        only where none is stored either.
+        ``where_unset`` (a rebuild, or a resend that may race one) writes
+        performance, or why there is none, only where neither is stored
+        (``_UNSET``).
         """
         if outputs is None:
             return None
@@ -871,7 +875,7 @@ class SqliteExperimentStore(_RunOutputWrites):
     def _write_performance(
         conn, run_id: str, performance: dict, *, where_unset: bool = False
     ) -> None:
-        # where_unset: first writer wins (a rebuild racing another).
+        # where_unset: first writer wins (a rebuild racing another, or a resend).
         conn.execute(
             "UPDATE experiment_runs SET performance = ?, headline = ?, performance_error = NULL "
             "WHERE id = ?" + (_UNSET if where_unset else ""),

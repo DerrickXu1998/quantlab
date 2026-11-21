@@ -298,6 +298,26 @@ def test_a_run_that_just_completed_is_left_to_its_own_process_first(store, monke
     assert store.next_run_without_replay()["id"] == "run-new"
 
 
+def test_when_a_run_has_settled(monkeypatch):
+    """finished_at wins over created_at; a time that cannot be read is settled."""
+    import datetime as dt
+
+    from quantlab.storage import experiments
+
+    monkeypatch.setattr(experiments, "BACKFILL_SETTLE_SECONDS", 300)
+    now = dt.datetime.now(dt.UTC)
+    long_ago = (now - dt.timedelta(hours=1)).isoformat()
+    settling = experiments.settling
+    assert settling({"finished_at": now.isoformat(), "created_at": long_ago})
+    assert settling({"finished_at": None, "created_at": now.isoformat()})
+    assert settling({"finished_at": now})  # a datetime as it stands
+    naive = now.replace(tzinfo=None).isoformat()  # read as UTC
+    assert settling({"finished_at": naive})
+    assert not settling({"finished_at": long_ago})
+    assert not settling({"created_at": "garbage"})
+    assert not settling({})
+
+
 def test_deleting_a_run_takes_its_replay_with_it(store):
     from quantlab.replay.recording import RecordedReplay
 
