@@ -520,6 +520,11 @@ def test_an_inline_run_whose_results_fail_to_record_is_still_saved(
         run_id = created.json()["id"]
         monkeypatch.undo()
         monkeypatch.setenv("QUANTLAB_RUN_MODE", "inline")
+        # undo() dropped the autouse no-settle patch too: view it past the
+        # settle window (inside it is a 409; that has its own test).
+        from quantlab.storage import experiments
+
+        monkeypatch.setattr(experiments, "BACKFILL_SETTLE_SECONDS", 0)
         # Computed once on first view, as for a run recorded before results were.
         assert inline_client.get(f"/api/v1/runs/{run_id}/performance").status_code == 200
 
@@ -1278,10 +1283,11 @@ def test_a_request_leaves_a_run_that_just_completed_to_its_own_process(
     a rebuild (or its failure reason) stored first would win over it."""
     from quantlab.storage import experiments
 
-    run_id = client.post("/api/v1/runs", json=_body(symbols)).json()["id"]
-    _drain(client)
-    _forget_replay(db_path, run_id)
     _inline(client, monkeypatch)
+    # Made inline too: saved whole, with no finished_at -- its created_at counts.
+    run_id = client.post("/api/v1/runs", json=_body(symbols)).json()["id"]
+    assert client.get(f"/api/v1/runs/{run_id}").json()["finished_at"] is None
+    _forget_replay(db_path, run_id)
 
     def must_not_run(*args, **kwargs):
         raise AssertionError("rebuilt a run its own process may still be recording")

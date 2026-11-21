@@ -185,11 +185,14 @@ BACKFILL_SETTLE_SECONDS = 5 * 60
 def settling(run: dict) -> bool:
     """Whether ``run`` completed too recently for anything but its own
     process to write its outputs (``BACKFILL_SETTLE_SECONDS``). The backfill
-    query applies the same window in SQL; request-path rebuilds use this."""
-    stamp = run.get("finished_at")
-    if not stamp:
+    query applies the same window in SQL; request-path rebuilds use this.
+    As there, a run saved whole (inline: no ``finished_at``) counts from its
+    ``created_at``, and a time that cannot be read counts as settled."""
+    stamp = run.get("finished_at") or run.get("created_at")
+    try:
+        finished = datetime.fromisoformat(stamp)
+    except (TypeError, ValueError):
         return False
-    finished = datetime.fromisoformat(stamp)
     if finished.tzinfo is None:
         finished = finished.replace(tzinfo=UTC)
     return finished > _now(-BACKFILL_SETTLE_SECONDS)
