@@ -1199,7 +1199,12 @@ def _rebuild_old_run(request: Request, run: dict, **known_missing: bool) -> None
     or every slot busy, returns at once and its caller answers "being
     prepared" (409, which clients retry) instead of holding a thread blocked.
     Transient failures are left for a retry, never stored as the answer.
+    Nor is a run that has just completed rebuilt (``store.settled``): it is
+    listed from save_run on, while its own request may still be re-sending
+    the exact record (``jobs.keep_outputs``), which must reach the store first.
     """
+    if not experiments(request).settled(run["id"]):
+        return
     rebuilds = _rebuilds(request)
     lock = rebuilds.lock(run["id"])
     if not lock.acquire(blocking=False):

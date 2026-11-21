@@ -468,8 +468,9 @@ def keep_outputs(store, run_id: str, outputs: RunOutputs | None) -> None:
     """
     if outputs is None:
         return
-    has_perf = outputs.performance is not None or outputs.performance_error is not None
-    has_replay = outputs.replay is not None or outputs.replay_error is not None
+    # As _write_outputs reads them: an empty reason is no reason.
+    has_perf = outputs.performance is not None or bool(outputs.performance_error)
+    has_replay = outputs.replay is not None or bool(outputs.replay_error)
     if not (has_perf or has_replay):
         return
 

@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from quantlab import seed
 from quantlab.api.app import create_app
 from quantlab.research import errors, jobs, runner
-from quantlab.storage import db
+from quantlab.storage import db, experiments
 
 
 @pytest.fixture(scope="module")
@@ -266,11 +266,7 @@ def test_legacy_runs_get_performance_computed_once_and_stored(db_path, symbols, 
         store = inline_client.app.state.experiments
         # Inline runs now store theirs at completion; forget it, as if the run
         # had been recorded before results were stored.
-        with sqlite3.connect(db_path) as conn:
-            conn.execute(
-                "UPDATE experiment_runs SET performance = NULL, headline = NULL WHERE id = ?",
-                (run_id,),
-            )
+        _forget_performance(db_path, run_id)
         assert store.get_performance(run_id) is None
 
         first = inline_client.get(f"/api/v1/runs/{run_id}/performance").json()
@@ -364,6 +360,14 @@ def _inline(client, monkeypatch):
 def _forget_replay(db_path, run_id):
     with sqlite3.connect(db_path) as conn:
         conn.execute("DELETE FROM experiment_replays WHERE run_id = ?", (run_id,))
+
+
+def _forget_performance(db_path, run_id):
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE experiment_runs SET performance = NULL, headline = NULL WHERE id = ?",
+            (run_id,),
+        )
 
 
 def test_a_large_older_run_is_prepared_by_the_worker_not_in_the_request(
@@ -520,6 +524,9 @@ def test_an_inline_run_whose_results_fail_to_record_is_still_saved(
         run_id = created.json()["id"]
         monkeypatch.undo()
         monkeypatch.setenv("QUANTLAB_RUN_MODE", "inline")
+        # undo() dropped the autouse no-settle patch too: view it past the
+        # settle window (inside it is a 409; that has its own test).
+        monkeypatch.setattr(experiments, "BACKFILL_SETTLE_SECONDS", 0)
         # Computed once on first view, as for a run recorded before results were.
         assert inline_client.get(f"/api/v1/runs/{run_id}/performance").status_code == 200
 
@@ -605,11 +612,7 @@ def test_a_rebuild_whose_performance_fails_says_why_and_keeps_the_replay(
     run_id = client.post("/api/v1/runs", json=_body(symbols)).json()["id"]
     _drain(client)
     _forget_replay(db_path, run_id)
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            "UPDATE experiment_runs SET performance = NULL, headline = NULL WHERE id = ?",
-            (run_id,),
-        )
+    _forget_performance(db_path, run_id)
 
     def broken(*args, **kwargs):
         raise ValueError("benchmark has no first close")
@@ -1039,11 +1042,7 @@ def test_a_run_records_where_its_bars_began(client, symbols):
 def test_a_rebuilt_runs_performance_says_it_was_rebuilt(db_path, client, symbols, monkeypatch):
     run_id = client.post("/api/v1/runs", json=_body(symbols)).json()["id"]
     _drain(client)
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            "UPDATE experiment_runs SET performance = NULL, headline = NULL WHERE id = ?",
-            (run_id,),
-        )
+    _forget_performance(db_path, run_id)
     app = client.app
     assert jobs.backfill_next(app.state.backend, app.state.experiments) == run_id
     assert client.get(f"/api/v1/runs/{run_id}/performance").json()["reconstructed"] is True
@@ -1253,18 +1252,32 @@ def test_nothing_is_kept_for_a_run_deleted_meanwhile():
     assert store.sent == []
 
 
-def test_a_stored_reason_is_never_overwritten_by_a_rebuild(client, symbols, db_path):
-    """First writer wins for performance OR why there is none: the store
-    holds that rule, so no caller has to remember it."""
-    store = client.app.state.experiments
+@pytest.mark.parametrize(
+    ("path", "forget", "rebuild"),
+    [
+        ("replay/summary", _forget_replay, "rebuild_results"),
+        ("performance", _forget_performance, "compute_run_performance"),
+    ],
+)
+def test_a_request_leaves_a_run_that_just_completed_to_its_own_process(
+    client, symbols, db_path, monkeypatch, path, forget, rebuild
+):
+    """With no worker a request rebuilds old runs -- but not one inside the
+    settle window: its own request may still be re-sending the exact record,
+    and a rebuild (or its failure reason) stored first would win over it."""
+    _inline(client, monkeypatch)
+    # Made inline: saved whole, with no finished_at -- its created_at counts.
     run_id = client.post("/api/v1/runs", json=_body(symbols)).json()["id"]
-    _drain(client)
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            "UPDATE experiment_runs SET performance = NULL, headline = NULL, "
-            "performance_error = 'recorded reason' WHERE id = ?",
-            (run_id,),
-        )
-    store.set_rebuilt(run_id, jobs.RunOutputs({"rebuilt": True}, None))
-    assert store.get_performance(run_id) is None
-    assert store.get_run(run_id)["results_error"] == "recorded reason"
+    assert client.get(f"/api/v1/runs/{run_id}").json()["finished_at"] is None
+    forget(db_path, run_id)
+
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("rebuilt a run its own request may still be recording")
+
+    monkeypatch.setattr(experiments, "BACKFILL_SETTLE_SECONDS", 300)
+    with monkeypatch.context() as patched:
+        patched.setattr(jobs, rebuild, must_not_run)
+        assert client.get(f"/api/v1/runs/{run_id}/{path}").status_code == 409
+
+    monkeypatch.setattr(experiments, "BACKFILL_SETTLE_SECONDS", 0)
+    assert client.get(f"/api/v1/runs/{run_id}/{path}").status_code == 200
